@@ -1,0 +1,77 @@
+--- useHandControl.ts.orig	2026-07-19 11:21:03.375003397 +0000
++++ useHandControl.ts.fixed	2026-07-19 11:21:29.799332712 +0000
+@@ -97,6 +97,53 @@
+     const candidateGestureById = new Map<string, string>();
+     const candidateFramesById = new Map<string, number>();
+ 
++    // Persistent per-hand identity across frames. Previously ids were "left"/
++    // "right" derived from an x-sort of the *current* frame, so the moment two
++    // hands crossed paths on screen their ids swapped mid-gesture, resetting
++    // stabilizeGesture()'s frame counters and causing a visible gesture/primary
++    // flicker. Track hands instead by nearest-neighbor match against last
++    // frame's positions so an id follows the physical hand, not a screen slot.
++    let nextHandSeq = 0;
++    let previousTracked: Array<{ id: string; point: HandPoint }> = [];
++    // Hands rarely move more than this between two frames at 30-60fps; beyond
++    // it we treat the detection as a different hand rather than a mismatch.
++    const MAX_MATCH_DISTANCE = Math.max(window.innerWidth, window.innerHeight) * 0.25;
++
++    function assignPersistentIds(
++      detected: Array<{ point: HandPoint }>,
++    ): string[] {
++      const available = [...previousTracked];
++      const ids: string[] = new Array(detected.length);
++      const claimed = new Set<number>();
++
++      // Greedily pair each detection with its closest unclaimed previous hand.
++      detected.forEach((hand, index) => {
++        let bestIndex = -1;
++        let bestDistance = Infinity;
++        available.forEach((prev, prevIndex) => {
++          if (claimed.has(prevIndex)) return;
++          const distance = Math.hypot(hand.point.x - prev.point.x, hand.point.y - prev.point.y);
++          if (distance < bestDistance) {
++            bestDistance = distance;
++            bestIndex = prevIndex;
++          }
++        });
++        if (bestIndex !== -1 && bestDistance <= MAX_MATCH_DISTANCE) {
++          claimed.add(bestIndex);
++          ids[index] = available[bestIndex].id;
++        }
++      });
++
++      // Anything unmatched (new hand, or one that jumped further than the
++      // threshold) gets a fresh, never-before-used id.
++      detected.forEach((hand, index) => {
++        if (!ids[index]) ids[index] = `hand-${nextHandSeq++}`;
++      });
++
++      previousTracked = detected.map((hand, index) => ({ id: ids[index], point: hand.point }));
++      return ids;
++    }
++
+     async function setup() {
+       try {
+         const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+@@ -199,9 +246,9 @@
+             };
+           });
+ 
+-          const byX = [...detected].sort((a, b) => a.point.x - b.point.x);
+-          const hands: TrackedHand[] = detected.map((hand) => {
+-            const id = detected.length === 1 ? "single" : hand === byX[0] ? "left" : "right";
++          const ids = assignPersistentIds(detected);
++          const hands: TrackedHand[] = detected.map((hand, index) => {
++            const id = ids[index];
+             const gesture = stabilizeGesture(id, hand.rawGesture);
+             return {
+               id,
+@@ -243,6 +290,7 @@
+           stableGestureById.clear();
+           candidateGestureById.clear();
+           candidateFramesById.clear();
++          previousTracked = [];
+           setState({ ...EMPTY_STATE, active: true });
+         }
+       }
