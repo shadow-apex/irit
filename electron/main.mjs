@@ -24,8 +24,10 @@ import {
   setStudySessionModel,
 } from "./study-session.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
-import { runComputerSession, captureScreenBase64 } from "./computer-session.mjs";
+import { runComputerSession } from "./computer-session.mjs";
+import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
+import { initTelegramBot } from "./telegram-bot.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -282,20 +284,48 @@ function flushTranscripts() {
 // Every task resumes the active session's Claude session (--resume), tasks run
 // strictly one at a time (queued), and sessions survive app restarts.
 const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
+let sendTelegramMessage = () => {};
+
+// Initialize Telegram bot after environment variables are loaded
+setTimeout(() => {
+  sendTelegramMessage = initTelegramBot({
+    submitTask: (args) => submitClaudeTask(args),
+    getStatus: () => {
+      const r = runQueue.get(runQueue.active);
+      return r ? `${r.status} (Task: ${r.task})` : "Idle";
+    },
+    log: (level, msg) => emitEvent({ type: "log", level, message: msg })
+  });
+}, 0);
+
 let sessionStore = { active: null, sessions: [] };
 // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun and
 // announceClaudeCompletion are function declarations defined later in this file;
 // referencing them here is safe because they're hoisted before this line ever runs.
+let hasReportedMissingClaudeKey = false;
 const runQueue = createRunQueue({
   startRun: startClaudeRun,
   emit: emitEvent,
-  onFinalized: (run) =>
+  onFinalized: (run) => {
     announceClaudeCompletion({
       runId: run.run_id,
       task: run.task,
       status: run.status,
       output: String(run.output || "").slice(0, 2500),
-    }),
+    });
+    
+    const outputString = String(run.output || "");
+    const isMissingClaude = outputString.includes("claude is not recognized") || outputString.includes("No CLAUDE_CODE_OAUTH_TOKEN");
+    
+    if (isMissingClaude) {
+      if (!hasReportedMissingClaudeKey) {
+        hasReportedMissingClaudeKey = true;
+        sendTelegramMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}\n\n(I will stop reporting this specific Claude API/CLI error to avoid spamming you).`);
+      }
+    } else {
+      sendTelegramMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}`);
+    }
+  }
 });
 
 // Role pipeline: each role is a Claude Code agent installed at
@@ -932,7 +962,7 @@ async function testGeminiKey(candidateKey) {
   try {
     const testAi = new GoogleGenAI({ apiKey: key });
     const pager = await testAi.models.list();
-    for await (const _model of pager) break;
+    for await (const _ of pager) break;
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error?.message || String(error) };

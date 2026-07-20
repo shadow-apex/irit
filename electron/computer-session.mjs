@@ -159,11 +159,18 @@ export async function captureScreenBase64() {
   return { base64: base64Image, width, height };
 }
 
+let hasReportedMissingApiKey = false;
+
 export async function runComputerSession(taskDescription, onStream) {
   // Use ANTHROPIC_API_KEY explicitly for Computer Use (requires Claude 3.5 Sonnet)
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    onStream({ text: "Error: ANTHROPIC_API_KEY is not set in .env. Computer Use requires a direct Anthropic API key." });
+    if (!hasReportedMissingApiKey) {
+      hasReportedMissingApiKey = true;
+      onStream({ text: "Error: ANTHROPIC_API_KEY is not set in .env. Computer Use requires a direct Anthropic API key. This error will be suppressed for subsequent attempts in this session." });
+    } else {
+      onStream({ text: "Error: API key still missing (suppressed)." });
+    }
     return;
   }
 
