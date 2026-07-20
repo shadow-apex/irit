@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Mic, MicOff, Power } from "lucide-react";
+import { Mic, MicOff, Power, Eye } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -84,6 +84,7 @@ export default function CenterStage({
   muted,
   onToggleMute,
   onSleep,
+  isVisionEnabled,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -110,6 +111,7 @@ export default function CenterStage({
   muted: boolean;
   onToggleMute: () => void;
   onSleep: () => void;
+  isVisionEnabled?: boolean;
 }) {
   return (
     <div className="deck-center">
@@ -127,12 +129,14 @@ export default function CenterStage({
           thinking={thinking}
           wakeKey={wakeKey}
           rippleKey={rippleKey}
-          running={orbRunning}
-          rotationRef={orbRotationRef}
-          scaleRef={orbScaleRef}
         />
         {orbFlash ? (
           <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />
+        ) : null}
+        {isVisionEnabled ? (
+          <div className="vision-indicator" title="Live screen vision active">
+            <Eye size={18} />
+          </div>
         ) : null}
       </div>
       <Telemetry awake={awake} gemini={geminiStatus} claude={claudeStatus} runs={runs} sessionStartRef={sessionStartRef} />

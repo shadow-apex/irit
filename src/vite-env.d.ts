@@ -165,6 +165,7 @@ type IrisApi = {
   onAudioChunk: (callback: (chunk: LiveAudioChunk) => void) => () => void;
   onAudioInterrupt: (callback: () => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
+  sendHandGesture: (gesture: string) => void;
 };
 
 interface Window {

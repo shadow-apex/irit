@@ -23,11 +23,10 @@ import {
   closeAllStudySessions,
   setStudySessionModel,
 } from "./study-session.mjs";
-import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
-import { runComputerSession } from "./computer-session.mjs";
-
-const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
+import { runComputerSession, captureScreenBase64 } from "./computer-session.mjs";
+import { saveToMemory, queryMemory } from "./memory-session.mjs";
+const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -87,6 +86,72 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const pendingClaudeAnnouncements = [];
+
+let isVisionEnabled = false;
+let visionInterval = null;
+
+let localchatEnabled = false;
+let privacyCamEnabled = false;
+let privacyWindow = null;
+
+// Capture a small, low-quality frame for the vision loop — keeps the
+// realtime stream lean while still giving Gemini enough detail to read errors,
+// window titles, and code. Full-resolution capture is left for Computer Use.
+async function captureScreenForVision() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.size;
+  // Downsample to at most 1280 wide, preserving aspect ratio
+  const scale = Math.min(1280 / width, 720 / height, 1);
+  const thumbW = Math.round(width * scale);
+  const thumbH = Math.round(height * scale);
+  const { desktopCapturer } = electron;
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: thumbW, height: thumbH },
+  });
+  // toJPEG(50) ≈ 30-80 KB per frame — well within Gemini's bandwidth limits
+  const base64 = sources[0].thumbnail.toJPEG(50).toString("base64");
+  return base64;
+}
+
+function stopVisionLoop() {
+  if (visionInterval) {
+    clearInterval(visionInterval);
+    visionInterval = null;
+  }
+  isVisionEnabled = false;
+  emitEvent({ type: "vision_state", enabled: false });
+}
+
+function toggleScreenVision() {
+  isVisionEnabled = !isVisionEnabled;
+  if (isVisionEnabled) {
+    if (!visionInterval) {
+      visionInterval = setInterval(async () => {
+        // Auto-stop if Gemini disconnected or vision was toggled off mid-interval
+        if (!liveSession || !isVisionEnabled) {
+          stopVisionLoop();
+          return;
+        }
+        try {
+          const base64 = await captureScreenForVision();
+          liveSession.sendRealtimeInput([{
+            mimeType: "image/jpeg",
+            data: base64,
+          }]);
+        } catch (e) {
+          console.error("[IRIS][Vision] Error capturing screen:", e);
+        }
+      }, 4000);
+    }
+    emitEvent({ type: "vision_state", enabled: true });
+    return { status: "enabled", message: "Live screen vision enabled. I can now see your screen." };
+  } else {
+    stopVisionLoop();
+    return { status: "disabled", message: "Live screen vision disabled." };
+  }
+}
+
 
 // Latest UI-state snapshot pushed by the renderer over iris:ui-context
 // (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
@@ -1605,8 +1670,101 @@ async function startComputerUseTask(args) {
   return { status: "started", message: "I have started taking control of the computer. The actions are running in the background." };
 }
 
+async function submitLocalChat(args) {
+  try {
+    const { default: ollama } = await import("ollama");
+    const localModel = process.env.IRIS_LOCAL_MODEL || "llama3";
+    const response = await ollama.chat({
+      model: localModel,
+      messages: [{ role: "user", content: args.query }],
+    });
+    return {
+      status: "success",
+      local_ai_response: response.message.content,
+      instructions: "Read the local_ai_response aloud to the user exactly as it is."
+    };
+  } catch (err) {
+    emitEvent({ type: "log", level: "error", message: `Ollama error: ${err.message}` });
+    return {
+      status: "error",
+      error: `Failed to reach local AI: ${err.message}. Tell the user local AI is down.`
+    };
+  }
+}
+
+// Protocol whitelist: only allow web-safe protocols via shell.openExternal.
+// This prevents Gemini from being tricked (via prompt injection) into opening
+// file://, javascript:, or arbitrary custom protocol handlers.
+const ALLOWED_URL_PROTOCOLS = new Set(["https:", "http:"]);
+
+// Executable whitelist: Gemini may only launch apps in this set.
+// Add entries here as needed. All matching is against the basename (lowercase),
+// so path traversal attempts like "../../evil.exe" are automatically rejected.
+const ALLOWED_APP_EXECUTABLES = new Set([
+  "calc.exe", "notepad.exe", "mspaint.exe", "explorer.exe", "taskmgr.exe",
+  "control.exe", "winver.exe", "snippingtool.exe",
+  "code.exe", "code - insiders.exe",
+  "chrome.exe", "msedge.exe", "firefox.exe",
+  "vlc.exe", "spotify.exe", "discord.exe", "slack.exe", "obsidian.exe",
+]);
+
+async function openUrlOrApp(args) {
+  const { target, is_url } = args;
+
+  // --- URL branch ---
+  if (is_url) {
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return { status: "error", error: "Invalid URL: could not parse the provided target as a URL." };
+    }
+    if (!ALLOWED_URL_PROTOCOLS.has(parsed.protocol)) {
+      return {
+        status: "error",
+        error: `Protocol '${parsed.protocol}' is not allowed. Only https and http are permitted.`,
+      };
+    }
+    try {
+      // Use parsed.href so any encoding tricks in the original string are normalised first.
+      await shell.openExternal(parsed.href);
+      return { status: "success", message: `Opened URL: ${parsed.href}` };
+    } catch (err) {
+      return { status: "error", error: `Failed to open URL: ${err.message}` };
+    }
+  }
+
+  // --- App branch ---
+  // Strip any directory prefix so path-traversal attacks like "../../evil.exe"
+  // collapse to just their basename before hitting the whitelist check.
+  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
+  if (!ALLOWED_APP_EXECUTABLES.has(basename)) {
+    return {
+      status: "error",
+      error: `App '${basename}' is not in the allowed list. Ask the user to add it to ALLOWED_APP_EXECUTABLES in main.mjs if needed.`,
+    };
+  }
+  try {
+    // Use spawn with shell:false so args are passed as an array, never concatenated
+    // into a shell string.  This eliminates the cmd-injection vector that exec()
+    // with template-literal interpolation created (see DEP0190 warning).
+    const child = spawn("cmd.exe", ["/c", "start", "", basename], {
+      shell: false,   // CRITICAL — do NOT set to true
+      detached: true, // App runs independently; Electron won't hold it alive
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+    return { status: "success", message: `Started application: ${basename}` };
+  } catch (err) {
+    return { status: "error", error: `Failed to start app: ${err.message}` };
+  }
+}
+
 async function executeClaudeTool(name, args = {}) {
   switch (name) {
+    case "toggle_screen_vision":
+      return toggleScreenVision();
     case "start_computer_use_task":
       return startComputerUseTask(args);
     case "check_claude_status":
@@ -1619,6 +1777,12 @@ async function executeClaudeTool(name, args = {}) {
       return stopClaudeTask(args);
     case "start_new_claude_session":
       return startNewClaudeSession(args);
+    case "submit_local_chat":
+      return submitLocalChat(args);
+    case "save_to_memory":
+      return saveToMemory(args.text);
+    case "query_memory":
+      return queryMemory(args.query);
     case "get_workspace_info":
       return workspaceInfo();
     case "answer_po_question":
@@ -1637,6 +1801,8 @@ async function executeClaudeTool(name, args = {}) {
         status: "sleeping",
         instructions: `Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about ${Math.round(sleepDelayMs() / 1000)} seconds.`,
       };
+    case "open_url_or_app":
+      return await openUrlOrApp(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }
@@ -1768,9 +1934,59 @@ function buildClaudeTools() {
           }
         },
         {
+          name: "open_url_or_app",
+          description: "Open a website in the default browser or open a local application on Windows. IMPORTANT: If the user asks to open a website like YouTube or Facebook, you MUST provide the full valid URL (e.g., 'https://www.youtube.com'). If they ask to open a system app, provide the executable name (e.g., 'calc.exe', 'notepad.exe'). DO NOT use this for complex GUI interaction, only for simply opening things.",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The full URL or executable name." },
+              is_url: { type: "boolean", description: "True if it's a website URL, false if it's a local app executable." }
+            },
+            required: ["target", "is_url"]
+          }
+        },
+        {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
           parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "toggle_screen_vision",
+          description: "Turn on or off the Live Screen Context feature, allowing you to continuously see what is on the user's primary monitor. Invoke this when the user asks you to start or stop looking at their screen.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "submit_local_chat",
+          description: "Forward the user's query to the local Ollama AI. Invoke this ONLY when you receive SYSTEM_EVENT_LOCALCHAT_TOGGLE setting it to true.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "The exact words the user just said." }
+            },
+            required: ["query"]
+          }
+        },
+        {
+          name: "save_to_memory",
+          description: "Save an important fact or user note to the Second Brain (ChromaDB). Invoke this when the user says 'remember this' or asks you to save something for later.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The information to remember." }
+            },
+            required: ["text"]
+          }
+        },
+        {
+          name: "query_memory",
+          description: "Query the Second Brain (ChromaDB) for past context. Invoke this BEFORE answering if the user asks a question about past conversations, previous instructions, or something you were told to remember.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "The search query." }
+            },
+            required: ["query"]
+          }
         },
         {
           name: "submit_claude_task",
@@ -2174,6 +2390,9 @@ async function stopLive() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  // Stop the vision loop before closing the session so the interval never
+  // tries to send frames on a dead WebSocket.
+  stopVisionLoop();
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
@@ -2428,6 +2647,31 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+
+  ipcMain.on("iris:hand-gesture", async (_event, gesture) => {
+    try {
+      if (gesture === "pinch") {
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          else mainWindow.minimize();
+        }
+      } else if (gesture === "swipe_left" || gesture === "swipe_right") {
+        const { keyboard, Key } = await import("@nut-tree-fork/nut-js");
+        if (gesture === "swipe_right") {
+          // Swipe Right -> Chuyển ứng dụng (Alt + Tab)
+          await keyboard.pressKey(Key.LeftAlt, Key.Tab);
+          await keyboard.releaseKey(Key.LeftAlt, Key.Tab);
+        } else {
+          // Swipe Left -> Chuyển ứng dụng ngược lại (Alt + Shift + Tab)
+          await keyboard.pressKey(Key.LeftAlt, Key.LeftShift, Key.Tab);
+          await keyboard.releaseKey(Key.LeftAlt, Key.LeftShift, Key.Tab);
+        }
+      }
+    } catch (e) {
+      emitEvent({ type: "log", level: "error", message: `Hand gesture error: ${e.message}` });
+    }
+  });
+
   createWindow();
   createTray();
   const registered = globalShortcut.register(hudHotkey(), () => {
@@ -2437,6 +2681,60 @@ app.whenReady().then(() => {
   if (!registered) {
     emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
   }
+
+  // Register Super+Shift+V to toggle screen vision
+  const visionRegistered = globalShortcut.register("Super+Shift+V", () => {
+    toggleScreenVision();
+  });
+  if (!visionRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Screen Vision hotkey Super+Shift+V.` });
+  }
+
+  // Register Win+Shift+L to toggle Ollama localchat
+  const localchatRegistered = globalShortcut.register("Super+Shift+L", () => {
+    localchatEnabled = !localchatEnabled;
+    emitEvent({ type: "log", level: "info", message: `Localchat mode is now ${localchatEnabled ? "ON" : "OFF"}.` });
+    notifyIris([
+      "SYSTEM_EVENT_LOCALCHAT_TOGGLE",
+      `localchat_enabled: ${localchatEnabled}`,
+      "instructions_to_iris:",
+      "- If true, you are now a Voice Relay for a local AI. When the user speaks, DO NOT ANSWER their query directly. Immediately call `submit_local_chat` with their exact words.",
+      "- If false, you are back to normal mode. Stop calling `submit_local_chat` and answer normally.",
+    ]);
+  });
+  if (!localchatRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Localchat hotkey Super+Shift+L.` });
+  }
+
+  // Register Win+Shift+C to toggle Privacy Cam
+  const privacyRegistered = globalShortcut.register("Super+Shift+C", () => {
+    privacyCamEnabled = !privacyCamEnabled;
+    emitEvent({ type: "log", level: "info", message: `Privacy Cam mode is now ${privacyCamEnabled ? "ON" : "OFF"}.` });
+    if (privacyCamEnabled) {
+      if (!privacyWindow) {
+        privacyWindow = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+          }
+        });
+        // Load the hidden renderer from resources/privacy-cam.html
+        privacyWindow.loadFile(path.join(repoRoot, "resources", "privacy-cam.html")).catch((err) => {
+          emitEvent({ type: "log", level: "error", message: `Privacy cam load error: ${err.message}` });
+        });
+      }
+    } else {
+      if (privacyWindow) {
+        privacyWindow.close();
+        privacyWindow = null;
+      }
+    }
+  });
+  if (!privacyRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Privacy Cam hotkey Super+Shift+C.` });
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

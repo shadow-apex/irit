@@ -28,6 +28,9 @@ export type HandState = {
   fist: boolean;
   pinchDistance: number;
   hands: TrackedHand[];
+  shush: boolean;
+  pinch: boolean;
+  swipe: "left" | "right" | null;
 };
 
 // Keep this version in sync with the @mediapipe/tasks-vision version in
@@ -65,6 +68,9 @@ const EMPTY_STATE: HandState = {
   fist: false,
   pinchDistance: 0,
   hands: [],
+  shush: false,
+  pinch: false,
+  swipe: null,
 };
 
 /**
@@ -109,6 +115,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     const stableGestureById = new Map<string, string>();
     const candidateGestureById = new Map<string, string>();
     const candidateFramesById = new Map<string, number>();
+    let swipeHistory: { x: number; time: number }[] = [];
 
     async function setup() {
       try {
@@ -242,6 +249,34 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             : primary.point;
           primaryPoint = smooth;
 
+          const shush =
+            primary.pointing &&
+            primary.point.y < window.innerHeight * 0.4 &&
+            primary.point.x > window.innerWidth * 0.3 &&
+            primary.point.x < window.innerWidth * 0.7;
+
+          const pinch = hands.length === 2 && hands.every((h) => h.pinchDistance < 0.05);
+
+          let swipe: "left" | "right" | null = null;
+          if (primary.openPalm) {
+            swipeHistory.push({ x: primary.point.x, time: now });
+            // Hard cap: prevent unbounded growth when Open_Palm is held for
+            // a long time at 60fps (could otherwise reach ~18k entries/min).
+            if (swipeHistory.length > 120) swipeHistory = swipeHistory.slice(-60);
+            swipeHistory = swipeHistory.filter((h) => now - h.time < 500);
+
+            if (swipeHistory.length > 5) {
+              const dx = swipeHistory[swipeHistory.length - 1].x - swipeHistory[0].x;
+              const dt = swipeHistory[swipeHistory.length - 1].time - swipeHistory[0].time;
+              if (dt > 100 && Math.abs(dx) > window.innerWidth * 0.4) {
+                swipe = dx > 0 ? "right" : "left";
+                swipeHistory = [];
+              }
+            }
+          } else {
+            swipeHistory = [];
+          }
+
           setState({
             active: true,
             present: true,
@@ -253,6 +288,9 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             fist: primary.fist,
             pinchDistance: primary.pinchDistance,
             hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
+            shush,
+            pinch,
+            swipe,
           });
         } else {
           smooth = null;

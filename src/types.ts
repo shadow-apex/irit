@@ -25,6 +25,12 @@ export type TaskCard = {
   steps?: TaskStep[];
 };
 
+export interface ReactorInterface {
+  onAudioInterrupt: (callback: () => void) => () => void;
+  onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
+  sendHandGesture: (gesture: string) => void;
+}
+
 export type LogLine = {
   id: string;
   level: string;

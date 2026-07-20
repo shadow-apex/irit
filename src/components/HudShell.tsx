@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal } from "lucide-react";
+import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
@@ -94,6 +94,7 @@ export default function HudShell({
   handActionLabel,
   handActionTone,
   poQuestion,
+  isVisionEnabled,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -135,6 +136,7 @@ export default function HudShell({
     answers: Record<string, string>;
     onPick: (question: string, choice: string) => void;
   } | null;
+  isVisionEnabled?: boolean;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -258,6 +260,11 @@ export default function HudShell({
           />
           {orbFlash ? (
             <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />
+          ) : null}
+          {isVisionEnabled ? (
+            <div className="vision-indicator" title="Live screen vision active">
+              <Eye size={18} />
+            </div>
           ) : null}
         </div>
         <div className={`hud-controls ${hand.present ? "show" : ""}`}>

@@ -60,6 +60,7 @@ export default function App() {
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [stepsOpenIds, setStepsOpenIds] = useState<Record<string, boolean>>({});
+  const [isVisionEnabled, setIsVisionEnabled] = useState(false);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
@@ -582,6 +583,11 @@ export default function App() {
       return;
     }
 
+    if (event.type === "vision_state") {
+      setIsVisionEnabled(Boolean(event.enabled));
+      return;
+    }
+
     if (event.type === "claude_status") {
       const status = readString(event.status, "unknown");
       setClaudeStatus(status);
@@ -762,6 +768,29 @@ export default function App() {
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
   }, [handError]);
+
+  const lastGestureRef = useRef<{ name: string; time: number } | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge || !handControl) return;
+    const now = performance.now();
+    const trigger = (gesture: string) => {
+      const last = lastGestureRef.current;
+      if (!last || last.name !== gesture || now - last.time > 1000) {
+        lastGestureRef.current = { name: gesture, time: now };
+        if (gesture === "shush") {
+          audio.toggleMute();
+        } else {
+          window.iris.sendHandGesture(gesture);
+        }
+        if (soundsRef.current) uiSounds.wake(); // provide feedback
+      }
+    };
+
+    if (hand.shush) trigger("shush");
+    else if (hand.pinch) trigger("pinch");
+    else if (hand.swipe) trigger(`swipe_${hand.swipe}`);
+  }, [hasBridge, handControl, hand.shush, hand.pinch, hand.swipe]);
 
   // Universal point-and-hold: the finger pointer can activate ANY clickable
   // element — task cards, close buttons, PO answer options, chips. Holding
@@ -1110,6 +1139,7 @@ export default function App() {
               ? { questions: pendingPoQuestion.questions, answers: poAnswers, onPick: pickPoAnswer }
               : null
           }
+          isVisionEnabled={isVisionEnabled}
         />
       ) : (
       <div
@@ -1175,6 +1205,7 @@ export default function App() {
             muted={audio.muted}
             onToggleMute={audio.toggleMute}
             onSleep={stop}
+            isVisionEnabled={isVisionEnabled}
           />
 
           {/* RIGHT — Work */}

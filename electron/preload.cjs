@@ -62,4 +62,5 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("sidecar:event", handler);
     return () => ipcRenderer.removeListener("sidecar:event", handler);
   },
+  sendHandGesture: (gesture) => ipcRenderer.send("iris:hand-gesture", gesture),
 });
