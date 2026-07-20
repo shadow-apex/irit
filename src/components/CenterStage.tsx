@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Mic, MicOff, Power, Eye } from "lucide-react";
+import { Mic, MicOff, Power, Eye, Bot } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -85,6 +85,7 @@ export default function CenterStage({
   onToggleMute,
   onSleep,
   isVisionEnabled,
+  isRobotVisionEnabled,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -112,6 +113,7 @@ export default function CenterStage({
   onToggleMute: () => void;
   onSleep: () => void;
   isVisionEnabled?: boolean;
+  isRobotVisionEnabled?: boolean;
 }) {
   return (
     <div className="deck-center">
@@ -136,6 +138,11 @@ export default function CenterStage({
         {isVisionEnabled ? (
           <div className="vision-indicator" title="Live screen vision active">
             <Eye size={18} />
+          </div>
+        ) : null}
+        {isRobotVisionEnabled ? (
+          <div className="vision-indicator" style={{ top: 12, bottom: "auto" }} title="Live robot vision active">
+            <Bot size={18} />
           </div>
         ) : null}
       </div>

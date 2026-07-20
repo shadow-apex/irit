@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("iris", {
   getSidecarStatus: () => ipcRenderer.invoke("sidecar:status"),
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
   getSessions: () => ipcRenderer.invoke("sessions:get"),
+  getRobots: () => ipcRenderer.invoke("robots:get"),
   selectSession: (id) => ipcRenderer.invoke("sessions:select", id),
   newSession: (label) => ipcRenderer.invoke("sessions:new", label),
   chooseProjectFolder: (id) => ipcRenderer.invoke("sessions:choose-cwd", id),

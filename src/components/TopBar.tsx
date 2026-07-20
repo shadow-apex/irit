@@ -1,4 +1,4 @@
-import { Hand, PictureInPicture2, Radio, Settings } from "lucide-react";
+import { Hand, PictureInPicture2, Radio, Settings, Bot } from "lucide-react";
 
 function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
   return (
@@ -18,6 +18,7 @@ export default function TopBar({
   handControl,
   onToggleHand,
   onOpenSettings,
+  onOpenRobotCameras,
 }: {
   geminiDot: string;
   claudeDot: string;
@@ -27,6 +28,7 @@ export default function TopBar({
   handControl: boolean;
   onToggleHand: () => void;
   onOpenSettings: () => void;
+  onOpenRobotCameras: () => void;
 }) {
   return (
     <header className="deck-top">
@@ -61,6 +63,13 @@ export default function TopBar({
           title="Glass HUD — float Iris over your screen (⌥Space)"
         >
           <PictureInPicture2 size={16} />
+        </button>
+        <button
+          className="theme-toggle"
+          onClick={onOpenRobotCameras}
+          title="Robot Cameras (Alt+R)"
+        >
+          <Bot size={16} />
         </button>
         <button
           className={`theme-toggle ${handControl ? "active" : ""}`}

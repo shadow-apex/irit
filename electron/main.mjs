@@ -92,6 +92,9 @@ const pendingClaudeAnnouncements = [];
 let isVisionEnabled = false;
 let visionInterval = null;
 
+let isRobotVisionEnabled = false;
+let robotVisionInterval = null;
+
 let localchatEnabled = false;
 let privacyCamEnabled = false;
 let privacyWindow = null;
@@ -152,6 +155,97 @@ function toggleScreenVision() {
   } else {
     stopVisionLoop();
     return { status: "disabled", message: "Live screen vision disabled." };
+  }
+}
+
+function stopRobotVisionLoop() {
+  if (robotVisionInterval) {
+    clearInterval(robotVisionInterval);
+    robotVisionInterval = null;
+  }
+  isRobotVisionEnabled = false;
+  emitEvent({ type: "robot_vision_state", enabled: false });
+  emitEvent({ type: "log", level: "info", message: "Robot vision loop stopped." });
+}
+
+function getRobotsConfig() {
+  const robotsPath = path.join(repoRoot, "robots.json");
+  if (!fs.existsSync(robotsPath)) {
+    const defaultConfig = {
+      robots: {
+        "robodog": {
+          "name": "RoboDog",
+          "control_url": "http://192.168.1.100/api/action",
+          "camera_url": "http://192.168.1.100/camera/snapshot.jpg",
+          "token": "secret123"
+        }
+      }
+    };
+    fs.writeFileSync(robotsPath, JSON.stringify(defaultConfig, null, 2), "utf8");
+    return defaultConfig.robots;
+  }
+  try {
+    const data = fs.readFileSync(robotsPath, "utf8");
+    const parsed = JSON.parse(data);
+    return parsed.robots || {};
+  } catch (err) {
+    console.error("Failed to parse robots.json:", err);
+    return {};
+  }
+}
+
+let activeRobotId = null;
+
+function toggleRobotVision(args = {}) {
+  const robotId = args.robot_id;
+  const robots = getRobotsConfig();
+  
+  if (!isRobotVisionEnabled) {
+    if (!robotId || !robots[robotId]) {
+      return { status: "error", error: "Cannot enable Robot Vision: Invalid or missing robot_id." };
+    }
+    const url = robots[robotId].camera_url;
+    if (!url) {
+      return { status: "error", error: `Cannot enable Robot Vision: camera_url is not set for robot ${robotId}.` };
+    }
+  }
+
+  isRobotVisionEnabled = !isRobotVisionEnabled;
+  if (isRobotVisionEnabled) {
+    if (!robotVisionInterval) {
+      robotVisionInterval = setInterval(async () => {
+        if (!liveSession || !isRobotVisionEnabled) {
+          stopRobotVisionLoop();
+          return;
+        }
+        try {
+          const robots = getRobotsConfig();
+          const url = robots[robotId]?.camera_url;
+          if (!url) {
+            emitEvent({ type: "log", level: "warn", message: `Camera URL is not set for robot ${robotId}.` });
+            stopRobotVisionLoop();
+            return;
+          }
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const buffer = await res.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          liveSession.sendRealtimeInput([{
+            mimeType: "image/jpeg",
+            data: base64,
+          }]);
+        } catch (e) {
+          console.error("[IRIS][RobotVision] Error capturing camera:", e);
+        }
+      }, 4000);
+    }
+    activeRobotId = robotId;
+    emitEvent({ type: "robot_vision_state", enabled: true, robot_id: robotId });
+    return { status: "enabled", message: `Robot live vision enabled for ${robotId}. I am now streaming camera frames.` };
+  } else {
+    stopRobotVisionLoop();
+    activeRobotId = null;
+    return { status: "disabled", message: "Robot live vision disabled." };
   }
 }
 
@@ -1816,6 +1910,32 @@ async function triggerSmartHome({ device, action }) {
   }
 }
 
+async function triggerRobotAction({ robot_id, action, params }) {
+  const robots = getRobotsConfig();
+  if (!robot_id || !robots[robot_id]) {
+    return { status: "error", error: "Invalid or missing robot_id." };
+  }
+  
+  const robot = robots[robot_id];
+  const url = robot.control_url;
+  if (!url) {
+    return { status: "success", message: `(Mock) Sent command to ${robot_id}: ${action} with params: ${JSON.stringify(params || {})}. Add control_url to robots.json to make this real.` };
+  }
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (robot.token) headers["Authorization"] = `Bearer ${robot.token}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ action, params })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { status: "success", message: `Command sent to robot: ${action}` };
+  } catch (error) {
+    return { status: "error", error: error.message };
+  }
+}
+
 async function executeClaudeTool(name, args = {}) {
   switch (name) {
     case "display_hud_message":
@@ -1831,8 +1951,14 @@ async function executeClaudeTool(name, args = {}) {
       return { status: "success", message: "Requested a single snapshot of the desk from the frontend." };
     case "trigger_smart_home":
       return triggerSmartHome(args);
+    case "list_robots":
+      return { status: "success", robots: getRobotsConfig() };
     case "toggle_screen_vision":
       return toggleScreenVision();
+    case "toggle_robot_vision":
+      return toggleRobotVision(args);
+    case "trigger_robot_action":
+      return triggerRobotAction(args);
     case "start_computer_use_task":
       return startComputerUseTask(args);
     case "check_claude_status":
@@ -2022,6 +2148,34 @@ function buildClaudeTools() {
           name: "toggle_screen_vision",
           description: "Turn on or off the Live Screen Context feature, allowing you to continuously see what is on the user's primary monitor. Invoke this when the user asks you to start or stop looking at their screen.",
           parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "list_robots",
+          description: "List all available robots in the user's configuration.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "toggle_robot_vision",
+          description: "Turn on or off the Live Robot Vision feature for a specific robot, allowing you to continuously see its camera feed. Invoke this when the user asks you to start or stop looking through a robot's eyes/camera.",
+          parameters: { 
+            type: "object", 
+            properties: {
+              robot_id: { type: "string", description: "The ID of the robot to view." }
+            } 
+          },
+        },
+        {
+          name: "trigger_robot_action",
+          description: "Send a physical control command to a specific robot (e.g., move, turn, grab). Invoke this when the user asks you to control a physical robot.",
+          parameters: {
+            type: "object",
+            properties: {
+              robot_id: { type: "string", description: "The ID of the robot to control." },
+              action: { type: "string", description: "The action to perform (e.g., 'move_forward', 'turn_left', 'grab')" },
+              params: { type: "object", description: "Optional parameters for the action (e.g., distance, speed)" }
+            },
+            required: ["robot_id", "action"]
+          }
         },
         {
           name: "trigger_smart_home",
@@ -2440,8 +2594,14 @@ function handleLiveMessage(message) {
 
   if (message.goAway) {
     // Server warns the connection is about to be dropped (connection lifetime
-    // limit). onclose fires shortly after and reconnects with the handle.
+    // limit). We MUST drop the resumption handle so the subsequent reconnect
+    // starts a fresh session instead of immediately expiring again, and gracefully
+    // close the socket as requested by the server to avoid error 1008.
     console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
+    resumptionHandle = null;
+    if (liveSession) {
+      try { liveSession.close(); } catch { /* ignore */ }
+    }
   }
 
   if (message.toolCall) {
@@ -2487,9 +2647,10 @@ async function stopLive() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  // Stop the vision loop before closing the session so the interval never
-  // tries to send frames on a dead WebSocket.
+  // Stop the vision loops before closing the session so the intervals never
+  // try to send frames on a dead WebSocket.
   stopVisionLoop();
+  stopRobotVisionLoop();
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
@@ -2721,6 +2882,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
+  ipcMain.handle("robots:get", () => getRobotsConfig());
   ipcMain.handle("sessions:get", () => sessionsSnapshot());
   ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
   ipcMain.handle("sessions:new", (_event, label) => {

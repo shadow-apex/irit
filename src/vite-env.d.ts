@@ -139,6 +139,7 @@ type IrisApi = {
     workstreamId: string,
     agent: AgentRole | null,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  getRobots: () => Promise<any>;
   installAgents: () => Promise<AgentsInstallResult>;
   setAgentModel: (
     workstreamId: string,

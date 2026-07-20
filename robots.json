@@ -1,0 +1,10 @@
+{
+  "robots": {
+    "robodog": {
+      "name": "RoboDog",
+      "control_url": "http://192.168.1.100/api/action",
+      "camera_url": "http://192.168.1.100/camera/snapshot.jpg",
+      "token": "secret123"
+    }
+  }
+}

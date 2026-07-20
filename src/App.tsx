@@ -24,6 +24,7 @@ import HandReticles from "./components/HandReticles";
 import HandoffLayer from "./components/HandoffLayer";
 import BootSequence from "./components/BootSequence";
 import HoloBackdrop from "./components/HoloBackdrop";
+import RobotCameras from "./components/RobotCameras";
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -61,6 +62,8 @@ export default function App() {
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [stepsOpenIds, setStepsOpenIds] = useState<Record<string, boolean>>({});
   const [isVisionEnabled, setIsVisionEnabled] = useState(false);
+  const [isRobotVisionEnabled, setIsRobotVisionEnabled] = useState(false);
+  const [showRobotCameras, setShowRobotCameras] = useState(false);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
@@ -358,11 +361,17 @@ export default function App() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      const key = event.key.toLowerCase();
+      if (key === "r" && (event.altKey || event.ctrlKey)) {
+        event.preventDefault();
+        setShowRobotCameras((v) => !v);
+        return;
+      }
+      
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
 
-      const key = event.key.toLowerCase();
       if (key === "w" && !sidecarRunning) {
         event.preventDefault();
         start();
@@ -585,6 +594,11 @@ export default function App() {
 
     if (event.type === "vision_state") {
       setIsVisionEnabled(Boolean(event.enabled));
+      return;
+    }
+
+    if (event.type === "robot_vision_state") {
+      setIsRobotVisionEnabled(Boolean(event.enabled));
       return;
     }
 
@@ -1317,8 +1331,9 @@ export default function App() {
           linked={sidecarRunning}
           pid={sidecarPid}
           handControl={handControl}
-          onToggleHand={() => setHandControl((current) => !current)}
+          onToggleHand={() => setHandControl((c) => !c)}
           onOpenSettings={openSettings}
+          onOpenRobotCameras={() => setShowRobotCameras(true)}
         />
 
         <div className="deck-body">
@@ -1364,6 +1379,7 @@ export default function App() {
             onToggleMute={audio.toggleMute}
             onSleep={stop}
             isVisionEnabled={isVisionEnabled}
+            isRobotVisionEnabled={isRobotVisionEnabled}
           />
 
           {/* RIGHT — Work */}
@@ -1434,6 +1450,10 @@ export default function App() {
           onOpen={openTask}
           onClose={() => setTaskChooser(null)}
         />
+      ) : null}
+
+      {showRobotCameras ? (
+        <RobotCameras onClose={() => setShowRobotCameras(false)} />
       ) : null}
 
       {setup && fullConfig ? (
