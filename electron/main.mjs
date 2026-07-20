@@ -25,6 +25,7 @@ import {
 } from "./study-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
+import { runComputerSession } from "./computer-session.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -1588,8 +1589,26 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
   return { status: "sent", action, target_id, query };
 }
 
+async function startComputerUseTask(args) {
+  const { task } = args;
+  emitEvent({ type: "log", level: "info", message: `Starting Computer Use Task: ${task}` });
+  
+  // Run asynchronously without blocking Gemini
+  runComputerSession(task, (streamEvent) => {
+    if (streamEvent.text) {
+      emitEvent({ type: "log", level: "info", message: `[ComputerUse] ${streamEvent.text}` });
+    }
+  }).catch(err => {
+    emitEvent({ type: "log", level: "error", message: `[ComputerUse Error] ${err.message}` });
+  });
+
+  return { status: "started", message: "I have started taking control of the computer. The actions are running in the background." };
+}
+
 async function executeClaudeTool(name, args = {}) {
   switch (name) {
+    case "start_computer_use_task":
+      return startComputerUseTask(args);
     case "check_claude_status":
       return checkClaudeStatus();
     case "submit_claude_task":
@@ -1734,6 +1753,20 @@ function buildClaudeTools() {
   return [
     {
       functionDeclarations: [
+        {
+          name: "start_computer_use_task",
+          description: "Take control of the user's computer screen, mouse, and keyboard to complete a GUI task autonomously using Claude's Computer Use API. Invoke this when the user asks you to open an application, click on something, or interact with the screen.",
+          parameters: {
+            type: "object",
+            properties: {
+              task: {
+                type: "string",
+                description: "The detailed GUI task to perform on the computer."
+              }
+            },
+            required: ["task"]
+          }
+        },
         {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
