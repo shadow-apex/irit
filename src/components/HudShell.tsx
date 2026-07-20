@@ -95,6 +95,9 @@ export default function HudShell({
   handActionTone,
   poQuestion,
   isVisionEnabled,
+  hudStats,
+  hudMessage,
+  onDismissHudMessage,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -137,6 +140,14 @@ export default function HudShell({
     onPick: (question: string, choice: string) => void;
   } | null;
   isVisionEnabled?: boolean;
+  hudStats?: {
+    ramTotal: number;
+    ramFree: number;
+    activeTasks: number;
+    queuedTasks: number;
+  } | null;
+  hudMessage?: { title: string; content: string } | null;
+  onDismissHudMessage?: () => void;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -159,6 +170,49 @@ export default function HudShell({
             answers={poQuestion.answers}
             onPick={poQuestion.onPick}
           />
+        </div>
+      ) : null}
+
+      {/* Iron Man Glass System Stats */}
+      {hudStats && awake ? (
+        <div className="hud-stats-widget hud-hit">
+          <div className="stats-row">
+            <span className="stats-label">RAM</span>
+            <span className="stats-value">
+              {Math.round((hudStats.ramTotal - hudStats.ramFree) / 1024 / 1024 / 1024 * 10) / 10}GB / {Math.round(hudStats.ramTotal / 1024 / 1024 / 1024)}GB
+            </span>
+            <div className="stats-bar">
+              <div 
+                className="stats-fill" 
+                style={{ width: `${((hudStats.ramTotal - hudStats.ramFree) / hudStats.ramTotal) * 100}%` }} 
+              />
+            </div>
+          </div>
+          <div className="stats-row">
+            <span className="stats-label">TASKS</span>
+            <span className="stats-value">
+              {hudStats.activeTasks} RUNNING / {hudStats.queuedTasks} QUEUED
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Center Message Widget */}
+      {hudMessage ? (
+        <div className="hud-message-center hud-hit">
+          <div className="hud-message-header">
+            <h3>{hudMessage.title}</h3>
+            <button className="hud-message-close" onClick={onDismissHudMessage}>
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+              </svg>
+            </button>
+          </div>
+          <div className="hud-message-body">
+            {hudMessage.content.split("\n").map((line: string, i: number) => (
+              <p key={i}>{line}</p>
+            ))}
+          </div>
         </div>
       ) : null}
 

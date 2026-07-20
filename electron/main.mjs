@@ -95,6 +95,7 @@ let visionInterval = null;
 let localchatEnabled = false;
 let privacyCamEnabled = false;
 let privacyWindow = null;
+let hudStatsInterval = null; // Guard: chỉ tạo một interval duy nhất, tắt được khi quit
 
 // Capture a small, low-quality frame for the vision loop — keeps the
 // realtime stream lean while still giving Gemini enough detail to read errors,
@@ -773,7 +774,7 @@ function claudeBinary() {
   for (const candidate of known) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  return "claude";
+  return process.platform === "win32" ? "claude.cmd" : "claude";
 }
 
 // Same PATH-probe rationale as claudeBinary(): a packaged .app does not inherit
@@ -1791,8 +1792,45 @@ async function openUrlOrApp(args) {
   }
 }
 
+async function triggerSmartHome({ device, action }) {
+  const url = process.env.SMART_HOME_WEBHOOK_URL;
+  if (!url) {
+    // If not configured, we just return a mock success for the "Iron Man" feel
+    return { status: "success", message: `(Mock) Sent command to ${device}: ${action}. Add SMART_HOME_WEBHOOK_URL to .env to make this real.` };
+  }
+  try {
+    const token = process.env.SMART_HOME_TOKEN;
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    
+    // We send a generic POST request
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ device, action })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { status: "success", message: `Command sent to ${device}: ${action}` };
+  } catch (error) {
+    return { status: "error", error: error.message };
+  }
+}
+
 async function executeClaudeTool(name, args = {}) {
   switch (name) {
+    case "display_hud_message":
+      enterHud();
+      if (mainWindow) {
+        mainWindow.webContents.send("hud:message", { title: args.title, content: args.content });
+      }
+      return { status: "success", message: "HUD message displayed." };
+    case "take_desk_snapshot":
+      if (mainWindow) {
+        mainWindow.webContents.send("vision:snap-desk");
+      }
+      return { status: "success", message: "Requested a single snapshot of the desk from the frontend." };
+    case "trigger_smart_home":
+      return triggerSmartHome(args);
     case "toggle_screen_vision":
       return toggleScreenVision();
     case "start_computer_use_task":
@@ -1983,6 +2021,35 @@ function buildClaudeTools() {
         {
           name: "toggle_screen_vision",
           description: "Turn on or off the Live Screen Context feature, allowing you to continuously see what is on the user's primary monitor. Invoke this when the user asks you to start or stop looking at their screen.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "trigger_smart_home",
+          description: "Control smart home devices like lights, AC, or fans. Invoke this when the user asks you to turn on/off or adjust a physical device in their room/house.",
+          parameters: {
+            type: "object",
+            properties: {
+              device: { type: "string", description: "The name of the device (e.g., 'studio lights', 'fan')" },
+              action: { type: "string", description: "The action to perform (e.g., 'on', 'off', 'red')" }
+            },
+            required: ["device", "action"]
+          }
+        },
+        {
+          name: "display_hud_message",
+          description: "Display a large, glowing text message directly on the center of the user's screen in the Iris Glass HUD. Use this for presenting reports, summaries, or alerts directly to the user instead of opening external text editors like notepad.",
+          parameters: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "The title of the message (e.g., 'Morning Report')." },
+              content: { type: "string", description: "The body of the message." }
+            },
+            required: ["title", "content"]
+          }
+        },
+        {
+          name: "take_desk_snapshot",
+          description: "Take a single snapshot of the user's physical desk/environment using their external camera (e.g. phone camera). Invoke this ONLY when the user explicitly asks you to look at their desk or physical objects.",
           parameters: { type: "object", properties: {} },
         },
         {
@@ -2492,6 +2559,29 @@ function createWindow() {
     mainWindow = null;
     uiMode = "deck";
   });
+
+  // Iron Man HUD Stats interval — chỉ tạo một lần duy nhất.
+  // createWindow() có thể được gọi lại (ví dụ trên macOS khi click Dock)
+  // nên guard này ngăn việc tích lũy nhiều interval đồng thời.
+  if (!hudStatsInterval) {
+    hudStatsInterval = setInterval(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const allRuns = runQueue.list();
+      let active = 0;
+      let queued = 0;
+      for (const run of allRuns) {
+        if (run.status === "running") active++;
+        else if (run.status === "queued") queued++;
+      }
+      const stats = {
+        ramTotal: os.totalmem(),
+        ramFree: os.freemem(),
+        activeTasks: active,
+        queuedTasks: queued
+      };
+      mainWindow.webContents.send("hud:stats", stats);
+    }, 2000);
+  }
 }
 
 // ===== Glass HUD =====
@@ -2678,6 +2768,17 @@ app.whenReady().then(() => {
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
 
+  ipcMain.on("vision:desk-frame", (_event, base64DataUrl) => {
+    if (!liveSession) return;
+    // Remove "data:image/jpeg;base64," prefix
+    const base64 = base64DataUrl.split(",")[1];
+    if (!base64) return;
+    liveSession.sendRealtimeInput([{
+      mimeType: "image/jpeg",
+      data: base64,
+    }]);
+  });
+
   ipcMain.on("iris:hand-gesture", async (_event, gesture) => {
     try {
       if (gesture === "pinch") {
@@ -2736,33 +2837,14 @@ app.whenReady().then(() => {
     emitEvent({ type: "log", level: "error", message: `Could not register Localchat hotkey Super+Shift+L.` });
   }
 
-  // Register Win+Shift+C to toggle Privacy Cam
-  const privacyRegistered = globalShortcut.register("Super+Shift+C", () => {
-    privacyCamEnabled = !privacyCamEnabled;
-    emitEvent({ type: "log", level: "info", message: `Privacy Cam mode is now ${privacyCamEnabled ? "ON" : "OFF"}.` });
-    if (privacyCamEnabled) {
-      if (!privacyWindow) {
-        privacyWindow = new BrowserWindow({
-          show: false,
-          webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false
-          }
-        });
-        // Load the hidden renderer from resources/privacy-cam.html
-        privacyWindow.loadFile(path.join(repoRoot, "resources", "privacy-cam.html")).catch((err) => {
-          emitEvent({ type: "log", level: "error", message: `Privacy cam load error: ${err.message}` });
-        });
-      }
-    } else {
-      if (privacyWindow) {
-        privacyWindow.close();
-        privacyWindow = null;
-      }
+  // Register Win+Shift+C to toggle Desk Vision (Continuous Mode)
+  const deskVisionRegistered = globalShortcut.register("Super+Shift+C", () => {
+    if (mainWindow) {
+      mainWindow.webContents.send("vision:toggle-desk-continuous");
     }
   });
-  if (!privacyRegistered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register Privacy Cam hotkey Super+Shift+C.` });
+  if (!deskVisionRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Desk Vision hotkey Super+Shift+C.` });
   }
 
   app.on("activate", () => {
@@ -2772,6 +2854,11 @@ app.whenReady().then(() => {
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("before-quit", () => {
+  // Dọn dẹp HUD stats interval trước khi thoát
+  if (hudStatsInterval) {
+    clearInterval(hudStatsInterval);
+    hudStatsInterval = null;
+  }
   stopLive();
   // The app is exiting regardless, so this just signals live subprocesses to
   // die with it — run-queue.mjs owns the runs map, so kill children directly

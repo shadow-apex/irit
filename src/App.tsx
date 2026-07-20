@@ -1061,6 +1061,161 @@ export default function App() {
     });
   }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion]);
 
+  const [hudStats, setHudStats] = useState<{
+    ramTotal: number;
+    ramFree: number;
+    activeTasks: number;
+    queuedTasks: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    return window.iris.onHudStats((stats: any) => {
+      setHudStats(stats);
+    });
+  }, [hasBridge]);
+
+  const [hudMessage, setHudMessage] = useState<{ title: string; content: string } | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    return window.iris.onHudMessage((msg: { title: string; content: string }) => {
+      setHudMessage(msg);
+    });
+  }, [hasBridge]);
+
+  const [deskVisionContinuous, setDeskVisionContinuous] = useState(false);
+  const deskVisionVideoRef = useRef<HTMLVideoElement | null>(null);
+  const deskVisionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const deskVisionStreamRef = useRef<MediaStream | null>(null);
+  const isSnappingRef = useRef(false); // Guard: ngăn concurrent snap nếu Gemini gọi tool 2 lần liên tiếp
+  const deskVisionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // Quản lý interval qua async boundary
+
+  // Handle manual single snapshot (Token Saving)
+  useEffect(() => {
+    if (!hasBridge) return;
+    return window.iris.onSnapDeskVision(() => {
+      if (deskVisionContinuous) return; // Nếu đang chạy liên tục thì bỏ qua
+      if (isSnappingRef.current) return; // Guard: chống concurrent snap
+      isSnappingRef.current = true;
+
+      const video = document.createElement("video");
+      video.autoplay = true;
+      const canvas = document.createElement("canvas");
+
+      const cleanup = (stream?: MediaStream) => {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        video.srcObject = null; // Null hóa để GC thu dọn được MediaStream
+        isSnappingRef.current = false;
+      };
+
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+          video.srcObject = stream;
+          video.onloadedmetadata = () => {
+            setTimeout(() => {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              const ctx = canvas.getContext("2d");
+              if (ctx) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const base64 = canvas.toDataURL("image/jpeg", 0.5);
+                window.iris.sendDeskVisionFrame(base64);
+              }
+              cleanup(stream);
+            }, 800); // Chờ camera focus và điều chỉnh ánh sáng
+          };
+        })
+        .catch(err => {
+          console.error("Snap error:", err);
+          cleanup(); // Cleanup kể cả khi lỗi — tránh stream leak
+        });
+    });
+  }, [hasBridge, deskVisionContinuous]);
+
+  // Handle continuous mode (Win+Shift+C)
+  useEffect(() => {
+    if (!hasBridge) return;
+    return window.iris.onToggleDeskContinuous(() => {
+      setDeskVisionContinuous(prev => !prev);
+    });
+  }, [hasBridge]);
+
+  useEffect(() => {
+    if (!deskVisionContinuous) {
+      // Dọn dẹp ngay khi tắt — không chờ async
+      if (deskVisionIntervalRef.current) {
+        clearInterval(deskVisionIntervalRef.current);
+        deskVisionIntervalRef.current = null;
+      }
+      if (deskVisionStreamRef.current) {
+        deskVisionStreamRef.current.getTracks().forEach(track => track.stop());
+        deskVisionStreamRef.current = null;
+      }
+      if (deskVisionVideoRef.current) {
+        deskVisionVideoRef.current.srcObject = null; // GC thu dọn được MediaStream
+      }
+      return;
+    }
+
+    // Khởi động continuous mode
+    if (!deskVisionVideoRef.current) {
+      deskVisionVideoRef.current = document.createElement("video");
+      deskVisionVideoRef.current.autoplay = true;
+    }
+    if (!deskVisionCanvasRef.current) {
+      deskVisionCanvasRef.current = document.createElement("canvas");
+    }
+
+    // Flag để hủy async callback nếu effect cleanup chạy trước khi getUserMedia resolve
+    // (race condition khi user bật rồi tắt ngay trước khi camera mở xong)
+    let cancelled = false;
+
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+      if (cancelled) {
+        // Cleanup đã chạy trước khi camera mở xong — dừng stream ngược lại
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      deskVisionStreamRef.current = stream;
+      if (deskVisionVideoRef.current) deskVisionVideoRef.current.srcObject = stream;
+
+      // Lưu interval vào ref — cleanup function có thể clear dù có async hay không
+      deskVisionIntervalRef.current = setInterval(() => {
+        if (!deskVisionVideoRef.current || !deskVisionCanvasRef.current) return;
+        const video = deskVisionVideoRef.current;
+        const canvas = deskVisionCanvasRef.current;
+        if (video.videoWidth === 0) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const base64 = canvas.toDataURL("image/jpeg", 0.5);
+          window.iris.sendDeskVisionFrame(base64);
+        }
+      }, 4000);
+    }).catch(err => {
+      console.error("Failed to start continuous desk vision:", err);
+      if (!cancelled) setDeskVisionContinuous(false);
+    });
+
+    return () => {
+      cancelled = true; // Hủy async callback — giải quyết race condition
+      if (deskVisionIntervalRef.current) {
+        clearInterval(deskVisionIntervalRef.current);
+        deskVisionIntervalRef.current = null;
+      }
+      if (deskVisionStreamRef.current) {
+        deskVisionStreamRef.current.getTracks().forEach(track => track.stop());
+        deskVisionStreamRef.current = null;
+      }
+      if (deskVisionVideoRef.current) {
+        deskVisionVideoRef.current.srcObject = null;
+      }
+    };
+  }, [deskVisionContinuous]);
+
   const caption = useMemo(() => {
     if (!sidecarRunning)
       return {
@@ -1140,6 +1295,9 @@ export default function App() {
               : null
           }
           isVisionEnabled={isVisionEnabled}
+          hudStats={hudStats}
+          hudMessage={hudMessage}
+          onDismissHudMessage={() => setHudMessage(null)}
         />
       ) : (
       <div

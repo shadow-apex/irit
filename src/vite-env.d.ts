@@ -166,6 +166,11 @@ type IrisApi = {
   onAudioInterrupt: (callback: () => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
   sendHandGesture: (gesture: string) => void;
+  onHudStats: (callback: (stats: any) => void) => () => void;
+  onHudMessage: (callback: (msg: any) => void) => () => void;
+  onSnapDeskVision: (callback: () => void) => () => void;
+  sendDeskVisionFrame: (data: string) => void;
+  onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;
 };
 
 interface Window {

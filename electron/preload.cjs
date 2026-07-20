@@ -24,6 +24,27 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("hud:mode", handler);
     return () => ipcRenderer.removeListener("hud:mode", handler);
   },
+  onHudStats: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("hud:stats", handler);
+    return () => ipcRenderer.removeListener("hud:stats", handler);
+  },
+  onHudMessage: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("hud:message", handler);
+    return () => ipcRenderer.removeListener("hud:message", handler);
+  },
+  sendDeskVisionFrame: (base64) => ipcRenderer.send("vision:desk-frame", base64),
+  onSnapDeskVision: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("vision:snap-desk", handler);
+    return () => ipcRenderer.removeListener("vision:snap-desk", handler);
+  },
+  onToggleDeskContinuous: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("vision:toggle-desk-continuous", handler);
+    return () => ipcRenderer.removeListener("vision:toggle-desk-continuous", handler);
+  },
   onWakeRequest: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("iris:wake", handler);

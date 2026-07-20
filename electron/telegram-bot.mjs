@@ -2,6 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 
 let bot = null;
 let allowedUserId = null;
+let authorizedChatId = null; // Lưu chatId thực từ message đầu tiên của user (khác với userId)
 
 /**
  * Initialize the Telegram bot if tokens are present.
@@ -46,11 +47,25 @@ export function initTelegramBot(callbacks) {
       return;
     }
 
+    // Cập nhật chatId thực để sendTelegramMessage gửi đúng nơi
+    // (chatId khác allowedUserId khi user nhắn từ group chat)
+    authorizedChatId = chatId;
+
     const text = msg.text?.trim() || "";
     if (!text) return;
 
     if (text === '/start') {
-      bot.sendMessage(chatId, "Welcome to Iris Telegram Bot! You can send me tasks, or use /task, /po, /status.");
+      const opts = {
+        reply_markup: {
+          keyboard: [
+            [{ text: '/status' }, { text: '/routine morning' }],
+            [{ text: 'Bật đèn phòng làm việc' }, { text: 'Tắt đèn' }]
+          ],
+          resize_keyboard: true,
+          is_persistent: true
+        }
+      };
+      bot.sendMessage(chatId, "Chào mừng sếp! Sếp có thể tự gõ lệnh, hoặc bấm các nút tiện ích có sẵn dưới đây để ra lệnh nhanh mà không cần gõ phím nhé.", opts);
       return;
     }
 
@@ -75,6 +90,37 @@ export function initTelegramBot(callbacks) {
       return;
     }
 
+    if (text.startsWith('/routine ')) {
+      const routineName = text.replace('/routine ', '').trim().toLowerCase();
+      if (routineName === 'morning') {
+        // Lưu ý kỹ thuật quan trọng:
+        // display_hud_message là Gemini Live tool — Claude Code headless (DEV)
+        // KHÔNG có quyền gọi tool này.
+        // Flow đúng: Claude thu thập tin tức → output kết quả →
+        // announceClaudeCompletion() thông báo Gemini → Gemini tự gọi display_hud_message.
+        // Vì vậy: KHÔNG truyền agent:'dev' (tránh fail do thiếu OpenSpec change),
+        // và KHÔNG yêu cầu Claude gọi display_hud_message trong task brief.
+        const morningTask = [
+          "Morning routine — thực hiện theo thứ tự:",
+          "1. Mở Spotify: chạy lệnh 'start spotify.exe' bằng shell command.",
+          "2. Lấy tin tức: truy cập một nguồn tin (ví dụ: https://vnexpress.net hoặc https://tuoitre.vn),",
+          "   tổng hợp 5 tin nóng nhất trong ngày bằng tiếng Việt.",
+          "3. Trả về output CHÍNH XÁC theo định dạng sau (Iris sẽ đọc kết quả này và hiển thị lên HUD):",
+          "   TIÊU ĐỀ: Báo cáo Buổi sáng — [ngày hôm nay]",
+          "   NỘI DUNG:",
+          "   1. [Tóm tắt tin 1]",
+          "   2. [Tóm tắt tin 2]",
+          "   ... (5 tin)",
+          "QUAN TRỌNG: Chỉ output phần tin tức — không thêm giải thích hay commentary ngoài lề.",
+        ].join("\n");
+        callbacks.submitTask?.({ task: morningTask }); // Không truyền agent — dùng plain Claude
+        bot.sendMessage(chatId, `🌅 Chào buổi sáng! Đang bật nhạc và lấy tin tức cho sếp...\nIris sẽ thông báo kết quả khi Claude hoàn thành nhé!`);
+      } else {
+        bot.sendMessage(chatId, `Unknown routine: ${routineName}. Available routines: morning`);
+      }
+      return;
+    }
+
     // Default action: just submit as a generic task
     callbacks.submitTask?.({ task: text });
     bot.sendMessage(chatId, `Task submitted:\n${text}`);
@@ -86,11 +132,19 @@ export function initTelegramBot(callbacks) {
 
   /**
    * Send a message to the authorized user.
+   * Dùng authorizedChatId (được cập nhật mỗi khi user nhắn tin thành công)
+   * thay vì allowedUserId để hỗ trợ cả group chat.
    */
   return function sendTelegramMessage(text) {
-    if (bot && allowedUserId) {
-      bot.sendMessage(allowedUserId, text).catch(err => {
+    if (bot && authorizedChatId) {
+      bot.sendMessage(authorizedChatId, text).catch(err => {
         callbacks.log?.("error", `Telegram Bot send error: ${err.message}`);
+      });
+    } else if (bot && allowedUserId) {
+      // Fallback: chưa có chatId (bot chưa nhận message nào), dùng userId
+      // (chỉ đúng với DM, không đúng với group — user nên /start trước)
+      bot.sendMessage(allowedUserId, text).catch(err => {
+        callbacks.log?.("error", `Telegram Bot send error (fallback): ${err.message}`);
       });
     }
   };
