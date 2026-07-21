@@ -21,10 +21,12 @@ import HistoryDrawer from "./components/HistoryDrawer";
 import TaskChooser from "./components/TaskChooser";
 import SetupPanel from "./components/SetupPanel";
 import HandReticles from "./components/HandReticles";
+import CompanionQR from "./components/CompanionQR";
 import HandoffLayer from "./components/HandoffLayer";
 import BootSequence from "./components/BootSequence";
 import HoloBackdrop from "./components/HoloBackdrop";
 import RobotCameras from "./components/RobotCameras";
+import CompanionVideo from "./components/CompanionVideo";
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -64,6 +66,8 @@ export default function App() {
   const [isVisionEnabled, setIsVisionEnabled] = useState(false);
   const [isRobotVisionEnabled, setIsRobotVisionEnabled] = useState(false);
   const [showRobotCameras, setShowRobotCameras] = useState(false);
+  const [showCompanionQR, setShowCompanionQR] = useState(false);
+  const [showCompanionPip, setShowCompanionPip] = useState(false);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
@@ -185,6 +189,31 @@ export default function App() {
       window.removeEventListener("blur", onBlur);
     };
   }, []);
+
+  // Global IPC Listeners cho PiP Hotkeys
+  useEffect(() => {
+    if (!hasBridge) return;
+    
+    let cleanupRobot = () => {};
+    let cleanupCompanion = () => {};
+
+    if (window.iris.onToggleRobotPip) {
+      cleanupRobot = window.iris.onToggleRobotPip(() => {
+        setShowRobotCameras(prev => !prev);
+      });
+    }
+
+    if (window.iris.onToggleCompanionPip) {
+      cleanupCompanion = window.iris.onToggleCompanionPip(() => {
+        setShowCompanionPip(prev => !prev);
+      });
+    }
+
+    return () => {
+      cleanupRobot();
+      cleanupCompanion();
+    };
+  }, [hasBridge]);
 
   // "Thinking" detector: you stopped talking but Iris hasn't started speaking
   // yet — that gap gets the orbiting swirl. Driven by the real mic level, so
@@ -365,6 +394,11 @@ export default function App() {
       if (key === "r" && (event.altKey || event.ctrlKey)) {
         event.preventDefault();
         setShowRobotCameras((v) => !v);
+        return;
+      }
+      if (key === "q" && (event.altKey || event.ctrlKey)) {
+        event.preventDefault();
+        setShowCompanionQR((v) => !v);
         return;
       }
       
@@ -784,6 +818,10 @@ export default function App() {
   }, [handError]);
 
   const lastGestureRef = useRef<{ name: string; time: number } | null>(null);
+  // BUG-HAND-04 FIX: Dedicated ref for grab tracking — decoupled from debounce ref.
+  const grabStateRef = useRef<boolean>(false);
+  // BUG-HAND-02 FIX: Track when Thumb_Down gesture started to require 2-second hold.
+  const thumbDownStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!hasBridge || !handControl) return;
@@ -804,7 +842,32 @@ export default function App() {
     if (hand.shush) trigger("shush");
     else if (hand.pinch) trigger("pinch");
     else if (hand.swipe) trigger(`swipe_${hand.swipe}`);
-  }, [hasBridge, handControl, hand.shush, hand.pinch, hand.swipe]);
+    else if (hand.zoom) trigger(`zoom_${hand.zoom}`);
+    else if (hand.gesture === "Thumb_Up") trigger("thumb_up");
+    else if (hand.gesture === "Victory") trigger("victory");
+    // BUG-HAND-02 FIX: Thumb_Down (Alt+F4) is destructive — require 2-second
+    // continuous hold before triggering to prevent accidental window closes.
+    else if (hand.gesture === "Thumb_Down") {
+      if (thumbDownStartRef.current === null) {
+        thumbDownStartRef.current = now; // start hold timer
+      } else if (now - thumbDownStartRef.current >= 2000) {
+        trigger("thumb_down"); // only fires after 2s of continuous hold
+        thumbDownStartRef.current = null; // reset so it requires re-hold
+      }
+    } else {
+      thumbDownStartRef.current = null; // reset if user changes gesture
+    }
+
+    // BUG-HAND-04 FIX: Grab/release uses its own dedicated ref so it doesn't
+    // corrupt the debounce logic for Thumb_Up / Victory / swipe etc.
+    if (hand.grab && hand.point) {
+      grabStateRef.current = true;
+      window.iris.sendHandGesture({ type: "grab", x: hand.point.x, y: hand.point.y });
+    } else if (!hand.grab && grabStateRef.current) {
+      grabStateRef.current = false;
+      window.iris.sendHandGesture({ type: "release" });
+    }
+  }, [hasBridge, handControl, hand.shush, hand.pinch, hand.swipe, hand.zoom, hand.grab, hand.gesture, hand.point]);
 
   // Universal point-and-hold: the finger pointer can activate ANY clickable
   // element — task cards, close buttons, PO answer options, chips. Holding
@@ -1334,6 +1397,7 @@ export default function App() {
           onToggleHand={() => setHandControl((c) => !c)}
           onOpenSettings={openSettings}
           onOpenRobotCameras={() => setShowRobotCameras(true)}
+          onOpenCompanionQR={() => setShowCompanionQR(true)}
         />
 
         <div className="deck-body">
@@ -1431,6 +1495,11 @@ export default function App() {
       </div>
       )}
 
+      {/* Lớp PiP Cameras thả nổi trên cùng */}
+      {showRobotCameras && <RobotCameras onClose={() => setShowRobotCameras(false)} />}
+      {showCompanionPip && <CompanionVideo onClose={() => setShowCompanionPip(false)} />}
+      
+      {/* Cửa sổ Modal */}
       {expandedTask ? <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} onClose={closeReader} /> : null}
 
       {showHistory ? (
@@ -1452,8 +1521,8 @@ export default function App() {
         />
       ) : null}
 
-      {showRobotCameras ? (
-        <RobotCameras onClose={() => setShowRobotCameras(false)} />
+      {showCompanionQR ? (
+        <CompanionQR onClose={() => setShowCompanionQR(false)} />
       ) : null}
 
       {setup && fullConfig ? (

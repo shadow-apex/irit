@@ -371,6 +371,24 @@ WARNING: MediaPipe WASM URL version phai khop chinh xac voi npm package version!
 
 ---
 
+## Companion Camera (iPhone WebRTC)
+
+- **Mục đích**: Dùng điện thoại làm camera và microphone rời cho Iris.
+- **Cơ chế**: Chạy app `iris-companion` (Expo) thông qua ngrok tunnel.
+- **Cách kết nối**: App sinh mã QR chứa URL ngrok thực tế (thay vì LAN IP để vượt tường lửa). Người dùng quét mã bằng Expo Go.
+- **IPC Handler**: `companion:start-expo` (khởi chạy process ngrok) và `companion:get-tunnel-url` (polling lấy link thật).
+
+---
+
+## Robot Cameras (PiP / Điều khiển)
+
+- **Giao diện**: Hiển thị dưới dạng cửa sổ trôi (Picture-in-Picture) có thể kéo thả (`DraggablePiP`), hạ z-index (500) khi thu nhỏ để không vướng UI khác.
+- **Config**: Đọc cấu hình từ `robots.json` (tự động xử lý an toàn nếu file rỗng hoặc không tồn tại).
+- **Tránh cache & chống lag**: URL stream camera sử dụng `?ts=Date.now()` để ép trình duyệt tải mới, refresh mỗi 3s. Tự động phục hồi khi URL sống lại.
+- **Điều khiển**: Có Gemini tool `trigger_robot_action` gửi tín hiệu HTTP tới `control_url` của robot, hoặc chạy Mock mode nếu chưa config.
+
+---
+
 ## Claude Task Flow
 
 ```

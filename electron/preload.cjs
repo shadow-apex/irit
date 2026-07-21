@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("iris", {
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
   getSessions: () => ipcRenderer.invoke("sessions:get"),
   getRobots: () => ipcRenderer.invoke("robots:get"),
+  getLocalIp: () => ipcRenderer.invoke("network:get-ip"),
+  startCompanionExpo: () => ipcRenderer.invoke("companion:start-expo"),
   selectSession: (id) => ipcRenderer.invoke("sessions:select", id),
   newSession: (label) => ipcRenderer.invoke("sessions:new", label),
   chooseProjectFolder: (id) => ipcRenderer.invoke("sessions:choose-cwd", id),
@@ -85,4 +87,26 @@ contextBridge.exposeInMainWorld("iris", {
     return () => ipcRenderer.removeListener("sidecar:event", handler);
   },
   sendHandGesture: (gesture) => ipcRenderer.send("iris:hand-gesture", gesture),
+  // BUG-COMP-02 FIX: Expose companion frame listener so renderer can
+  // display or forward phone camera frames to Gemini Live.
+  onCompanionFrame: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("companion:frame", handler);
+    return () => ipcRenderer.removeListener("companion:frame", handler);
+  },
+  onCompanionStatus: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("companion:status", handler);
+    return () => ipcRenderer.removeListener("companion:status", handler);
+  },
+  onToggleRobotPip: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("ui:toggle-robot-pip", handler);
+    return () => ipcRenderer.removeListener("ui:toggle-robot-pip", handler);
+  },
+  onToggleCompanionPip: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("ui:toggle-companion-pip", handler);
+    return () => ipcRenderer.removeListener("ui:toggle-companion-pip", handler);
+  },
 });

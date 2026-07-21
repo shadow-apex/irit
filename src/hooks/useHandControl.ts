@@ -31,6 +31,8 @@ export type HandState = {
   shush: boolean;
   pinch: boolean;
   swipe: "left" | "right" | null;
+  zoom: "in" | "out" | null;
+  grab: boolean;
 };
 
 // Keep this version in sync with the @mediapipe/tasks-vision version in
@@ -71,6 +73,8 @@ const EMPTY_STATE: HandState = {
   shush: false,
   pinch: false,
   swipe: null,
+  zoom: null,
+  grab: false,
 };
 
 /**
@@ -116,6 +120,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     const candidateGestureById = new Map<string, string>();
     const candidateFramesById = new Map<string, number>();
     let swipeHistory: { x: number; time: number }[] = [];
+    let zoomHistory: { d: number; time: number }[] = [];
 
     async function setup() {
       try {
@@ -277,6 +282,27 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             swipeHistory = [];
           }
 
+          let zoom: "in" | "out" | null = null;
+          if (hands.length === 2 && hands.every(h => h.openPalm || h.pointing || h.fist)) {
+            const d = Math.hypot(hands[0].point.x - hands[1].point.x, hands[0].point.y - hands[1].point.y);
+            zoomHistory.push({ d, time: now });
+            if (zoomHistory.length > 120) zoomHistory = zoomHistory.slice(-60);
+            zoomHistory = zoomHistory.filter((h) => now - h.time < 500);
+
+            if (zoomHistory.length > 5) {
+              const dd = zoomHistory[zoomHistory.length - 1].d - zoomHistory[0].d;
+              const dt = zoomHistory[zoomHistory.length - 1].time - zoomHistory[0].time;
+              if (dt > 100 && Math.abs(dd) > window.innerWidth * 0.15) {
+                zoom = dd > 0 ? "in" : "out";
+                zoomHistory = [];
+              }
+            }
+          } else {
+            zoomHistory = [];
+          }
+
+          const grab = primary.fist;
+
           setState({
             active: true,
             present: true,
@@ -291,6 +317,8 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             shush,
             pinch,
             swipe,
+            zoom,
+            grab,
           });
         } else {
           smooth = null;

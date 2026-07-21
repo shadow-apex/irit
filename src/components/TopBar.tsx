@@ -1,4 +1,4 @@
-import { Hand, PictureInPicture2, Radio, Settings, Bot } from "lucide-react";
+import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone } from "lucide-react";
 
 function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
   return (
@@ -19,6 +19,7 @@ export default function TopBar({
   onToggleHand,
   onOpenSettings,
   onOpenRobotCameras,
+  onOpenCompanionQR,
 }: {
   geminiDot: string;
   claudeDot: string;
@@ -29,6 +30,7 @@ export default function TopBar({
   onToggleHand: () => void;
   onOpenSettings: () => void;
   onOpenRobotCameras: () => void;
+  onOpenCompanionQR: () => void;
 }) {
   return (
     <header className="deck-top">
@@ -70,6 +72,13 @@ export default function TopBar({
           title="Robot Cameras (Alt+R)"
         >
           <Bot size={16} />
+        </button>
+        <button
+          className="theme-toggle"
+          onClick={onOpenCompanionQR}
+          title="Companion App QR Code (Alt+Q)"
+        >
+          <Smartphone size={16} />
         </button>
         <button
           className={`theme-toggle ${handControl ? "active" : ""}`}

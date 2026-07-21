@@ -28,6 +28,7 @@ import { runComputerSession } from "./computer-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
 import { initTelegramBot } from "./telegram-bot.mjs";
+import { startCompanionServer, stopCompanionServer } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -168,29 +169,35 @@ function stopRobotVisionLoop() {
   emitEvent({ type: "log", level: "info", message: "Robot vision loop stopped." });
 }
 
+// BUG-CAM-01 FIX: Cache robots config with 5-second TTL.
+// getRobotsConfig() is called from the robot vision loop (every second) and
+// from multiple IPC handlers — avoid redundant disk reads on each call.
+let _robotsCache = null;
+let _robotsCacheTime = 0;
+
 function getRobotsConfig() {
+  // Serve from cache if still fresh
+  if (_robotsCache && Date.now() - _robotsCacheTime < 5000) return _robotsCache;
+
   const robotsPath = path.join(repoRoot, "robots.json");
+  // BUG-CAM-03 FIX: If robots.json doesn't exist, return empty object instead
+  // of silently creating a demo file with a fake IP that always fails to load.
   if (!fs.existsSync(robotsPath)) {
-    const defaultConfig = {
-      robots: {
-        "robodog": {
-          "name": "RoboDog",
-          "control_url": "http://192.168.1.100/api/action",
-          "camera_url": "http://192.168.1.100/camera/snapshot.jpg",
-          "token": "secret123"
-        }
-      }
-    };
-    fs.writeFileSync(robotsPath, JSON.stringify(defaultConfig, null, 2), "utf8");
-    return defaultConfig.robots;
+    _robotsCache = {};
+    _robotsCacheTime = Date.now();
+    return _robotsCache;
   }
   try {
     const data = fs.readFileSync(robotsPath, "utf8");
     const parsed = JSON.parse(data);
-    return parsed.robots || {};
+    _robotsCache = parsed.robots || {};
+    _robotsCacheTime = Date.now();
+    return _robotsCache;
   } catch (err) {
     console.error("Failed to parse robots.json:", err);
-    return {};
+    _robotsCache = {};
+    _robotsCacheTime = Date.now();
+    return _robotsCache;
   }
 }
 
@@ -2479,6 +2486,9 @@ async function startLive() {
     reconnectTimer = null;
   }
   await connectLive({ isReconnect: false });
+  // BUG-COMP-04/COMP-02 FIX: Pass sendFrameToGemini so companion video frames
+  // go directly to Gemini Live without an unnecessary renderer round-trip.
+  startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini);
   return { running: true, pid: process.pid };
 }
 
@@ -2662,6 +2672,28 @@ async function stopLive() {
   emitEvent({ type: "sidecar_status", status: liveStatus });
   updateTrayMenu();
   return liveStatus;
+}
+
+// BUG-HAND-05 FIX: Pre-cache nut-js module to avoid 50-200ms dynamic import
+// latency on first gesture. Subsequent calls hit the cache immediately.
+let _nutJs = null;
+async function getNutJs() {
+  if (!_nutJs) _nutJs = await import("@nut-tree-fork/nut-js");
+  return _nutJs;
+}
+// Pre-warm the cache in the background at startup so first gesture is fast.
+import("@nut-tree-fork/nut-js").then(m => { _nutJs = m; }).catch(() => {});
+
+function sendFrameToGemini(base64Jpeg) {
+  if (!liveSession || !base64Jpeg) return;
+  try {
+    liveSession.sendRealtimeInput([{
+      mimeType: "image/jpeg",
+      data: base64Jpeg,
+    }]);
+  } catch (e) {
+    // ignore transient errors
+  }
 }
 
 function sendAudioChunk(arrayBuffer) {
@@ -2883,6 +2915,105 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("robots:get", () => getRobotsConfig());
+
+  ipcMain.handle("network:get-ip", () => {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+    return "localhost";
+  });
+
+  // Biến lưu Expo process đang chạy nền
+  let expoProcess = null;
+
+  ipcMain.handle("companion:start-expo", () => {
+    // Nếu process đã chạy, trả về ngay — tránh khởi động lại
+    if (expoProcess) return { status: "running" };
+
+    const companionPath = path.join(repoRoot, "iris-companion");
+    if (!fs.existsSync(companionPath)) return { status: "not_found" };
+
+    // BUG-EXPO-01 FIX: execFileSync đã được import ở đầu file — KHÔNG dùng require() trong ESM.
+    // Giải phóng cổng 8081 trước khi khởi động để Expo KHÔNG bao giờ gặp cổng bận
+    // và hỏi "Use port 8082?" — câu hỏi đó trong CI mode sẽ skip + exit ngay.
+    try {
+      const killPortCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+      execFileSync(killPortCmd, ["--yes", "kill-port", "--port", "8081"], {
+        stdio: "ignore",
+        timeout: 10000,
+        windowsHide: true,
+      });
+    } catch (e) {
+      // Bỏ qua nếu không có process nào đang chiếm cổng
+    }
+
+    // BUG-EXPO-02 FIX: Không dùng shell:true khi đã dùng npx.cmd trên Windows.
+    // shell:true tạo thêm một lớp cmd.exe bọc ngoài, gây:
+    //   - DEP0190 warning (args không được escape trước khi concat)
+    //   - npx.cmd chạy trong subshell → mất TTY → Expo cli thoát ngay với code 1
+    //   - stdout/stderr của process con không được pipe về → crash không có log
+    //
+    // BUG-EXPO-03 FIX: stdio: 'pipe' thay vì để mặc định (inherit TTY).
+    // Trong môi trường Electron/Vite không có TTY thật. Expo CLI kiểm tra
+    // process.stdout.isTTY, nếu là null/undefined mà lại inherit stdin của
+    // parent (= Electron), nó sẽ crash ngay khi cố đọc input. Pipe giải quyết
+    // điều này bằng cách cung cấp stream ảo — Expo happy, không crash.
+    //
+    // BUG-EXPO-04 FIX: windowsHide:true ẩn cửa sổ cmd flash trên Windows.
+    const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+
+    // BUG-EXPO-ROOT FIX: --port 8081 bắt buộc Expo dùng đúng port, tránh prompt
+    // "Use port 8082 instead?" mà khi CI=1 sẽ bị skip và Expo exit code 1.
+    // Bỏ --no-dev --minify: Expo 51 không hỗ trợ combo này trong stdio:pipe.
+    expoProcess = spawn(npxCmd, ["expo", "start", "--port", "8081"], {
+      cwd: companionPath,
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        // Tắt interactive prompts của Expo CLI (chạy non-interactive)
+        CI: "1",
+        EXPO_NO_TELEMETRY: "1",
+      },
+    });
+
+    expoProcess.stdout.on("data", (data) => {
+      console.log("[Companion][Expo]", data.toString().trimEnd());
+    });
+
+    expoProcess.stderr.on("data", (data) => {
+      const msg = data.toString().trimEnd();
+      // Expo ghi nhiều thứ ra stderr (metro bundler logs) — log ở warn chứ không error
+      console.warn("[Companion][Expo][stderr]", msg);
+    });
+
+    expoProcess.on("error", (err) => {
+      console.error("[Companion] Failed to start Expo:", err.message);
+      expoProcess = null;
+    });
+
+    expoProcess.on("exit", (code, signal) => {
+      console.log(`[Companion] Expo process exited — code: ${code}, signal: ${signal}`);
+      expoProcess = null;
+    });
+
+    return { status: "started" };
+  });
+
+  // Dọn dẹp Expo process khi app đóng
+  app.on("before-quit", () => {
+    if (expoProcess) {
+      try { expoProcess.kill(); } catch (e) { /* bỏ qua */ }
+      expoProcess = null;
+    }
+  });
+
   ipcMain.handle("sessions:get", () => sessionsSnapshot());
   ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
   ipcMain.handle("sessions:new", (_event, label) => {
@@ -2949,7 +3080,7 @@ app.whenReady().then(() => {
           else mainWindow.minimize();
         }
       } else if (gesture === "swipe_left" || gesture === "swipe_right") {
-        const { keyboard, Key } = await import("@nut-tree-fork/nut-js");
+        const { keyboard, Key } = await getNutJs();
         if (gesture === "swipe_right") {
           // Swipe Right -> Chuyển ứng dụng (Alt + Tab)
           await keyboard.pressKey(Key.LeftAlt, Key.Tab);
@@ -2958,6 +3089,40 @@ app.whenReady().then(() => {
           // Swipe Left -> Chuyển ứng dụng ngược lại (Alt + Shift + Tab)
           await keyboard.pressKey(Key.LeftAlt, Key.LeftShift, Key.Tab);
           await keyboard.releaseKey(Key.LeftAlt, Key.LeftShift, Key.Tab);
+        }
+      } else if (gesture === "zoom_in") {
+        const { keyboard, Key } = await getNutJs();
+        await keyboard.pressKey(Key.LeftControl, Key.Equal);
+        await keyboard.releaseKey(Key.LeftControl, Key.Equal);
+      } else if (gesture === "zoom_out") {
+        const { keyboard, Key } = await getNutJs();
+        await keyboard.pressKey(Key.LeftControl, Key.Minus);
+        await keyboard.releaseKey(Key.LeftControl, Key.Minus);
+      } else if (gesture === "thumb_up") {
+        const { keyboard, Key } = await getNutJs();
+        await keyboard.pressKey(Key.LeftSuper);
+        await keyboard.releaseKey(Key.LeftSuper);
+      } else if (gesture === "thumb_down") {
+        const { keyboard, Key } = await getNutJs();
+        await keyboard.pressKey(Key.LeftAlt, Key.F4);
+        await keyboard.releaseKey(Key.LeftAlt, Key.F4);
+      } else if (gesture === "victory") {
+        const { keyboard, Key } = await getNutJs();
+        await keyboard.pressKey(Key.LeftSuper, Key.D);
+        await keyboard.releaseKey(Key.LeftSuper, Key.D);
+      } else if (typeof gesture === "object") {
+        const { mouse, Point, Button } = await getNutJs();
+        if (gesture.type === "grab") {
+          if (!global.isGrabbing) {
+             global.isGrabbing = true;
+             await mouse.pressButton(Button.LEFT);
+          }
+          await mouse.setPosition(new Point(gesture.x, gesture.y));
+        } else if (gesture.type === "release") {
+          if (global.isGrabbing) {
+             global.isGrabbing = false;
+             await mouse.releaseButton(Button.LEFT);
+          }
         }
       }
     } catch (e) {
@@ -3009,19 +3174,52 @@ app.whenReady().then(() => {
     emitEvent({ type: "log", level: "error", message: `Could not register Desk Vision hotkey Super+Shift+C.` });
   }
 
+  // Register Alt+R to toggle Robot Cameras PiP
+  const robotPipRegistered = globalShortcut.register("Alt+R", () => {
+    if (mainWindow) {
+      mainWindow.webContents.send("ui:toggle-robot-pip");
+    }
+  });
+  if (!robotPipRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Robot PiP hotkey Alt+R.` });
+  }
+
+  // Register Alt+C to toggle Companion Camera PiP
+  const companionPipRegistered = globalShortcut.register("Alt+C", () => {
+    if (mainWindow) {
+      mainWindow.webContents.send("ui:toggle-companion-pip");
+    }
+  });
+  if (!companionPipRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Companion PiP hotkey Alt+C.` });
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("before-quit", () => {
+app.on("before-quit", async () => {
   // Dọn dẹp HUD stats interval trước khi thoát
   if (hudStatsInterval) {
     clearInterval(hudStatsInterval);
     hudStatsInterval = null;
   }
   stopLive();
+  stopCompanionServer();
+  // BUG-COMP-05 FIX: Kill zombie expo process so it doesn't hold port 8081.
+  if (typeof expoProcess !== "undefined" && expoProcess && !expoProcess.killed) {
+    try { expoProcess.kill(); } catch {}
+  }
+  // BUG-HAND-01 FIX: Release stuck mouse button if app closes during a grab.
+  if (global.isGrabbing) {
+    try {
+      const { mouse, Button } = await getNutJs();
+      await mouse.releaseButton(Button.LEFT);
+      global.isGrabbing = false;
+    } catch { /* ignore — best-effort cleanup */ }
+  }
   // The app is exiting regardless, so this just signals live subprocesses to
   // die with it — run-queue.mjs owns the runs map, so kill children directly
   // via list() rather than mutating run.status from outside the module.

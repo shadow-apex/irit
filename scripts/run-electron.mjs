@@ -5,12 +5,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const isWindows = process.platform === "win32";
-const electronBin = path.join(
-  root,
-  "node_modules",
-  ".bin",
-  isWindows ? "electron.cmd" : "electron",
-);
+const electronCli = path.join(root, "node_modules", "electron", "cli.js");
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -19,11 +14,11 @@ if (process.argv.includes("--prod")) {
   env.IRIS_START_PROD = "1";
 }
 
-const child = spawn(electronBin, ["."], {
+const child = spawn(process.execPath, [electronCli, "."], {
   cwd: root,
   env,
   stdio: "inherit",
-  shell: isWindows,
+  shell: false,
 });
 
 child.on("exit", (code, signal) => {

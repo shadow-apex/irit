@@ -166,14 +166,21 @@ type IrisApi = {
   onAudioChunk: (callback: (chunk: LiveAudioChunk) => void) => () => void;
   onAudioInterrupt: (callback: () => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
-  sendHandGesture: (gesture: string) => void;
+  sendHandGesture: (gesture: string | { type: string; x?: number; y?: number }) => void;
   onHudStats: (callback: (stats: any) => void) => () => void;
   onHudMessage: (callback: (msg: any) => void) => () => void;
   onSnapDeskVision: (callback: () => void) => () => void;
   sendDeskVisionFrame: (data: string) => void;
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;
+  getLocalIp?: () => Promise<string>;
+  startCompanionExpo?: () => Promise<any>;
+  // BUG-COMP-02 FIX: Expose companion camera frame listener types
+  onCompanionFrame?: (callback: (base64Jpeg: string) => void) => () => void;
+  onCompanionStatus?: (callback: (payload: any) => void) => () => void;
+  // PiP Global Hotkey Listeners
+  onToggleRobotPip?: (callback: () => void) => () => void;
+  onToggleCompanionPip?: (callback: () => void) => () => void;
 };
-
 interface Window {
   iris: IrisApi;
 }
