@@ -174,6 +174,7 @@ type IrisApi = {
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;
   getLocalIp?: () => Promise<string>;
   startCompanionExpo?: () => Promise<any>;
+  getCompanionTunnel?: () => Promise<string | null>;
   // BUG-COMP-02 FIX: Expose companion camera frame listener types
   onCompanionFrame?: (callback: (base64Jpeg: string) => void) => () => void;
   onCompanionStatus?: (callback: (payload: any) => void) => () => void;

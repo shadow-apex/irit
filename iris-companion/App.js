@@ -33,7 +33,17 @@ export default function App() {
     }
 
     try {
-      const wsUrl = `ws://${ipAddress}:8080`;
+      // BUG-COMP-08 FIX: previously this always built `ws://${ipAddress}:8080`,
+      // which only ever works when the phone and desktop share the same
+      // Wi-Fi/LAN. `expo start --tunnel` only tunnels the Expo/Metro port
+      // (8081) that delivers this app's JS bundle — it never tunnels THIS
+      // WebSocket (8080, the actual camera/audio stream). So even after
+      // installing the app via ngrok, the stream itself still required LAN.
+      // Now: if the user pastes a full ws://... or wss://... tunnel URL
+      // (shown/copyable in the desktop app's Companion dialog), use it
+      // as-is; otherwise treat the input as a bare LAN IP like before.
+      const target = ipAddress.trim();
+      const wsUrl = /^wss?:\/\//i.test(target) ? target : `ws://${target}:8080`;
       wsRef.current = new WebSocket(wsUrl);
 
       wsRef.current.onopen = async () => {
@@ -204,9 +214,11 @@ export default function App() {
           style={styles.input}
           onChangeText={setIpAddress}
           value={ipAddress}
-          placeholder="Iris Desktop IP"
+          placeholder="IP LAN (192.168.x.x) hoặc dán URL wss://... từ ngrok"
           placeholderTextColor="#666"
-          keyboardType="numeric"
+          keyboardType="default"
+          autoCapitalize="none"
+          autoCorrect={false}
           editable={!connected}
         />
         

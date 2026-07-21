@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Iris Web Companion</title>
+  <style>
+    * { box-sizing: border-box; }
+    body, html {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      background-color: #0a0a0a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    }
+    .title {
+      color: #00ffcc; font-size: 24px; font-weight: bold; margin-top: 40px; letter-spacing: 2px;
+    }
+    .camera-container {
+      width: 80%;
+      aspect-ratio: 3/4;
+      margin-top: 30px;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 2px solid #333;
+      background-color: #111;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    video {
+      width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); /* Mirror */
+    }
+    .control-panel {
+      width: 80%; margin-top: 30px; display: flex; flex-direction: column; align-items: center;
+    }
+    .btn {
+      width: 100%; height: 55px; border-radius: 10px; border: none;
+      font-size: 16px; font-weight: bold; letter-spacing: 1px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .btn-connect { background-color: #00ffcc; color: #000; }
+    .btn-disconnect { background-color: #ff3366; color: #fff; }
+    .status { margin-top: 20px; font-size: 14px; font-weight: 600; }
+    .status-on { color: #00ffcc; }
+    .status-off { color: #666; }
+    .hint { margin-top: 10px; color: #444; font-size: 12px; }
+    
+    #overlay-text {
+      position: absolute; z-index: 10; color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="title">IRIS COMPANION</div>
+  
+  <div class="camera-container">
+    <video id="videoElement" autoplay playsinline muted></video>
+    <div id="overlay-text">Camera Offline</div>
+  </div>
+
+  <div class="control-panel">
+    <button id="connectBtn" class="btn btn-connect">CONNECT TO IRIS</button>
+    <div id="statusText" class="status status-off">Status: STANDBY</div>
+    <div class="hint">📷 Camera: 1 FPS &nbsp;•&nbsp; 🎤 Audio: 16kHz PCM</div>
+  </div>
+
+  <script>
+    let ws = null;
+    let localStream = null;
+    let audioContext = null;
+    let audioWorkletNode = null;
+    let frameInterval = null;
+    let isConnected = false;
+    // ── FIX: track whether the user deliberately disconnected vs. the
+    // connection dying on its own (wifi drop, phone locked, ngrok hiccup).
+    // Without this, we can't tell "user pressed Disconnect" apart from
+    // "network died", so we either never auto-reconnect or we annoyingly
+    // reconnect right after the user asked to stop.
+    let userInitiatedDisconnect = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const statusText = document.getElementById('statusText');
+    const videoElement = document.getElementById('videoElement');
+    const overlayText = document.getElementById('overlay-text');
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    async function toggleConnection() {
+      if (isConnected) {
+        userInitiatedDisconnect = true; // user explicitly pressed the button
+        disconnect();
+      } else {
+        userInitiatedDisconnect = false;
+        reconnectAttempts = 0;
+        await connect();
+      }
+    }
+
+    async function connect() {
+      try {
+        // Reuse an existing camera/mic stream across reconnect attempts —
+        // no need to re-prompt getUserMedia every time the socket drops.
+        if (!localStream) {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: { echoCancellation: true, noiseSuppression: true }
+          });
+        }
+
+        videoElement.srcObject = localStream;
+        overlayText.style.display = 'none';
+        statusText.textContent = reconnectAttempts > 0 ? "Status: RECONNECTING..." : "Status: CONNECTING...";
+        statusText.className = "status status-off";
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let wsUrl = `${protocol}//${window.location.host}`;
+        
+        // Append auth token from query string
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        if (token) {
+          wsUrl += `?token=${token}`;
+        }
+        
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          isConnected = true;
+          reconnectAttempts = 0;
+          statusText.textContent = "Status: LIVE STREAMING";
+          statusText.className = "status status-on";
+          connectBtn.textContent = "DISCONNECT";
+          connectBtn.className = "btn btn-disconnect";
+          startStreaming();
+        };
+
+        // ── FIX: distinguish "server rejected/dropped us" from "user hit
+        // Disconnect". Previously both onclose and onerror called the same
+        // disconnect() that also stops the camera/mic and never retries —
+        // so a brief wifi hiccup silently ended the session and the phone
+        // just sat there "STANDBY" with no camera until the user noticed
+        // and manually reconnected.
+        ws.onclose = () => stopStreamingKeepMedia();
+        ws.onerror = (e) => {
+          console.error("WS Error", e);
+          stopStreamingKeepMedia();
+        };
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'error') {
+              alert("Server: " + msg.message);
+              userInitiatedDisconnect = true; // server explicitly rejected us (e.g. already connected) — don't loop retrying
+              disconnect();
+            }
+          } catch(err) {}
+        };
+      } catch (err) {
+        alert("Camera/Mic access denied or error: " + err.message);
+        console.error(err);
+      }
+    }
+
+    // Socket died (network drop, ngrok hiccup, server restart) but the user
+    // never asked to stop — keep the camera/mic running and try to
+    // reconnect with exponential backoff instead of tearing everything down.
+    function stopStreamingKeepMedia() {
+      isConnected = false;
+      if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch {} ws = null; }
+      if (frameInterval) { clearInterval(frameInterval); frameInterval = null; }
+      if (audioWorkletNode) { audioWorkletNode.disconnect(); audioWorkletNode = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+
+      if (userInitiatedDisconnect) {
+        disconnect();
+        return;
+      }
+
+      statusText.textContent = "Status: CONNECTION LOST — retrying...";
+      statusText.className = "status status-off";
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000); // cap at 15s
+      reconnectAttempts++;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (!userInitiatedDisconnect) connect();
+      }, delay);
+    }
+
+    function disconnect() {
+      isConnected = false;
+      clearTimeout(reconnectTimer);
+      statusText.textContent = "Status: STANDBY";
+      statusText.className = "status status-off";
+      connectBtn.textContent = "CONNECT TO IRIS";
+      connectBtn.className = "btn btn-connect";
+      overlayText.style.display = 'block';
+
+      if (ws) {
+        ws.onclose = null; ws.onerror = null; // avoid double-handling once we close it ourselves
+        ws.close();
+        ws = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      videoElement.srcObject = null;
+      
+      if (frameInterval) {
+        clearInterval(frameInterval);
+        frameInterval = null;
+      }
+      if (audioWorkletNode) {
+        audioWorkletNode.disconnect();
+        audioWorkletNode = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+    }
+
+    // ── FIX: backpressure guard. If the network (esp. over an ngrok
+    // tunnel) is slower than 1 frame/sec + continuous PCM audio, ws.send()
+    // keeps queuing data into the socket's internal buffer with nothing
+    // capping it — bufferedAmount grows unbounded, memory climbs over a
+    // long session, and audio/video drift further and further behind
+    // real-time. Skip a send if the previous one(s) haven't drained yet.
+    const MAX_BUFFERED_BYTES = 1_000_000; // ~1MB
+
+    async function startStreaming() {
+      frameInterval = setInterval(() => {
+        if (!isConnected || ws.readyState !== WebSocket.OPEN) return;
+        if (ws.bufferedAmount > MAX_BUFFERED_BYTES) return; // network can't keep up — drop this frame
+
+        canvas.width = videoElement.videoWidth || 640;
+        canvas.height = videoElement.videoHeight || 480;
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+        
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.2);
+        const base64 = dataUrl.split(',')[1];
+        if (base64) {
+          ws.send(JSON.stringify({ type: 'frame', data: base64 }));
+        }
+      }, 1000);
+
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(localStream);
+      
+      const workletCode = `
+        class PCMProcessor extends AudioWorkletProcessor {
+          process(inputs, outputs, parameters) {
+            const input = inputs[0];
+            if (input && input.length > 0) {
+              const channelData = input[0];
+              if (channelData) {
+                const pcmData = new Int16Array(channelData.length);
+                for (let i = 0; i < channelData.length; i++) {
+                  let s = Math.max(-1, Math.min(1, channelData[i]));
+                  pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                this.port.postMessage(pcmData.buffer, [pcmData.buffer]);
+              }
+            }
+            return true; // Keep alive
+          }
+        }
+        registerProcessor('pcm-processor', PCMProcessor);
+      `;
+      const blob = new Blob([workletCode], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      
+      try {
+        await audioContext.audioWorklet.addModule(url);
+        audioWorkletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
+        
+        audioWorkletNode.port.onmessage = (e) => {
+          if (!isConnected || ws.readyState !== WebSocket.OPEN) return;
+          if (ws.bufferedAmount > MAX_BUFFERED_BYTES) return; // Drop chunk if network too slow
+          ws.send(e.data);
+        };
+        
+        source.connect(audioWorkletNode);
+        audioWorkletNode.connect(audioContext.destination);
+      } catch (err) {
+        console.error("AudioWorklet setup failed:", err);
+      }
+    }
+
+    connectBtn.addEventListener('click', toggleConnection);
+  </script>
+</body>
+</html>

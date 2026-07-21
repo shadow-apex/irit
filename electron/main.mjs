@@ -28,7 +28,7 @@ import { runComputerSession } from "./computer-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
 import { initTelegramBot } from "./telegram-bot.mjs";
-import { startCompanionServer, stopCompanionServer } from "./companion-server.mjs";
+import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -206,7 +206,7 @@ let activeRobotId = null;
 function toggleRobotVision(args = {}) {
   const robotId = args.robot_id;
   const robots = getRobotsConfig();
-  
+
   if (!isRobotVisionEnabled) {
     if (!robotId || !robots[robotId]) {
       return { status: "error", error: "Cannot enable Robot Vision: Invalid or missing robot_id." };
@@ -347,7 +347,7 @@ function logPoBillingPathOnce() {
   } else {
     console.warn(
       "[IRIS][po-auth] No CLAUDE_CODE_OAUTH_TOKEN found. PO turns will fail until you run `claude setup-token` " +
-        "and set CLAUDE_CODE_OAUTH_TOKEN (see .env.example). DEV is unaffected.",
+      "and set CLAUDE_CODE_OAUTH_TOKEN (see .env.example). DEV is unaffected.",
     );
   }
 }
@@ -386,7 +386,7 @@ function flushTranscripts() {
 // Every task resumes the active session's Claude session (--resume), tasks run
 // strictly one at a time (queued), and sessions survive app restarts.
 const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
-let sendTelegramMessage = () => {};
+let sendTelegramMessage = () => { };
 
 // Initialize Telegram bot after environment variables are loaded
 setTimeout(() => {
@@ -415,10 +415,10 @@ const runQueue = createRunQueue({
       status: run.status,
       output: String(run.output || "").slice(0, 2500),
     });
-    
+
     const outputString = String(run.output || "");
     const isMissingClaude = outputString.includes("claude is not recognized") || outputString.includes("No CLAUDE_CODE_OAUTH_TOKEN");
-    
+
     if (isMissingClaude) {
       if (!hasReportedMissingClaudeKey) {
         hasReportedMissingClaudeKey = true;
@@ -1789,7 +1789,7 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
 async function startComputerUseTask(args) {
   const { task } = args;
   emitEvent({ type: "log", level: "info", message: `Starting Computer Use Task: ${task}` });
-  
+
   // Run asynchronously without blocking Gemini
   runComputerSession(task, (streamEvent) => {
     if (streamEvent.text) {
@@ -1903,7 +1903,7 @@ async function triggerSmartHome({ device, action }) {
     const token = process.env.SMART_HOME_TOKEN;
     const headers = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    
+
     // We send a generic POST request
     const res = await fetch(url, {
       method: "POST",
@@ -1922,7 +1922,7 @@ async function triggerRobotAction({ robot_id, action, params }) {
   if (!robot_id || !robots[robot_id]) {
     return { status: "error", error: "Invalid or missing robot_id." };
   }
-  
+
   const robot = robots[robot_id];
   const url = robot.control_url;
   if (!url) {
@@ -2164,11 +2164,11 @@ function buildClaudeTools() {
         {
           name: "toggle_robot_vision",
           description: "Turn on or off the Live Robot Vision feature for a specific robot, allowing you to continuously see its camera feed. Invoke this when the user asks you to start or stop looking through a robot's eyes/camera.",
-          parameters: { 
-            type: "object", 
+          parameters: {
+            type: "object",
             properties: {
               robot_id: { type: "string", description: "The ID of the robot to view." }
-            } 
+            }
           },
         },
         {
@@ -2682,7 +2682,7 @@ async function getNutJs() {
   return _nutJs;
 }
 // Pre-warm the cache in the background at startup so first gesture is fast.
-import("@nut-tree-fork/nut-js").then(m => { _nutJs = m; }).catch(() => {});
+import("@nut-tree-fork/nut-js").then(m => { _nutJs = m; }).catch(() => { });
 
 function sendFrameToGemini(base64Jpeg) {
   if (!liveSession || !base64Jpeg) return;
@@ -2930,10 +2930,18 @@ app.whenReady().then(() => {
 
   // Biến lưu Expo process đang chạy nền
   let expoProcess = null;
+  let expoTunnelUrl = null;
+
+  ipcMain.handle("companion:get-tunnel", () => expoTunnelUrl);
+  // Port 8080's own tunnel (camera/audio stream) — separate from the Expo
+  // (port 8081) tunnel above. See companion-server.mjs for why these can't share one.
+  ipcMain.handle("companion:get-ws-tunnel", () => getCompanionWsTunnel());
+  ipcMain.handle("companion:get-ws-token", () => getCompanionWsToken());
 
   ipcMain.handle("companion:start-expo", () => {
     // Nếu process đã chạy, trả về ngay — tránh khởi động lại
     if (expoProcess) return { status: "running" };
+    expoTunnelUrl = null;
 
     const companionPath = path.join(repoRoot, "iris-companion");
     if (!fs.existsSync(companionPath)) return { status: "not_found" };
@@ -2952,39 +2960,28 @@ app.whenReady().then(() => {
       // Bỏ qua nếu không có process nào đang chiếm cổng
     }
 
-    // BUG-EXPO-02 FIX: Không dùng shell:true khi đã dùng npx.cmd trên Windows.
-    // shell:true tạo thêm một lớp cmd.exe bọc ngoài, gây:
-    //   - DEP0190 warning (args không được escape trước khi concat)
-    //   - npx.cmd chạy trong subshell → mất TTY → Expo cli thoát ngay với code 1
-    //   - stdout/stderr của process con không được pipe về → crash không có log
-    //
-    // BUG-EXPO-03 FIX: stdio: 'pipe' thay vì để mặc định (inherit TTY).
-    // Trong môi trường Electron/Vite không có TTY thật. Expo CLI kiểm tra
-    // process.stdout.isTTY, nếu là null/undefined mà lại inherit stdin của
-    // parent (= Electron), nó sẽ crash ngay khi cố đọc input. Pipe giải quyết
-    // điều này bằng cách cung cấp stream ảo — Expo happy, không crash.
-    //
-    // BUG-EXPO-04 FIX: windowsHide:true ẩn cửa sổ cmd flash trên Windows.
     const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-
-    // BUG-EXPO-ROOT FIX: --port 8081 bắt buộc Expo dùng đúng port, tránh prompt
-    // "Use port 8082 instead?" mà khi CI=1 sẽ bị skip và Expo exit code 1.
-    // Bỏ --no-dev --minify: Expo 51 không hỗ trợ combo này trong stdio:pipe.
-    expoProcess = spawn(npxCmd, ["expo", "start", "--port", "8081"], {
+    expoProcess = spawn(npxCmd, ["expo", "start", "--lan", "--port", "8081"], {
       cwd: companionPath,
-      shell: false,
+      shell: process.platform === "win32",
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
-        // Tắt interactive prompts của Expo CLI (chạy non-interactive)
-        CI: "1",
         EXPO_NO_TELEMETRY: "1",
       },
     });
 
     expoProcess.stdout.on("data", (data) => {
-      console.log("[Companion][Expo]", data.toString().trimEnd());
+      const str = data.toString();
+      console.log("[Companion][Expo]", str.trimEnd());
+
+      // Lọc tìm URL của ngrok từ output của Expo (có thể là .ngrok.io, .ngrok-free.app, hoặc .exp.direct)
+      const match = str.match(/(exp:\/\/[^\s]+(?:\.ngrok|\.exp\.direct)[^\s]*)/);
+      if (match) {
+        expoTunnelUrl = match[1];
+        console.log("[Companion][Expo] Found tunnel URL:", expoTunnelUrl);
+      }
     });
 
     expoProcess.stderr.on("data", (data) => {
@@ -3114,14 +3111,14 @@ app.whenReady().then(() => {
         const { mouse, Point, Button } = await getNutJs();
         if (gesture.type === "grab") {
           if (!global.isGrabbing) {
-             global.isGrabbing = true;
-             await mouse.pressButton(Button.LEFT);
+            global.isGrabbing = true;
+            await mouse.pressButton(Button.LEFT);
           }
           await mouse.setPosition(new Point(gesture.x, gesture.y));
         } else if (gesture.type === "release") {
           if (global.isGrabbing) {
-             global.isGrabbing = false;
-             await mouse.releaseButton(Button.LEFT);
+            global.isGrabbing = false;
+            await mouse.releaseButton(Button.LEFT);
           }
         }
       }
@@ -3210,7 +3207,7 @@ app.on("before-quit", async () => {
   stopCompanionServer();
   // BUG-COMP-05 FIX: Kill zombie expo process so it doesn't hold port 8081.
   if (typeof expoProcess !== "undefined" && expoProcess && !expoProcess.killed) {
-    try { expoProcess.kill(); } catch {}
+    try { expoProcess.kill(); } catch { }
   }
   // BUG-HAND-01 FIX: Release stuck mouse button if app closes during a grab.
   if (global.isGrabbing) {

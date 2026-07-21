@@ -16,7 +16,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "npx --yes kill-port --port 5173",
+    "predev": "npx --yes kill-port 5173 8080 8081 4040",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
@@ -40,6 +40,7 @@
     "@vitejs/plugin-react": "latest",
     "chromadb": "^3.5.0",
     "lucide-react": "latest",
+    "ngrok": "^5.0.0-beta.2",
     "node-telegram-bot-api": "^1.2.0",
     "ollama": "^0.6.3",
     "onnxruntime-web": "^1.27.0",
