@@ -16,7 +16,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "npx --yes kill-port 5173 8080 8081 4040",
+    "predev": "npx --yes kill-port 5173 8080 8081 4040 && taskkill /F /IM ngrok.exe >nul 2>&1 || exit 0",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",

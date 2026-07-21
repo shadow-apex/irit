@@ -146,7 +146,13 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 {wsTunnelUrl ? (
                   <img src={webQrUrl} alt="Web QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                 ) : (
-                  <div style={{ color: "#000", fontWeight: "bold", textAlign: "center" }}>Đang dò ngrok tunnel...<br/><span style={{fontSize: 12, fontWeight: "normal"}}>Vui lòng đợi vài giây</span></div>
+                  <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 13, padding: 10 }}>
+                    Không có ngrok (HTTPS) tunnel!<br/><br/>
+                    <span style={{fontSize: 12, fontWeight: "normal", color: "#000"}}>
+                      Web Companion bắt buộc phải có HTTPS để xin quyền Camera/Mic. Trình duyệt sẽ chặn kết nối HTTP LAN.<br/><br/>
+                      Vui lòng cài đặt ngrok hoặc <strong>chuyển sang tab Expo Go</strong> để dùng qua mạng LAN.
+                    </span>
+                  </div>
                 )}
               </div>
             </>
@@ -159,7 +165,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
             {wsTunnelUrl ? (
               <>
                 <code
-                  onClick={() => navigator.clipboard?.writeText(wsTunnelUrl)}
+                  onClick={() => navigator.clipboard?.writeText(showExpo ? wsTunnelUrl : webUrl)}
                   title="Bấm để copy"
                   style={{ display: "block", background: "#000", padding: "8px 10px", borderRadius: 4, fontSize: 12, color: "rgb(40, 205, 170)", wordBreak: "break-all", cursor: "pointer" }}
                 >

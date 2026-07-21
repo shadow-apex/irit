@@ -1,10 +1,12 @@
 {
   "robots": {
-    "robodog": {
-      "name": "RoboDog",
-      "control_url": "http://192.168.1.100/api/action",
-      "camera_url": "http://192.168.1.100/camera/snapshot.jpg",
-      "token": "secret123"
+    "mock_bot_1": {
+      "name": "Mock Robot (Random Image)",
+      "camera_url": "https://picsum.photos/400/300"
+    },
+    "mock_bot_2": {
+      "name": "Mock Robot (Cat)",
+      "camera_url": "https://cataas.com/cat"
     }
   }
 }

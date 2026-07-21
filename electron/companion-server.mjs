@@ -73,22 +73,27 @@ async function startNgrokTunnel(emitEvent) {
         message: "Companion: IRIS_NGROK_AUTHTOKEN is not set — recent ngrok versions require a free authtoken (https://dashboard.ngrok.com) or the tunnel will fail to start.",
       });
     }
-
-    // ── BUG-COMP-13 FIX: `ngrok.kill()` kills the ngrok *binary process*
-    // machine-wide, not just tunnels opened by this app. If the user has
-    // any other ngrok tunnel running (another project, another tool), it
-    // gets killed too as a side effect of just opening the companion.
-    // We only need this call to clean up a *zombie tunnel from our own
-    // previous run* (e.g. after a crash that skipped stopCompanionServer).
-    // So only do it if we know we've started a tunnel before in this
-    // process; skip it on a clean first start.
-    if (hasStartedNgrokBefore) {
-      try { await ngrok.kill(); } catch (e) {}
-    }
-    hasStartedNgrokBefore = true;
-
     console.log("[Companion] Starting ngrok on port 8080...");
-    ngrokWsTunnelUrl = await ngrok.connect({ addr: 8080, proto: 'http' });
+    try {
+      ngrokWsTunnelUrl = await ngrok.connect({ addr: 8080, proto: 'http' });
+    } catch (connectErr) {
+      console.warn("[Companion] ngrok.connect threw an error, checking if tunnel actually exists...", connectErr.message);
+      // Fallback: If ngrok retried internally and threw 'already exists', the tunnel is actually there.
+      // We can fetch the running tunnels from its local API.
+      try {
+        const res = await fetch('http://127.0.0.1:4040/api/tunnels');
+        const data = await res.json();
+        if (data && data.tunnels && data.tunnels.length > 0) {
+          ngrokWsTunnelUrl = data.tunnels[0].public_url;
+          console.log("[Companion] Recovered ngrok URL from API:", ngrokWsTunnelUrl);
+        } else {
+          throw connectErr;
+        }
+      } catch (fallbackErr) {
+        throw connectErr;
+      }
+    }
+    
     console.log("[Companion] ngrok raw URL:", ngrokWsTunnelUrl);
     ngrokWsTunnelUrl = ngrokWsTunnelUrl.replace(/^https:\/\//, 'wss://');
     ngrokConnected = true;
@@ -112,13 +117,17 @@ export function getCompanionWsToken() {
   return wsToken;
 }
 
-// WAV file header is typically 44 bytes for standard PCM.
-// Strip it so only raw PCM data is forwarded to Gemini Live (audio/pcm;rate=16000).
 function stripWavHeader(buffer) {
   if (buffer.length > 44 && buffer.slice(0, 4).toString('ascii') === 'RIFF') {
     return buffer.slice(44);
   }
   return buffer;
+}
+
+export function sendSignalToPhone(data) {
+  if (activeConnection && activeConnection.readyState === 1) {
+    activeConnection.send(JSON.stringify(data));
+  }
 }
 
 /**
@@ -197,44 +206,22 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
     ws.on('pong', () => { ws.isAlive = true; });
     // ─────────────────────────────────────────────────────────────────────
 
-    // ── BUG-COMP-10 FIX: message-type detection ─────────────────────────
-    // The old code guessed "is this JSON?" by checking whether the first
-    // byte of a Buffer equals 123 (ascii '{'). Raw PCM audio bytes are
-    // effectively random, so ~1/256 audio chunks (~every 65s of talking)
-    // start with byte 0x7B, get misread as JSON, throw inside JSON.parse,
-    // and get silently swallowed by the catch block below — dropping that
-    // chunk of audio with no log. `ws` already tells us via the `isBinary`
-    // flag whether a frame is text or binary; use that instead of guessing.
     ws.on('message', (message, isBinary) => {
       try {
         if (!isBinary) {
-          // JSON message: video frame OR control signals
           const parsed = JSON.parse(message.toString());
-
-          if (parsed.type === "frame" && parsed.data) {
-            // ── BUG-COMP-02 FIX: Forward frame to Gemini Live directly ────
-            if (typeof sendFrameToGemini === 'function') {
-              sendFrameToGemini(parsed.data); // base64 JPEG → Gemini Live
-            }
-            // Also forward to renderer for UI display (companion:frame listener in preload)
+          
+          // Relay WebRTC signaling from Phone to Desktop Renderer
+          if (["peer-ready", "offer", "answer", "ice", "control", "peer-left"].includes(parsed.type)) {
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("companion:frame", parsed.data);
+              mainWindow.webContents.send("companion:webrtc-signal", parsed);
             }
-            // ─────────────────────────────────────────────────────────────
           }
-        } else {
-          // ── BUG-COMP-07 FIX: Strip WAV header before sending PCM to Gemini
-          const pcmBuffer = stripWavHeader(message);
-          if (pcmBuffer.length > 0) {
-            sendAudioChunk(pcmBuffer);
-          }
-          // ─────────────────────────────────────────────────────────────────
         }
       } catch (err) {
         emitEvent({ type: "log", level: "warn", message: `Companion: malformed message ignored: ${err.message}` });
       }
     });
-    // ─────────────────────────────────────────────────────────────────────
 
     ws.on('close', () => {
       emitEvent({ type: "log", level: "info", message: "Mobile Companion App disconnected." });

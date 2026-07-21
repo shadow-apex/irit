@@ -27,6 +27,7 @@ import BootSequence from "./components/BootSequence";
 import HoloBackdrop from "./components/HoloBackdrop";
 import RobotCameras from "./components/RobotCameras";
 import CompanionVideo from "./components/CompanionVideo";
+import CompanionWebRTC from "./components/CompanionWebRTC";
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -1547,6 +1548,7 @@ export default function App() {
       {handControl && hand.present ? (
         <HandReticles hand={hand} dwelling={Boolean(dwellRef.current && !dwellRef.current.fired)} />
       ) : null}
+      <CompanionWebRTC />
     </>
   );
 }

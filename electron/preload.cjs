@@ -112,4 +112,12 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("ui:toggle-companion-pip", handler);
     return () => ipcRenderer.removeListener("ui:toggle-companion-pip", handler);
   },
+  onCompanionWebRTCSignal: (callback) => {
+    const handler = (_event, signal) => callback(signal);
+    ipcRenderer.on("companion:webrtc-signal", handler);
+    return () => ipcRenderer.removeListener("companion:webrtc-signal", handler);
+  },
+  sendCompanionWebRTCSignal: (signal) => ipcRenderer.send("companion:webrtc-signal-to-phone", signal),
+  sendCompanionWebRTCFrame: (base64) => ipcRenderer.send("companion:webrtc-frame", base64),
+  sendCompanionWebRTCAudio: (pcm) => ipcRenderer.send("companion:webrtc-audio", pcm),
 });

@@ -28,7 +28,7 @@ import { runComputerSession } from "./computer-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
 import { initTelegramBot } from "./telegram-bot.mjs";
-import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken } from "./companion-server.mjs";
+import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, sendSignalToPhone } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2937,6 +2937,17 @@ app.whenReady().then(() => {
   // (port 8081) tunnel above. See companion-server.mjs for why these can't share one.
   ipcMain.handle("companion:get-ws-tunnel", () => getCompanionWsTunnel());
   ipcMain.handle("companion:get-ws-token", () => getCompanionWsToken());
+
+  // WebRTC Signaling Relay (Desktop -> Phone)
+  ipcMain.on("companion:webrtc-signal-to-phone", (e, signal) => sendSignalToPhone(signal));
+  
+  // WebRTC Media Stream Handlers (Renderer -> Gemini)
+  ipcMain.on("companion:webrtc-frame", (e, base64) => {
+    if (typeof sendFrameToGemini === 'function') sendFrameToGemini(base64);
+  });
+  ipcMain.on("companion:webrtc-audio", (e, pcm) => {
+    sendAudioChunk(pcm);
+  });
 
   ipcMain.handle("companion:start-expo", () => {
     // Nếu process đã chạy, trả về ngay — tránh khởi động lại

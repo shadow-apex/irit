@@ -181,6 +181,12 @@ type IrisApi = {
   // PiP Global Hotkey Listeners
   onToggleRobotPip?: (callback: () => void) => () => void;
   onToggleCompanionPip?: (callback: () => void) => () => void;
+  getCompanionWsTunnel?: () => Promise<string | null>;
+  getCompanionWsToken?: () => Promise<string | null>;
+  onCompanionWebRTCSignal?: (callback: (signal: any) => void) => () => void;
+  sendCompanionWebRTCSignal?: (signal: any) => void;
+  sendCompanionWebRTCFrame?: (base64: string) => void;
+  sendCompanionWebRTCAudio?: (pcm: ArrayBuffer) => void;
 };
 interface Window {
   iris: IrisApi;

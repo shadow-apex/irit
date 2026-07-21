@@ -9,6 +9,8 @@ interface DraggablePiPProps {
   defaultSize?: { width: number; height: number };
 }
 
+let globalZIndex = 500;
+
 export default function DraggablePiP({
   title,
   children,
@@ -19,10 +21,14 @@ export default function DraggablePiP({
   const [isExpanded, setIsExpanded] = useState(false);
   const [position, setPosition] = useState(defaultPosition);
   const [isDragging, setIsDragging] = useState(false);
+  const [localZIndex, setLocalZIndex] = useState(() => ++globalZIndex);
   
   const dragStartRef = useRef({ x: 0, y: 0, initialX: 0, initialY: 0 });
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    // Bring to front khi click vào bất cứ đâu trên cửa sổ (kể cả viền)
+    setLocalZIndex(++globalZIndex);
+
     // Không cho phép drag nếu đang phóng to
     if (isExpanded) return;
     
@@ -81,13 +87,13 @@ export default function DraggablePiP({
         left: position.x,
         width: defaultSize.width,
         height: defaultSize.height,
-        // PiP mode: z-index thấp (500) để các cửa sổ/modal khác có thể đè lên,
-        // tránh bị "khóa cứng" khi đang làm việc với các UI khác trong app.
-        zIndex: 500,
+        // PiP mode: sử dụng localZIndex để cửa sổ được click sẽ nổi lên trên
+        zIndex: localZIndex,
       };
 
   return (
     <div
+      className="hud-hit"
       style={{
         ...style,
         backgroundColor: "#111",
@@ -98,6 +104,7 @@ export default function DraggablePiP({
         border: "1px solid #333",
         boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
         transition: isDragging ? "none" : "all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)",
+        pointerEvents: "auto",
       }}
     >
       {/* Header bar */}

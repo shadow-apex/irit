@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Bot, RefreshCw, WifiOff } from "lucide-react";
+import { X, Bot, RefreshCw, WifiOff, Maximize2, Minimize2 } from "lucide-react";
 import DraggablePiP from "./DraggablePiP";
 
 // Khoảng thời gian refresh ảnh camera (3 giây)
@@ -15,6 +15,7 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
   const [timestamp, setTimestamp] = useState(() => Date.now());
   // BUG-CAM-02 FIX: Track lỗi img per-robot bằng map, tránh conflict DOM
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Lấy danh sách robots từ main process khi component mount.
   // Có error handling để không bị trống vĩnh viễn nếu IPC lỗi.
@@ -67,9 +68,12 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
       <div
         style={{
           padding: 16,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          display: expandedId ? "flex" : "grid",
+          flexDirection: "column",
+          gridTemplateColumns: expandedId ? undefined : "repeat(auto-fit, minmax(280px, 1fr))",
           gap: 16,
+          height: expandedId ? "100%" : "auto",
+          boxSizing: "border-box"
         }}
       >
         {/* Trạng thái đang tải */}
@@ -137,6 +141,8 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
         {!loading &&
           !loadError &&
           robotList.map(([id, config]: any) => {
+            if (expandedId && expandedId !== id) return null;
+
             // Thêm timestamp thật vào URL để phá cache trình duyệt.
             // Dùng Date.now() thay vì counter để đảm bảo URL luôn unique tuyệt đối.
             const imgUrl = config?.camera_url
@@ -156,7 +162,12 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
                   border: "1px solid #333",
                   display: "flex",
                   flexDirection: "column",
+                  flex: expandedId === id ? 1 : undefined,
+                  cursor: "pointer",
+                  transition: "all 0.2s"
                 }}
+                onClick={() => setExpandedId(expandedId === id ? null : id)}
+                title={expandedId === id ? "Thu nhỏ" : "Phóng to"}
               >
                 {/* Thanh tiêu đề mỗi camera */}
                 <div
@@ -172,24 +183,28 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
                   }}
                 >
                   <span>{config?.name || id}</span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: hasError || !hasUrl ? "#f66" : "#4c8",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    <RefreshCw size={10} />
-                    {!hasUrl ? "Chưa cấu hình" : hasError ? "Offline" : "Live"}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: hasError || !hasUrl ? "#f66" : "#4c8",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                      }}
+                    >
+                      <RefreshCw size={10} />
+                      {!hasUrl ? "Chưa cấu hình" : hasError ? "Offline" : "Live"}
+                    </span>
+                    {expandedId === id ? <Minimize2 size={14} color="#aaa" /> : <Maximize2 size={14} color="#aaa" />}
+                  </div>
                 </div>
 
                 {/* Vùng hiển thị camera */}
                 <div
                   style={{
                     minHeight: 180,
+                    flex: 1,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
