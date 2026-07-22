@@ -9,12 +9,31 @@
 .stats-fill { height: 100%; background: #12a394; box-shadow: 0 0 8px #12a394; transition: width 0.5s ease; }
 
 /* HUD Center Message Widget */
-.hud-message-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; max-width: 90vw; max-height: 80vh; background: rgba(18, 163, 148, 0.15); border: 1px solid rgba(18, 163, 148, 0.5); border-radius: 12px; padding: 20px; color: #12a394; font-family: monospace; backdrop-filter: blur(15px); box-shadow: 0 0 30px rgba(18, 163, 148, 0.3), inset 0 0 20px rgba(18, 163, 148, 0.1); z-index: 200; display: flex; flex-direction: column; pointer-events: auto; animation: hudPopup 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-@keyframes hudPopup { 0% { transform: translate(-50%, -40%) scale(0.8); opacity: 0; } 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
+.hud-message-center { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 450px; max-width: 90vw; max-height: 40vh; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(18, 163, 148, 0.5); border-radius: 0 0 12px 12px; padding: 15px; color: #ffffff; font-family: system-ui, -apple-system, sans-serif; backdrop-filter: blur(20px); box-shadow: 0 0 30px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(18, 163, 148, 0.2); z-index: 200; display: flex; flex-direction: column; pointer-events: auto; animation: hudPopup 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); resize: both; overflow: hidden; border-top: none; }
+@keyframes hudPopup { 0% { transform: translate(-50%, -20px) scale(0.9); opacity: 0; } 100% { transform: translate(-50%, 0) scale(1); opacity: 1; } }
 .hud-message-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(18, 163, 148, 0.3); padding-bottom: 10px; margin-bottom: 15px; }
 .hud-message-header h3 { margin: 0; font-size: 18px; text-transform: uppercase; letter-spacing: 2px; }
-.hud-message-close { background: none; border: none; color: #12a394; cursor: pointer; width: 24px; height: 24px; padding: 0; opacity: 0.7; transition: opacity 0.2s, transform 0.2s; }
+.hud-message-close { background: none; border: none; color: #ffffff; cursor: pointer; width: 24px; height: 24px; padding: 0; opacity: 0.7; transition: opacity 0.2s, transform 0.2s; }
 .hud-message-close:hover { opacity: 1; transform: scale(1.1); }
-.hud-message-body { overflow-y: auto; flex: 1; min-height: 0; font-size: 14px; line-height: 1.6; color: rgba(255, 255, 255, 0.9); }
-.hud-message-body p { margin-top: 0; margin-bottom: 12px; }
-.hud-message-body p:last-child { margin-bottom: 0; }
+.hud-message-body { overflow-y: auto; flex: 1; min-height: 0; font-size: 15px; line-height: 1.6; color: rgba(255, 255, 255, 0.95); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+.hud-message-body p { margin: 0; }
+
+/* Custom scrollbar for HUD Message Body */
+.hud-message-body::-webkit-scrollbar { width: 6px; }
+.hud-message-body::-webkit-scrollbar-track { background: transparent; }
+.hud-message-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 10px; }
+.hud-message-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
+
+.ai-suggestion-box {
+  background: rgba(251, 191, 36, 0.15);
+  border-left: 4px solid #fbbf24;
+  padding: 10px 14px;
+  border-radius: 4px;
+  color: #fef3c7;
+  font-weight: 500;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  text-shadow: none;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}

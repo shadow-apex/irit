@@ -1,12 +1,19 @@
 {
   "robots": {
+    "esp32_robot_1": {
+      "name": "Robot Tham Hiem (ESP32-CAM)",
+      "camera_url": "http://192.168.1.15:81/stream",
+      "control_url": "http://192.168.1.15/control",
+      "token": "doi-chuoi-bi-mat-nay-thanh-token-rieng-cua-ban",
+      "has_arm": true
+    },
+    "usb_robot_1": {
+      "name": "Robot USB (Arduino qua usb_server.py)",
+      "control_url": "http://localhost:5000/control"
+    },
     "mock_bot_1": {
       "name": "Mock Robot (Random Image)",
       "camera_url": "https://picsum.photos/400/300"
-    },
-    "mock_bot_2": {
-      "name": "Mock Robot (Cat)",
-      "camera_url": "https://cataas.com/cat"
     }
   }
 }

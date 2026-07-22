@@ -159,6 +159,46 @@ export default function HudShell({
   const [commsOpen, setCommsOpen] = useState(false);
   const [workOpen, setWorkOpen] = useState(true);
 
+  // Drag state for HUD Message
+  const [msgPos, setMsgPos] = useState({ x: 0, y: 0 });
+  const [isMsgDragging, setIsMsgDragging] = useState(false);
+  const msgDragStart = useRef({ x: 0, y: 0, initialX: 0, initialY: 0 });
+
+  useEffect(() => {
+    if (!isMsgDragging) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      setMsgPos({
+        x: msgDragStart.current.initialX + (e.clientX - msgDragStart.current.x),
+        y: msgDragStart.current.initialY + (e.clientY - msgDragStart.current.y),
+      });
+    };
+    const handleMouseUp = () => setIsMsgDragging(false);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isMsgDragging]);
+
+  const handleMsgMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    setIsMsgDragging(true);
+    msgDragStart.current = {
+      x: e.clientX,
+      y: e.clientY,
+      initialX: msgPos.x,
+      initialY: msgPos.y,
+    };
+  };
+
+  // Reset position when a new message appears
+  useEffect(() => {
+    if (hudMessage) {
+      setMsgPos({ x: 0, y: 0 });
+    }
+  }, [hudMessage]);
+
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
       {/* A pending PO question outranks everything else in the HUD — it stays
@@ -199,19 +239,35 @@ export default function HudShell({
 
       {/* Center Message Widget */}
       {hudMessage ? (
-        <div className="hud-message-center hud-hit">
-          <div className="hud-message-header">
-            <h3>{hudMessage.title}</h3>
-            <button className="hud-message-close" onClick={onDismissHudMessage}>
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
-              </svg>
-            </button>
-          </div>
-          <div className="hud-message-body">
-            {hudMessage.content.split("\n").map((line: string, i: number) => (
-              <p key={i}>{line}</p>
-            ))}
+        <div 
+          className="hud-message-center hud-hit"
+          onMouseDown={handleMsgMouseDown}
+          style={{ 
+            transform: `translate(calc(-50% + ${msgPos.x}px), ${msgPos.y}px)`,
+            transition: isMsgDragging ? "none" : "transform 0.1s ease-out",
+            cursor: isMsgDragging ? "grabbing" : "auto"
+          }}
+        >
+          <button className="hud-message-close" onClick={onDismissHudMessage} style={{ position: 'absolute', top: 8, right: 8, zIndex: 10 }}>
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+            </svg>
+          </button>
+          <div className="hud-message-body" style={{ marginTop: 15, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {hudMessage.content.split("\n").map((line: string, i: number) => {
+              if (line.trim().length === 0) return null;
+              if (line.startsWith("💡")) {
+                return <div key={i} className="ai-suggestion-box">{line}</div>;
+              }
+              if (line.startsWith("[Bạn]")) {
+                return <p key={i} style={{ color: '#4ade80' }}><strong>Bạn:</strong> {line.replace("[Bạn]", "").trim()}</p>;
+              } else if (line.startsWith("[Đối tác]")) {
+                return <p key={i} style={{ color: '#60a5fa' }}><strong>Đối tác:</strong> {line.replace("[Đối tác]", "").trim()}</p>;
+              } else if (line.startsWith("[Chung]")) {
+                return <p key={i} style={{ color: '#9ca3af' }}>{line.replace("[Chung]", "").trim()}</p>;
+              }
+              return <p key={i}>{line}</p>;
+            })}
           </div>
         </div>
       ) : null}

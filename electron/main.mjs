@@ -1779,6 +1779,30 @@ function getUiContext() {
 }
 
 function controlUi({ action, target_id = undefined, query = undefined } = {}) {
+  switch (action) {
+    case "toggle_teleprompter":
+      toggleLiveTranscriber();
+      return { status: "success", message: "Toggled Teleprompter (Alt+T)" };
+    case "toggle_copilot":
+      toggleCopilotMode();
+      return { status: "success", message: "Toggled AI Copilot (Alt+A)" };
+    case "toggle_meeting_recorder":
+      toggleMeetingRecording();
+      return { status: "success", message: "Toggled Meeting Recorder (Alt+M)" };
+    case "toggle_robot_pip":
+      if (mainWindow) mainWindow.webContents.send("ui:toggle-robot-pip");
+      return { status: "success", message: "Toggled Robot PiP (Alt+R)" };
+    case "toggle_companion_pip":
+      if (mainWindow) mainWindow.webContents.send("ui:toggle-companion-pip");
+      return { status: "success", message: "Toggled Companion PiP (Alt+C)" };
+    case "toggle_screen_vision":
+      toggleScreenVision();
+      return { status: "success", message: "Toggled Screen Vision (Super+Shift+V)" };
+    case "toggle_desk_vision":
+      if (mainWindow) mainWindow.webContents.send("vision:toggle-desk");
+      return { status: "success", message: "Toggled Desk Vision (Super+Shift+C)" };
+  }
+
   if (!UI_ACTIONS.has(action)) {
     return { status: "error", error: `Unknown UI action: ${action}` };
   }
@@ -1917,6 +1941,36 @@ async function triggerSmartHome({ device, action }) {
   }
 }
 
+// FIX-ROBOT-01: Theo dõi request đang bay theo từng robot_id để có thể hủy
+// (AbortController) khi có lệnh mới hơn tới trước khi lệnh cũ kịp trả lời.
+// Lý do: 2 request HTTP gửi gần nhau (VD "forward" rồi nhả phím ra "stop")
+// không đảm bảo trả lời theo đúng thứ tự gửi đi (độ trễ mạng/WiFi dao động).
+// Nếu không xử lý, "stop" có thể resolve trước "forward" và robot bị kẹt ở
+// trạng thái chạy dù người dùng đã nhả phím từ lâu — rất nguy hiểm với thiết
+// bị vật lý. Giải pháp: mỗi robot chỉ giữ 1 request "đang hiệu lực", request
+// cũ hơn luôn bị hủy ngay khi có request mới.
+// FIX-ARM-01: Kẹp góc servo (0-180°) ngay tại main.mjs — đây là lớp bảo vệ
+// bắt buộc, KHÔNG được chỉ dựa vào việc UI (RobotCameras.tsx) đã kẹp giá trị
+// slider. main.mjs là ranh giới tin cậy cuối cùng phía phần mềm trước khi
+// lệnh chạm tới động cơ thật: UI có thể có bug, DevTools có thể bị chỉnh tay,
+// hoặc trong tương lai lệnh "arm_move" có thể được gọi từ nơi khác (VD từ
+// voice/AI tool) mà không đi qua slider này.
+const ARM_JOINT_RANGE = { base: [0, 180], shoulder: [0, 180], elbow: [0, 180], gripper: [0, 180] };
+
+function clampArmParams(params) {
+  if (!params || typeof params !== "object") return params;
+  const clamped = { ...params };
+  for (const [joint, [min, max]] of Object.entries(ARM_JOINT_RANGE)) {
+    if (typeof clamped[joint] === "number" && Number.isFinite(clamped[joint])) {
+      clamped[joint] = Math.min(max, Math.max(min, clamped[joint]));
+    }
+  }
+  return clamped;
+}
+
+const _robotActionControllers = new Map();
+const ROBOT_ACTION_TIMEOUT_MS = 1500;
+
 async function triggerRobotAction({ robot_id, action, params }) {
   const robots = getRobotsConfig();
   if (!robot_id || !robots[robot_id]) {
@@ -1928,19 +1982,362 @@ async function triggerRobotAction({ robot_id, action, params }) {
   if (!url) {
     return { status: "success", message: `(Mock) Sent command to ${robot_id}: ${action} with params: ${JSON.stringify(params || {})}. Add control_url to robots.json to make this real.` };
   }
+
+  // Hủy request trước đó của CÙNG robot này (nếu còn đang chờ phản hồi)
+  const prevController = _robotActionControllers.get(robot_id);
+  if (prevController) prevController.abort();
+
+  const controller = new AbortController();
+  _robotActionControllers.set(robot_id, controller);
+
+  // FIX-ROBOT-02: timeout cứng cho request điều khiển robot. fetch() mặc
+  // định không có timeout — nếu ESP32 treo hoặc usb_server.py mất phản hồi,
+  // request sẽ treo vô thời hạn và renderer (nút bấm WASD) không bao giờ
+  // biết lệnh có tới nơi hay không.
+  const timeoutId = setTimeout(() => controller.abort(), ROBOT_ACTION_TIMEOUT_MS);
+
   try {
     const headers = { "Content-Type": "application/json" };
     if (robot.token) headers["Authorization"] = `Bearer ${robot.token}`;
+    // FIX-ARM-01 (tiếp): chỉ kẹp góc cho action arm_move, các action khác
+    // (forward/backward/left/right/stop) đi qua nguyên vẹn như cũ.
+    const safeParams = action === "arm_move" ? clampArmParams(params) : params;
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action, params })
+      body: JSON.stringify({ action, params: safeParams }),
+      signal: controller.signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { status: "success", message: `Command sent to robot: ${action}` };
   } catch (error) {
+    if (error.name === "AbortError") {
+      return { status: "error", error: "Robot khong phan hoi (timeout hoac bi lenh moi hon ghi de)" };
+    }
     return { status: "error", error: error.message };
+  } finally {
+    clearTimeout(timeoutId);
+    if (_robotActionControllers.get(robot_id) === controller) {
+      _robotActionControllers.delete(robot_id);
+    }
   }
+}
+
+// ============================================================
+// Sidecar process management — an toàn với race condition,
+// luôn có error/exit handler, và force-kill nếu không thoát kịp.
+// ============================================================
+
+/**
+ * Bọc spawn() để luôn theo dõi được trạng thái thực của process
+ * qua handle.state, thay vì chỉ dựa vào biến null/không-null
+ * (cách cũ dễ dính race khi người dùng bấm hotkey liên tục).
+ */
+function spawnSidecar(pythonPath, args, opts = {}) {
+  const env = { ...process.env, PYTHONIOENCODING: "utf-8", ...(opts.env || {}) };
+  const proc = spawn(pythonPath, args, { ...opts, env });
+  const handle = { proc, state: "starting", exitCode: null };
+
+  proc.once("spawn", () => {
+    handle.state = "running";
+  });
+
+  // Bắt buộc phải có listener này — nếu không, khi spawn thất bại
+  // (vd: "python" không có trong PATH) Node sẽ ném uncaught exception
+  // và có thể crash cả main process của Electron.
+  proc.on("error", (err) => {
+    console.error(`[sidecar] spawn/runtime error (${args[0]}): ${err.message}`);
+    handle.state = "dead";
+  });
+
+  proc.on("exit", (code, signal) => {
+    handle.state = "dead";
+    handle.exitCode = code;
+    if (code !== 0 && code !== null) {
+      console.error(`[sidecar] process thoát bất thường (${args[0]}), code=${code} signal=${signal}`);
+    }
+  });
+
+  return handle;
+}
+
+/**
+ * Dừng process an toàn: gửi "stop" qua stdin, đợi tối đa timeoutMs,
+ * nếu không thoát thì force-kill. Luôn resolve (không bao giờ treo
+ * vô hạn), và chặn race vì caller phải await xong mới được start lại.
+ */
+function stopSidecar(handle, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    if (!handle || handle.state === "dead") return resolve();
+
+    handle.state = "stopping";
+    const proc = handle.proc;
+
+    const killTimer = setTimeout(() => {
+      console.warn("[sidecar] không thoát kịp sau stop, force kill");
+      try { proc.kill("SIGKILL"); } catch (e) { /* ignore */ }
+    }, timeoutMs);
+
+    proc.once("exit", () => {
+      clearTimeout(killTimer);
+      resolve();
+    });
+
+    try {
+      proc.stdin.write("stop\n");
+    } catch (e) {
+      // stdin đã đóng (EPIPE) -> process coi như đã chết rồi, cứ để timer kill cho chắc
+    }
+  });
+}
+
+/** Trả về đường dẫn thư mục ghi âm theo ngày: meeting_recordings/YYYY-MM-DD/ */
+function getMeetingRecordingsDir() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const dir = path.join(repoRoot, "meeting_recordings", `${y}-${m}-${d}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Tên file theo giờ:phút:giây để không đè lên các cuộc họp khác trong cùng ngày */
+function buildMeetingWavPath() {
+  const dir = getMeetingRecordingsDir();
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mi = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return path.join(dir, `meeting_${hh}-${mi}-${ss}.wav`);
+}
+
+let meetingRecorder = null; // handle { proc, state, exitCode }
+let meetingWavPath = null;
+
+async function toggleMeetingRecording() {
+  // Chặn double-hotkey trong lúc đang start hoặc đang stop
+  if (meetingRecorder && (meetingRecorder.state === "starting" || meetingRecorder.state === "stopping")) {
+    return { status: "error", error: "Đang xử lý, vui lòng đợi." };
+  }
+
+  if (!meetingRecorder || meetingRecorder.state === "dead") {
+    // Check API key trước khi tốn công ghi âm cả cuộc họp
+    if (!process.env.GEMINI_API_KEY) {
+      return { status: "error", error: "Thiếu GEMINI_API_KEY, vui lòng cấu hình trước khi ghi âm." };
+    }
+
+    const pythonPath = "python";
+    const scriptPath = path.join(repoRoot, "sidecar", "meeting_recorder.py");
+    meetingWavPath = buildMeetingWavPath();
+
+    meetingRecorder = spawnSidecar(pythonPath, [scriptPath, meetingWavPath], { cwd: repoRoot });
+    meetingRecorder.proc.stdout.on("data", (data) => console.log(`Meeting Recorder: ${data}`));
+    meetingRecorder.proc.stderr.on("data", (data) => console.error(`Meeting Recorder Err: ${data}`));
+
+    enterHud();
+    if (mainWindow) {
+      mainWindow.webContents.send("hud:message", { title: "Meeting Summarizer", content: "Đang ghi âm cuộc họp... (Bấm Alt+M hoặc ra lệnh để kết thúc)" });
+    }
+    return { status: "success", message: "Bắt đầu ghi âm cuộc họp." };
+  }
+
+  // --- Dừng ghi âm ---
+  enterHud();
+  if (mainWindow) {
+    mainWindow.webContents.send("hud:message", { title: "Meeting Summarizer", content: "Đang phân tích âm thanh và tạo tóm tắt... Vui lòng chờ 1-2 phút." });
+  }
+
+  await stopSidecar(meetingRecorder, { timeoutMs: 5000 }); // luôn resolve, không treo vô hạn
+  meetingRecorder = null;
+  const wavPath = meetingWavPath;
+
+  try {
+    if (!wavPath || !fs.existsSync(wavPath)) throw new Error("Không tìm thấy file ghi âm.");
+    if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
+
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+    const uploadResult = await ai.files.upload({ file: wavPath, mimeType: "audio/wav" });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-pro",
+      contents: [uploadResult, "Đây là file ghi âm cuộc họp. Hãy tóm tắt nội dung chính và trích xuất các Action Items (Công việc cần làm) bằng tiếng Việt. Trình bày bằng định dạng Markdown ngắn gọn và đẹp mắt."]
+    });
+
+    const summary = response.text;
+
+    if (mainWindow) {
+      mainWindow.webContents.send("hud:message", { title: "Tóm tắt cuộc họp", content: summary });
+    }
+    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. File ghi âm: ${wavPath}` };
+  } catch (err) {
+    if (mainWindow) {
+      mainWindow.webContents.send("hud:message", { title: "Lỗi tóm tắt", content: err.message });
+    }
+    return { status: "error", error: err.message };
+  }
+}
+
+let liveTranscriber = null; // handle { proc, state, exitCode }
+let liveTranscripts = [];
+let copilotBuffer = [];
+let copilotTimer = null;
+let copilotSuggestion = "";
+let copilotEnabled = false;
+let liveLogStream = null;
+
+function toggleCopilotMode() {
+  copilotEnabled = !copilotEnabled;
+  if (!copilotEnabled) {
+    copilotSuggestion = "";
+    if (copilotTimer) clearTimeout(copilotTimer);
+  } else {
+    copilotSuggestion = "💡 Nhắc bài đã BẬT. Đang nghe...";
+  }
+  
+  if (liveTranscriber && mainWindow) {
+    let content = liveTranscripts.join("\n");
+    if (copilotSuggestion) content += "\n\n" + copilotSuggestion;
+    mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content });
+  }
+  
+  return { status: "success", message: `AI Copilot: ${copilotEnabled ? "ON" : "OFF"}` };
+}
+
+function toggleLiveTranscriber() {
+  if (liveTranscriber && (liveTranscriber.state === "starting" || liveTranscriber.state === "stopping")) {
+    return { status: "error", error: "Đang xử lý, vui lòng đợi." };
+  }
+
+  if (!liveTranscriber || liveTranscriber.state === "dead") {
+    const pythonPath = "python";
+    const scriptPath = path.join(repoRoot, "sidecar", "live_transcriber.py");
+
+    liveTranscriber = spawnSidecar(pythonPath, [scriptPath], { cwd: repoRoot });
+    liveTranscripts = [];
+    copilotBuffer = [];
+    copilotSuggestion = "";
+    if (copilotTimer) clearTimeout(copilotTimer);
+
+    const logDir = path.join(repoRoot, "teleprompter_logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const now = new Date();
+    const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+    liveLogStream = fs.createWriteStream(path.join(logDir, `transcript_${ts}.txt`), { flags: 'a' });
+    liveLogStream.write(`=== Phiên dịch & Nhắc bài (${ts}) ===\n(Bao gồm lời của bạn và người đối diện)\n\n`);
+
+    const updateLiveHud = () => {
+      if (mainWindow) {
+        let content = liveTranscripts.join("\n");
+        if (copilotSuggestion) {
+          content += "\n\n" + copilotSuggestion;
+        }
+        mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content });
+      }
+    };
+
+    enterHud();
+    if (mainWindow) {
+      mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content: "Đang khởi động AI dịch thuật... (Bấm Alt+T để tắt)" });
+    }
+
+    liveTranscriber.proc.stdout.on("data", (data) => {
+      const output = data.toString();
+      const lines = output.split('\n');
+      for (const line of lines) {
+        if (line.includes("[TRANSCRIPT]")) {
+          const text = line.split("[TRANSCRIPT]")[1].trim();
+          if (text) {
+             if (liveLogStream) {
+               liveLogStream.write(`${text}\n`);
+             }
+             liveTranscripts.push(text);
+             if (liveTranscripts.length > 3) liveTranscripts.shift();
+             
+             if (!copilotEnabled) {
+               updateLiveHud();
+               return;
+             }
+
+             // AI Copilot Logic
+             copilotBuffer.push(text);
+             if (copilotBuffer.length > 10) copilotBuffer.shift();
+             
+             if (copilotTimer) clearTimeout(copilotTimer);
+             
+             copilotTimer = setTimeout(async () => {
+               const contextText = copilotBuffer.join(" ");
+               if (!contextText.trim() || !ai) return;
+               
+               copilotSuggestion = "💡 Đang suy nghĩ...";
+               updateLiveHud();
+               
+               try {
+                 const response = await ai.models.generateContent({
+                   model: "gemini-1.5-flash",
+                   contents: "Bạn là một trợ lý ảo nhắc bài (Copilot) hỗ trợ tôi trong một cuộc trò chuyện. Dưới đây là đoạn transcript cuộc hội thoại gần nhất (bao gồm giọng của tôi [Bạn] và người đối diện [Đối tác]):\n\n" +
+                     contextText + "\n\n" +
+                     "Dựa vào đoạn hội thoại trên, hãy phân tích xem người đối tác có đang hỏi hay cần tôi phản hồi gì không. Nếu có, hãy đưa ra 1-2 câu trả lời ĐỀ XUẤT ngắn gọn, tự nhiên để tôi nói lại. Nếu không có gì đáng trả lời hoặc tôi đang tự nói, chỉ cần trả về đúng 1 chữ 'NONE'."
+                 });
+                 const suggestion = response.text.trim();
+                 if (suggestion && suggestion !== "NONE") {
+                   copilotSuggestion = "💡 Gợi ý: " + suggestion;
+                   if (liveLogStream) {
+                     liveLogStream.write(`[AI Gợi ý]: ${suggestion}\n\n`);
+                   }
+                 } else {
+                   copilotSuggestion = "💡 (Đang lắng nghe...)";
+                 }
+               } catch (e) {
+                 copilotSuggestion = ""; // Ignore error gracefully
+               }
+               updateLiveHud();
+             }, 3000);
+             
+             updateLiveHud();
+          }
+        } else if (line.includes("READY")) {
+           if (mainWindow) {
+             mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content: "Đã sẵn sàng. Bắt đầu nói chuyện..." });
+           }
+        }
+      }
+    });
+
+    liveTranscriber.proc.stderr.on("data", (data) => console.error(`Live Transcriber Err: ${data}`));
+    return { status: "success", message: "Bắt đầu Nhắc Tuồng." };
+  }
+
+  // --- Dừng ---
+  const handle = liveTranscriber;
+  liveTranscriber = null;
+  liveTranscripts = [];
+  copilotBuffer = [];
+  copilotSuggestion = "";
+  if (copilotTimer) clearTimeout(copilotTimer);
+  
+  if (liveLogStream) {
+    liveLogStream.write("\n=== Kết thúc phiên ===\n");
+    liveLogStream.end();
+    liveLogStream = null;
+  }
+
+  enterHud();
+  if (mainWindow) {
+    mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content: "Đã tắt tính năng Nhắc Tuồng." });
+    setTimeout(() => {
+       if (mainWindow) mainWindow.webContents.send("hud:message", null);
+    }, 2000);
+  }
+
+  // Không cần await ở đây vì UI không phải chờ kết quả gì thêm, nhưng
+  // vẫn phải dừng đúng cách (đợi thoát, force-kill nếu cần) để không
+  // giữ device loopback/mic bị khoá cho lần bật kế tiếp.
+  stopSidecar(handle, { timeoutMs: 3000 });
+
+  return { status: "success", message: "Đã tắt Nhắc Tuồng." };
 }
 
 async function executeClaudeTool(name, args = {}) {
@@ -1966,6 +2363,10 @@ async function executeClaudeTool(name, args = {}) {
       return toggleRobotVision(args);
     case "trigger_robot_action":
       return triggerRobotAction(args);
+    case "toggle_meeting_recorder":
+      return toggleMeetingRecording();
+    case "toggle_live_transcriber":
+      return toggleLiveTranscriber();
     case "start_computer_use_task":
       return startComputerUseTask(args);
     case "check_claude_status":
@@ -2214,6 +2615,16 @@ function buildClaudeTools() {
           parameters: { type: "object", properties: {} },
         },
         {
+          name: "toggle_meeting_recorder",
+          description: "Start or stop recording a Zoom/Google Meet meeting. When stopped, it will automatically use Gemini to transcribe and summarize the meeting.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "toggle_live_transcriber",
+          description: "Start or stop the Live Teleprompter which transcribes spoken words in real-time and displays them on the HUD.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
           name: "submit_local_chat",
           description: "Forward the user's query to the local Ollama AI. Invoke this ONLY when you receive SYSTEM_EVENT_LOCALCHAT_TOGGLE setting it to true.",
           parameters: {
@@ -2358,7 +2769,7 @@ function buildClaudeTools() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the tool-step timeline for a Claude task; when the user names a specific card, pass its words in `query` (or its exact id in `target_id`). With no target, steps default to the card the user is currently viewing (open reader / focused), then the running task.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_screen_vision, toggle_desk_vision. Use toggle_* to turn features on/off when requested by the user.",
               },
               target_id: {
                 type: "string",
@@ -2436,7 +2847,7 @@ function buildLiveConfig(resumeHandle) {
             "- STUDY brief: say plainly whether to RECORD or VERIFY. To record: 'Save a note: <the user's synthesis in full>. Source: <URL/reference>.' To verify: 'Verify this note against its source and the web: <the claims/note>. Source: <URL/text>.' The worker cannot hear the conversation, so include the synthesis and the source verbatim — a detail you omit is lost.",
             "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
             "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
-            "UI control rule: if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only and must NOT be sent to submit_claude_task. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.",
+            "UI control rule: if the user asks to toggle or turn on/off the teleprompter, copilot, meeting recorder, or cameras, use control_ui with the respective toggle_* action. Otherwise, if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only and must NOT be sent to submit_claude_task. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.",
             "If the user refers to a task by partial words from its header, like 'open the failed one' or 'open the deals task', call control_ui with action open_task_by_query and put those words in query — do not require an exact title match. If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_ui_context to inspect pendingTaskMatches before opening a specific task. When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest result. Keep the spoken acknowledgement short.",
             `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked. Note: while a PO question is pending (see PO LIVE QUESTIONS below), UI actions like close_reader still work, but a new ambiguous open-task request is deferred — the PO question always answers first.`,
             `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. (Keep what you SAY short, even though the task you SENT is detailed.)`,
@@ -2915,6 +3326,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("robots:get", () => getRobotsConfig());
+  ipcMain.handle("robots:action", (_event, args) => triggerRobotAction(args));
 
   ipcMain.handle("network:get-ip", () => {
     const interfaces = os.networkInterfaces();
@@ -3200,6 +3612,30 @@ app.whenReady().then(() => {
   });
   if (!companionPipRegistered) {
     emitEvent({ type: "log", level: "error", message: `Could not register Companion PiP hotkey Alt+C.` });
+  }
+
+  // Register Alt+M to toggle Meeting Recorder
+  const meetingRecorderRegistered = globalShortcut.register("Alt+M", () => {
+    toggleMeetingRecording();
+  });
+  if (!meetingRecorderRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Meeting Recorder hotkey Alt+M.` });
+  }
+
+  // Register Alt+T to toggle Live Teleprompter
+  const teleprompterRegistered = globalShortcut.register("Alt+T", () => {
+    toggleLiveTranscriber();
+  });
+  if (!teleprompterRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Teleprompter hotkey Alt+T.` });
+  }
+
+  // Register Alt+A to toggle AI Copilot Mode
+  const copilotToggleRegistered = globalShortcut.register("Alt+A", () => {
+    toggleCopilotMode();
+  });
+  if (!copilotToggleRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register AI Copilot hotkey Alt+A.` });
   }
 
   app.on("activate", () => {

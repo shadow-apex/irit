@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("iris", {
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
   getSessions: () => ipcRenderer.invoke("sessions:get"),
   getRobots: () => ipcRenderer.invoke("robots:get"),
+  triggerRobotAction: (args) => ipcRenderer.invoke("robots:action", args),
   getLocalIp: () => ipcRenderer.invoke("network:get-ip"),
   startCompanionExpo: () => ipcRenderer.invoke("companion:start-expo"),
   getCompanionTunnel: () => ipcRenderer.invoke("companion:get-tunnel"),

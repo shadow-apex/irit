@@ -113,3 +113,15 @@ These are load-bearing; a wrong value silently breaks voice or gestures (see REA
 - `bypassPermissions` is the intentional default for the headless worker (no interactive approval exists in headless mode). `IRIS_CLAUDE_PERMISSION_MODE=acceptEdits|plan` restricts it. PO keeps `bypassPermissions` too (hardcoded in `po-session.mjs`, not `IRIS_CLAUDE_PERMISSION_MODE`-driven) — only `AskUserQuestion` pauses it.
 - Never commit real keys; `.env` is gitignored. This now also covers `CLAUDE_CODE_OAUTH_TOKEN` — never set `ANTHROPIC_API_KEY` unless you intend PO to bill per-token (it would override the subscription token if it ever reached the PO session, though `computePoSessionEnv` strips it regardless).
 - `@anthropic-ai/claude-agent-sdk` is a real npm dependency (drives the same `claude` binary DEV spawns directly) — keep its version pinned like the other exact-identifier dependencies in README's "Exact Google Models, SDKs & Assets" table equivalent for Claude-side pieces.
+
+## Keyboard Shortcuts
+
+- `Alt+Space`: Toggle HUD
+- `Alt+T`: Toggle Live Teleprompter (Transcription)
+- `Alt+A`: Toggle AI Copilot Mode
+- `Alt+M`: Toggle Meeting Recorder
+- `Alt+R`: Toggle Robot Cameras PiP
+- `Alt+C`: Toggle Companion Camera PiP
+- `Super+Shift+V`: Screen Vision snapshot
+- `Super+Shift+C`: Desk Vision toggle
+- `Super+Shift+L`: Localchat toggle

@@ -3,3 +3,6 @@ opencv-python
 pyaudio
 pillow
 mss
+soundcard
+scipy
+faster-whisper
