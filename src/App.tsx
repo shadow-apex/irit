@@ -1154,13 +1154,29 @@ export default function App() {
   }, [hasBridge]);
 
   const [hudMessage, setHudMessage] = useState<{ title: string; content: string } | null>(null);
+  const lastHudMsgRef = useRef<{ title: string; content: string; time: number } | null>(null);
 
   useEffect(() => {
     if (!hasBridge) return;
     return window.iris.onHudMessage((msg: { title: string; content: string }) => {
+      const now = Date.now();
+      const last = lastHudMsgRef.current;
+      // Ignore identical messages sent within the last 15 seconds
+      if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000) {
+        return;
+      }
+      lastHudMsgRef.current = { ...msg, time: now };
       setHudMessage(msg);
     });
   }, [hasBridge]);
+
+  useEffect(() => {
+    if (!hudMessage) return;
+    const timer = setTimeout(() => {
+      setHudMessage(null);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [hudMessage]);
 
   const [deskVisionContinuous, setDeskVisionContinuous] = useState(false);
   const deskVisionVideoRef = useRef<HTMLVideoElement | null>(null);
