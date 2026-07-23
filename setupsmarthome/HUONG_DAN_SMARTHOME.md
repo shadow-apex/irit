@@ -12,6 +12,15 @@ Bạn có 2 lựa chọn:
 
 Tất cả code mẫu cần thiết đều đã được mình gói gọn trong thư mục `setupsmarthome` này.
 
+> **Lưu ý:** Khi bạn ra lệnh giọng nói kiểu "bật đèn phòng ngủ", Iris sẽ tự
+> tìm trong `robots.json` một thiết bị có `id` hoặc `name` khớp (không phân
+> biệt hoa/thường) với từ bạn nói ra, rồi gửi lệnh thẳng tới `control_url`
+> của thiết bị đó. Vì vậy hãy đặt `name` của thiết bị trong `robots.json`
+> đúng như cách bạn sẽ gọi nó bằng giọng nói (VD: `"name": "đèn phòng ngủ"`)
+> để Iris nhận đúng thiết bị. Nếu không tìm thấy thiết bị khớp nào, Iris sẽ
+> chuyển sang dùng `SMART_HOME_WEBHOOK_URL` trong `.env` (nếu bạn dùng Home
+> Assistant hoặc một webhook trung tâm khác) thay vì ESP32 riêng lẻ.
+
 ---
 
 ## 🛠 HƯỚNG DẪN CÀI ĐẶT

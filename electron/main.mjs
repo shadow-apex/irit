@@ -2051,20 +2051,59 @@ async function openUrlOrApp(args) {
   }
 }
 
-const SMART_HOME_TIMEOUT_MS = 2000;
+// BUG-SMARTHOME-01 FIX: Trước đây hàm này CHỈ gửi lệnh tới
+// process.env.SMART_HOME_WEBHOOK_URL (1 webhook chung, dùng cho Home
+// Assistant) và hoàn toàn không đọc robots.json. Trong khi đó, hướng dẫn
+// chính thức (setupsmarthome/HUONG_DAN_SMARTHOME.md) lại bảo người dùng
+// thêm thiết bị ESP32 relay của họ vào robots.json với control_url riêng
+// cho từng thiết bị (VD "smart_light_1"). Vì tool "trigger_smart_home" mô
+// tả rõ là dùng cho lệnh "bật đèn/tắt quạt..." nên AI sẽ luôn chọn gọi tool
+// này (không phải trigger_robot_action) khi người dùng ra lệnh bằng giọng
+// nói — nghĩa là các thiết bị được cấu hình đúng theo hướng dẫn KHÔNG BAO
+// GIỜ nhận được lệnh, trừ khi người dùng biết đường vòng qua
+// trigger_robot_action (không có trong tài liệu).
+// Fix: tra robots.json trước, tìm thiết bị khớp với `device` theo id hoặc
+// theo tên (name), nếu có control_url thì gửi lệnh trực tiếp tới đó (dùng
+// lại đúng logic an toàn của triggerRobotAction: token, timeout, abort).
+// Chỉ khi KHÔNG tìm thấy thiết bị nào khớp trong robots.json mới rơi về
+// đường cũ (SMART_HOME_WEBHOOK_URL / mock), giữ tương thích ngược cho ai
+// đang dùng Home Assistant webhook.
+function findRobotDeviceByName(device) {
+  if (!device) return null;
+  const robots = getRobotsConfig();
+  const needle = String(device).trim().toLowerCase();
+  if (robots[device]) return device; // khớp thẳng theo key/id
+  for (const [id, cfg] of Object.entries(robots)) {
+    const name = (cfg?.name || "").toLowerCase();
+    if (id.toLowerCase() === needle || name === needle || (name && needle.includes(name)) || (name && name.includes(needle))) {
+      return id;
+    }
+  }
+  return null;
+}
 
 async function triggerSmartHome({ device, action }) {
+  // 1) Ưu tiên robots.json nếu có thiết bị khớp và có control_url
+  const matchedId = findRobotDeviceByName(device);
+  if (matchedId) {
+    const robots = getRobotsConfig();
+    if (robots[matchedId]?.control_url) {
+      const result = await triggerRobotAction({ robot_id: matchedId, action, params: {} });
+      if (result.status === "success") {
+        return { status: "success", message: `Command sent to ${device} (${matchedId}): ${action}` };
+      }
+      return result;
+    }
+  }
+
+  // 2) Fallback: webhook nhà thông minh chung (VD Home Assistant)
   const url = process.env.SMART_HOME_WEBHOOK_URL;
   if (!url) {
     // If not configured, we just return a mock success for the "Iron Man" feel
-    return { status: "success", message: `(Mock) Sent command to ${device}: ${action}. Add SMART_HOME_WEBHOOK_URL to .env to make this real.` };
+    return { status: "success", message: `(Mock) Sent command to ${device}: ${action}. Add control_url cho thiết bị trong robots.json, hoặc SMART_HOME_WEBHOOK_URL trong .env để lệnh này thành thật.` };
   }
-
-  // FIX-SMARTHOME-01: Added AbortController to prevent the application from hanging
-  // if the Smart Home server is unresponsive. 
-  // Hey Claude, please review this timeout logic to ensure it integrates well with the agent pipeline.
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SMART_HOME_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
 
   try {
     const token = process.env.SMART_HOME_TOKEN;
