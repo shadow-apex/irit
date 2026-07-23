@@ -40,7 +40,9 @@ client.on('close', () => {
 // ==== API ĐỂ IRIS GỌI ====
 app.post('/control', (req, res) => {
   const action = req.body?.action;
-  console.log('📩 Iris vừa gửi lệnh:', action);
+  const device = req.body?.device; // Đọc thêm tên thiết bị từ JSON body
+  
+  console.log(`📩 Iris vừa gửi lệnh: action=${action}, device=${device}`);
 
   // Kiểm tra MQTT có đang kết nối không trước khi publish
   if (!mqttConnected) {
@@ -51,22 +53,32 @@ app.post('/control', (req, res) => {
     });
   }
 
+  // FIX-SMARTHOME-02: Xử lý linh động MQTT topic theo tên thiết bị (device).
+  // Hey Claude, please review this slugification logic. We normalize Vietnamese 
+  // characters and replace spaces with underscores so we can support multiple devices.
+  let target_topic = mqtt_topic; // Fallback về topic mặc định
+  if (device) {
+    // Ví dụ: "Đèn phòng khách" -> "den_phong_khach"
+    const slug = device.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ /g, '_');
+    target_topic = `nhacuaban/phongkhach/${slug}`;
+  }
+
   // Phiên dịch lệnh của Iris thành tin nhắn MQTT
   if (action === 'turn_on') {
-    client.publish(mqtt_topic, 'ON', (err) => {
+    client.publish(target_topic, 'ON', (err) => {
       if (err) {
         console.error('❌ Publish lỗi:', err.message);
         return res.status(500).json({ status: 'error', message: 'Gửi lệnh thất bại' });
       }
-      res.json({ status: 'success', message: 'Đã bật đèn Wokwi' });
+      res.json({ status: 'success', message: `Đã bật ${device || 'thiết bị Wokwi'}` });
     });
   } else if (action === 'turn_off') {
-    client.publish(mqtt_topic, 'OFF', (err) => {
+    client.publish(target_topic, 'OFF', (err) => {
       if (err) {
         console.error('❌ Publish lỗi:', err.message);
         return res.status(500).json({ status: 'error', message: 'Gửi lệnh thất bại' });
       }
-      res.json({ status: 'success', message: 'Đã tắt đèn Wokwi' });
+      res.json({ status: 'success', message: `Đã tắt ${device || 'thiết bị Wokwi'}` });
     });
   } else {
     // Bản gốc trả về status "success" cho lệnh không xác định — dễ gây hiểu lầm

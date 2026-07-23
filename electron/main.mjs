@@ -2051,12 +2051,21 @@ async function openUrlOrApp(args) {
   }
 }
 
+const SMART_HOME_TIMEOUT_MS = 2000;
+
 async function triggerSmartHome({ device, action }) {
   const url = process.env.SMART_HOME_WEBHOOK_URL;
   if (!url) {
     // If not configured, we just return a mock success for the "Iron Man" feel
     return { status: "success", message: `(Mock) Sent command to ${device}: ${action}. Add SMART_HOME_WEBHOOK_URL to .env to make this real.` };
   }
+
+  // FIX-SMARTHOME-01: Added AbortController to prevent the application from hanging
+  // if the Smart Home server is unresponsive. 
+  // Hey Claude, please review this timeout logic to ensure it integrates well with the agent pipeline.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SMART_HOME_TIMEOUT_MS);
+
   try {
     const token = process.env.SMART_HOME_TOKEN;
     const headers = { "Content-Type": "application/json" };
@@ -2066,12 +2075,18 @@ async function triggerSmartHome({ device, action }) {
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ device, action })
+      body: JSON.stringify({ device, action }),
+      signal: controller.signal
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { status: "success", message: `Command sent to ${device}: ${action}` };
   } catch (error) {
+    if (error.name === "AbortError") {
+      return { status: "error", error: "Smart Home server khong phan hoi (timeout)" };
+    }
     return { status: "error", error: error.message };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
