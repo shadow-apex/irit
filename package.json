@@ -5,13 +5,13 @@
   "private": true,
   "license": "MIT",
   "description": "A futuristic Gemini Live voice companion that delegates real work to Claude Code running headless.",
-  "homepage": "https://github.com/ASHR12/iris#readme",
+  "homepage": "https://github.com/shadow-apex/irit#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ASHR12/iris.git"
+    "url": "git+https://github.com/shadow-apex/irit.git"
   },
   "bugs": {
-    "url": "https://github.com/ASHR12/iris/issues"
+    "url": "https://github.com/shadow-apex/irit/issues"
   },
   "type": "module",
   "main": "electron/main.mjs",

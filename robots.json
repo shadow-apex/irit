@@ -18,6 +18,12 @@
     "den_wokwi": {
       "name": "Đèn Wokwi",
       "control_url": "http://localhost:5001/control"
+    },
+    "esphome_robot": {
+      "name": "My ESPHome Robot",
+      "camera_url": "http://192.168.1.xxx:81/stream",
+      "control_url": "http://192.168.1.xxx/control",
+      "has_arm": true
     }
   }
 }

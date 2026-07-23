@@ -6,3 +6,22 @@ mss
 soundcard
 scipy
 faster-whisper
+
+# --- Các thư viện mới thêm cho OmniParser và Điều khiển chuột ---
+fastapi
+uvicorn
+python-multipart
+google-generativeai
+pyautogui
+torch
+torchvision
+easyocr
+paddlepaddle
+paddleocr
+supervision==0.18.0
+ultralytics==8.3.70
+transformers
+huggingface_hub
+accelerate
+numpy==1.26.4
+

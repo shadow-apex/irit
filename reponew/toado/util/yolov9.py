@@ -10,7 +10,7 @@ from torchvision.ops import batched_nms
 
 
 DEFAULT_REPO_ID = "microsoft/OmniParser-v2.0"
-DEFAULT_MODEL_FILE = "icon_detect_v3/model.pt"
+DEFAULT_MODEL_FILE = "icon_detect/model.pt"
 
 
 class Boxes:

@@ -1487,6 +1487,7 @@ function startDevRun(run) {
       cwd: run.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
+      shell: process.platform === "win32"
     });
   } catch (error) {
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
@@ -1827,12 +1828,20 @@ async function startComputerUseTask(args) {
 }
 
 async function startOmniParserTask(args) {
-  const { task } = args;
+  const { task } = args || {};
+  if (!task || typeof task !== "string" || !task.trim()) {
+    return { status: "error", message: "Missing or invalid 'task' description for computer_use_omniparser." };
+  }
   emitEvent({ type: "log", level: "info", message: `Starting OmniParser Computer Use Task: ${task}` });
 
-  const { desktopCapturer } = require("electron");
-  const path = require("path");
-  const { spawn } = require("child_process");
+  // NOTE: `desktopCapturer` comes from the ESM `electron` default import at the
+  // top of this file — do NOT use require() here. This file is loaded as an ES
+  // module (main.mjs), so require() is undefined at runtime and previously threw
+  // a ReferenceError the moment this function ran (see BUG-EXPO-01 note below for
+  // the same lesson learned elsewhere in this file). `path` and `spawn` are also
+  // already imported at the top of the file and are no longer needed here since
+  // clicking is now delegated to the Python server (see step 3).
+  const { desktopCapturer } = electron;
 
   try {
     // 1. Capture screen
@@ -1840,51 +1849,114 @@ async function startOmniParserTask(args) {
     if (!sources || sources.length === 0) throw new Error("No screen source found");
     const primarySource = sources[0];
     const imgBuffer = primarySource.thumbnail.toPNG();
-    
-    // 2. Send to OmniParser Local API
+
+    // 2. Send to OmniParser Local API (with timeout so a stuck OCR/YOLO/Gemini
+    // call can never hang Iris indefinitely)
     const formData = new FormData();
     formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
     formData.append("prompt", task);
 
     const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
     emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
-    
-    const response = await fetch(omniUrl, {
-      method: "POST",
-      body: formData
-    });
-    
-    if (!response.ok) throw new Error(`OmniParser API error: ${response.statusText}`);
-    
+
+    const parseController = new AbortController();
+    const parseTimeout = setTimeout(() => parseController.abort(), 90000);
+    let response;
+    try {
+      response = await fetch(omniUrl, { method: "POST", body: formData, signal: parseController.signal });
+    } catch (fetchErr) {
+      if (fetchErr.name === "AbortError") throw new Error("OmniParser API timed out after 20s");
+      throw fetchErr;
+    } finally {
+      clearTimeout(parseTimeout);
+    }
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "");
+      throw new Error(`OmniParser API error: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ""}`);
+    }
+
     const result = await response.json();
     if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
-    
+
     if (!result.target_center) {
-        emitEvent({ type: "log", level: "info", message: `OmniParser could not find the target for: ${task}` });
-        return { status: "failed", message: `Could not find target on screen for: ${task}` };
+      emitEvent({ type: "log", level: "info", message: `OmniParser could not find the target for: ${task}` });
+      return { status: "failed", message: `Could not find target on screen for: ${task}` };
     }
-    
-    // 3. Move mouse and click using Python script
+
+    // 3. Move mouse and click by calling the persistent /click endpoint on the
+    // same Python server (api_server.py) instead of spawning a brand-new Python
+    // interpreter per click. This avoids the ~200-500ms cold-start + re-import
+    // overhead of `spawn("python", ...)` on every single action.
     const [x, y] = result.target_center;
-    const pythonScript = path.join(process.cwd(), "scripts", "mouse_controller.py");
-    
     emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}` });
-    
-    const pyProcess = spawn("python", [pythonScript, x.toString(), y.toString()]);
-    
-    pyProcess.stdout.on("data", (data) => {
-      emitEvent({ type: "log", level: "info", message: `[MouseController] ${data.toString()}` });
-    });
-    
-    pyProcess.stderr.on("data", (data) => {
-      emitEvent({ type: "log", level: "error", message: `[MouseController Error] ${data.toString()}` });
-    });
-    
-    return { status: "started", message: `Found the target on screen and clicked it successfully for: ${task}` };
-    
+
+    const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
+    const clickController = new AbortController();
+    const clickTimeout = setTimeout(() => clickController.abort(), 10000);
+    let clickResponse;
+    try {
+      clickResponse = await fetch(clickUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x_ratio: x, y_ratio: y }),
+        signal: clickController.signal,
+      });
+    } catch (fetchErr) {
+      if (fetchErr.name === "AbortError") throw new Error("Mouse click request timed out after 10s");
+      throw fetchErr;
+    } finally {
+      clearTimeout(clickTimeout);
+    }
+
+    // IMPORTANT: we only report success after actually confirming the click
+    // worked. Previously this function returned "clicked successfully" the
+    // instant the child process was spawned, without checking whether
+    // mouse_controller.py actually succeeded — a false positive if the click
+    // failed (e.g. missing OS Accessibility permission).
+    const clickResult = await clickResponse.json().catch(() => ({}));
+    if (!clickResponse.ok || !clickResult.success) {
+      throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
+    }
+
+    emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
+    return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+
   } catch (err) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
     return { status: "error", message: `Error performing computer task: ${err.message}` };
+  }
+}
+
+async function startComputerUseType(args) {
+  const { text, key } = args || {};
+  if (!text && !key) {
+    return { status: "error", message: "Missing 'text' or 'key' to type." };
+  }
+  emitEvent({ type: "log", level: "info", message: `Typing - text: '${text}', key: '${key}'` });
+
+  const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  
+  try {
+    const response = await fetch(typeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, key }),
+      signal: controller.signal
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) {
+      throw new Error(`Keyboard action failed: ${result.error || response.statusText}`);
+    }
+    emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success` });
+    return { status: "success", message: `Keyboard action successful.` };
+  } catch (err) {
+    emitEvent({ type: "log", level: "error", message: `[Keyboard Error] ${err.message}` });
+    return { status: "error", message: `Error performing keyboard action: ${err.message}` };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -2433,6 +2505,8 @@ async function executeClaudeTool(name, args = {}) {
       return startComputerUseTask(args);
     case "computer_use_omniparser":
       return startOmniParserTask(args);
+    case "computer_use_type":
+      return startComputerUseType(args);
     case "check_claude_status":
       return checkClaudeStatus();
     case "submit_claude_task":
@@ -2611,6 +2685,23 @@ function buildClaudeTools() {
               }
             },
             required: ["task"]
+          }
+        },
+        {
+          name: "computer_use_type",
+          description: "Take control of the user's keyboard to type text or press a specific key. Invoke this when the user asks you to type something, press Enter, etc.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: {
+                type: "string",
+                description: "The text to type out using the keyboard (e.g. 'hello world')."
+              },
+              key: {
+                type: "string",
+                description: "The name of a specific key to press (e.g. 'enter', 'esc', 'tab', 'backspace')."
+              }
+            }
           }
         },
         {

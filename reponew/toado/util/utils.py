@@ -20,15 +20,14 @@ from matplotlib import pyplot as plt
 import easyocr
 from paddleocr import PaddleOCR
 reader = easyocr.Reader(['en'])
-paddle_ocr = PaddleOCR(
-    lang='en',  # other lang also available
-    use_angle_cls=False,
-    use_gpu=False,  # using cuda will conflict with pytorch in the same process
-    show_log=False,
-    max_batch_size=1024,
-    use_dilation=True,  # improves accuracy
-    det_db_score_mode='slow',  # improves accuracy
-    rec_batch_num=1024)
+try:
+    paddle_ocr = PaddleOCR(
+        lang='en',  # other lang also available
+        use_angle_cls=False,
+        show_log=False)
+except Exception as e:
+    print(f"Warning: Failed to initialize PaddleOCR: {e}")
+    paddle_ocr = None
 import time
 import base64
 
@@ -71,17 +70,19 @@ def get_caption_model_processor(model_name, model_name_or_path="Salesforce/blip2
 
 def get_yolo_model(model_path=None, device=None):
     if model_path is None:
-        local_model_path = Path(__file__).resolve().parents[1] / "weights/icon_detect_v3/model.pt"
+        local_model_path = Path(__file__).resolve().parents[1] / "weights/icon_detect/model.pt"
         if local_model_path.is_file():
             model_path = local_model_path
 
-    if model_path is None or "icon_detect_v3" in Path(model_path).parts:
-        from util.yolov9 import YOLOv9Detector
-
-        return YOLOv9Detector(model_path=model_path, device=device)
+    if model_path is None or not Path(model_path).is_file():
+        from huggingface_hub import hf_hub_download
+        model_path = hf_hub_download(
+            repo_id="microsoft/OmniParser-v2.0",
+            filename="icon_detect/model.pt",
+            revision="main",
+        )
 
     from ultralytics import YOLO
-
     return YOLO(model_path)
 
 
@@ -439,7 +440,7 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
         ocr_bbox=ocr_bbox.tolist()
     else:
         print('no ocr bbox!!!')
-        ocr_bbox = None
+        ocr_bbox = []
 
     ocr_bbox_elem = [{'type': 'text', 'bbox':box, 'interactivity':False, 'content':txt, 'source': 'box_ocr_content_ocr'} for box, txt in zip(ocr_bbox, ocr_text) if int_box_area(box, w, h) > 0] 
     xyxy_elem = [{'type': 'icon', 'bbox':box, 'interactivity':True, 'content':None} for box in xyxy.tolist() if int_box_area(box, w, h) > 0]
@@ -519,7 +520,7 @@ def check_ocr_box(image_source: Union[str, Image.Image], display_img = True, out
         image_source = image_source.convert('RGB')
     image_np = np.array(image_source)
     w, h = image_source.size
-    if use_paddleocr:
+    if use_paddleocr and paddle_ocr is not None:
         if easyocr_args is None:
             text_threshold = 0.5
         else:
