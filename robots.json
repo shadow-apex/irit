@@ -14,6 +14,10 @@
     "mock_bot_1": {
       "name": "Mock Robot (Random Image)",
       "camera_url": "https://picsum.photos/400/300"
+    },
+    "den_wokwi": {
+      "name": "Đèn Wokwi",
+      "control_url": "http://localhost:5001/control"
     }
   }
 }

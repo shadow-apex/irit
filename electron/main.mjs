@@ -1826,6 +1826,68 @@ async function startComputerUseTask(args) {
   return { status: "started", message: "I have started taking control of the computer. The actions are running in the background." };
 }
 
+async function startOmniParserTask(args) {
+  const { task } = args;
+  emitEvent({ type: "log", level: "info", message: `Starting OmniParser Computer Use Task: ${task}` });
+
+  const { desktopCapturer } = require("electron");
+  const path = require("path");
+  const { spawn } = require("child_process");
+
+  try {
+    // 1. Capture screen
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } });
+    if (!sources || sources.length === 0) throw new Error("No screen source found");
+    const primarySource = sources[0];
+    const imgBuffer = primarySource.thumbnail.toPNG();
+    
+    // 2. Send to OmniParser Local API
+    const formData = new FormData();
+    formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
+    formData.append("prompt", task);
+
+    const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
+    emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
+    
+    const response = await fetch(omniUrl, {
+      method: "POST",
+      body: formData
+    });
+    
+    if (!response.ok) throw new Error(`OmniParser API error: ${response.statusText}`);
+    
+    const result = await response.json();
+    if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
+    
+    if (!result.target_center) {
+        emitEvent({ type: "log", level: "info", message: `OmniParser could not find the target for: ${task}` });
+        return { status: "failed", message: `Could not find target on screen for: ${task}` };
+    }
+    
+    // 3. Move mouse and click using Python script
+    const [x, y] = result.target_center;
+    const pythonScript = path.join(process.cwd(), "scripts", "mouse_controller.py");
+    
+    emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}` });
+    
+    const pyProcess = spawn("python", [pythonScript, x.toString(), y.toString()]);
+    
+    pyProcess.stdout.on("data", (data) => {
+      emitEvent({ type: "log", level: "info", message: `[MouseController] ${data.toString()}` });
+    });
+    
+    pyProcess.stderr.on("data", (data) => {
+      emitEvent({ type: "log", level: "error", message: `[MouseController Error] ${data.toString()}` });
+    });
+    
+    return { status: "started", message: `Found the target on screen and clicked it successfully for: ${task}` };
+    
+  } catch (err) {
+    emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
+    return { status: "error", message: `Error performing computer task: ${err.message}` };
+  }
+}
+
 async function submitLocalChat(args) {
   try {
     const { default: ollama } = await import("ollama");
@@ -2369,6 +2431,8 @@ async function executeClaudeTool(name, args = {}) {
       return toggleLiveTranscriber();
     case "start_computer_use_task":
       return startComputerUseTask(args);
+    case "computer_use_omniparser":
+      return startOmniParserTask(args);
     case "check_claude_status":
       return checkClaudeStatus();
     case "submit_claude_task":
@@ -2530,6 +2594,20 @@ function buildClaudeTools() {
               task: {
                 type: "string",
                 description: "The detailed GUI task to perform on the computer."
+              }
+            },
+            required: ["task"]
+          }
+        },
+        {
+          name: "computer_use_omniparser",
+          description: "Take control of the user's computer screen to click on an element using OmniParser local vision model (FREE, No tokens!). Invoke this when the user asks you to click on something or interact with the screen using OmniParser.",
+          parameters: {
+            type: "object",
+            properties: {
+              task: {
+                type: "string",
+                description: "The description of what to click (e.g. 'the Start button', 'the login button', 'the search bar')."
               }
             },
             required: ["task"]
