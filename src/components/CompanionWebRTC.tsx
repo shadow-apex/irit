@@ -76,6 +76,13 @@ export default function CompanionWebRTC() {
           if (pcRef.current) pcRef.current.close();
           const pc = new RTCPeerConnection(RTC_CFG);
           pcRef.current = pc;
+          // FEAT-COMP-MIC-01: mỗi kết nối mới bắt đầu với giả định mic điện
+          // thoại đang bật (đúng với hành vi mặc định của companion.html:
+          // getUserMedia({ video, audio }) ngay khi bấm "CONNECT TO IRIS").
+          // Không gửi tín hiệu ra điện thoại ở đây — chỉ đồng bộ lại state
+          // hiển thị trên PC để nút mic trong PiP không bị "kẹt" trạng thái
+          // tắt từ phiên kết nối trước.
+          companionStream.setMicEnabled(true);
 
           pc.onicecandidate = (e) => {
             if (e.candidate) {
@@ -119,6 +126,8 @@ export default function CompanionWebRTC() {
           if (pcRef.current) pcRef.current.close();
           companionStream.setStream(null);
           companionStream.setAudioState('idle');
+          // FEAT-COMP-MIC-01: reset về mặc định "mic bật" cho lần kết nối kế tiếp.
+          companionStream.setMicEnabled(true);
         }
       } catch (err) {
         console.error('[WebRTC Receiver] Error handling signal:', err);

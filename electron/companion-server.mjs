@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -169,11 +170,41 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
     }
   });
 
-  wss = new WebSocketServer({ server: httpServer });
-  
+  wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
+
   httpServer.listen(8080, () => {
     emitEvent({ type: "log", level: "info", message: "Companion HTTP/WS Server started on port 8080" });
   });
+
+  // Try to start HTTPS server on port 8444 using PHONE_CAMERA certs if they exist
+  try {
+    const certPath = path.join(__dirname, '../PHONE_CAMERA/cert/cert.pem');
+    const keyPath = path.join(__dirname, '../PHONE_CAMERA/cert/key.pem');
+    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+      const httpsServer = https.createServer({
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath)
+      }, httpServer);
+      
+      httpsServer.on('upgrade', (request, socket, head) => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      });
+
+      httpsServer.listen(8444, () => {
+        emitEvent({ type: "log", level: "info", message: "Companion HTTPS/WSS Server started on port 8444 (for local iOS Safari)" });
+      });
+    }
+  } catch (e) {
+    console.error("Failed to start companion HTTPS server:", e);
+  }
 
   // Fire-and-forget: the LAN server is already usable while the tunnel comes up.
   startNgrokTunnel(emitEvent);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import DraggablePiP from "./DraggablePiP";
-import { Smartphone } from "lucide-react";
+import { Smartphone, Mic, MicOff } from "lucide-react";
 import { companionStream, type AudioResumeState } from "../lib/companionStream";
 
 // FIX BUG-COMP-WEBRTC-02:
@@ -19,6 +19,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(() => companionStream.getStream());
   const [audioState, setAudioState] = useState<AudioResumeState>(() => companionStream.getAudioState());
+  const [micEnabled, setMicEnabled] = useState<boolean>(() => companionStream.getMicEnabled());
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
 
@@ -30,6 +31,14 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeAudioState(setAudioState);
+    return unsubscribe;
+  }, []);
+
+  // FEAT-COMP-MIC-01: theo dõi trạng thái mic điện thoại để tô sáng/mờ icon
+  // nút bấm cho đúng, kể cả khi bị đổi từ nơi khác (ví dụ reset khi có kết
+  // nối mới trong CompanionWebRTC.tsx).
+  useEffect(() => {
+    const unsubscribe = companionStream.subscribeMicState(setMicEnabled);
     return unsubscribe;
   }, []);
 
@@ -75,6 +84,33 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
         <>
           <Smartphone size={16} style={{ color: "rgb(40, 205, 170)" }} />
           Companion Camera
+          {/* FEAT-COMP-MIC-01: bật/tắt mic điện thoại ngay từ cửa sổ PiP —
+              chỉ hiện khi đã có luồng WebRTC thật (không hiện khi đang ở màn
+              hình chờ QR/ngrok vì lúc đó chưa có mic nào để tắt). */}
+          {webrtcStream && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                companionStream.requestMicToggle(!micEnabled);
+              }}
+              title={micEnabled ? "Tắt mic điện thoại" : "Bật mic điện thoại"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 24,
+                height: 24,
+                padding: 0,
+                border: "none",
+                borderRadius: 6,
+                cursor: "pointer",
+                background: micEnabled ? "transparent" : "rgba(220, 60, 60, 0.85)",
+                color: micEnabled ? "rgb(40, 205, 170)" : "#fff",
+              }}
+            >
+              {micEnabled ? <Mic size={14} /> : <MicOff size={14} />}
+            </button>
+          )}
         </>
       }
       onClose={onClose}

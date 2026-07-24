@@ -22,6 +22,7 @@
 <div id="wrap">
   <video id="preview" autoplay muted playsinline></video>
   <div id="status">Status: STANDBY (Ready to connect)</div>
+  <div id="mic-status" style="display:none; text-align:center; font-size:13px; padding-bottom:4px; color:#ff6b6b;">🔇 Mic đã bị tắt từ Iris (PC)</div>
   <div id="bar">
     <button id="start">CONNECT TO IRIS</button>
     <button id="flip" class="alt">Flip Camera</button>
@@ -36,8 +37,23 @@ const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 let pc, ws, localStream;
 let facing = 'user';
 let started = false;
+// FEAT-COMP-MIC-01: PC gửi tín hiệu 'mic-toggle' qua kênh signalling WebRTC
+// đã có sẵn (companionStream.requestMicToggle -> sendCompanionWebRTCSignal
+// -> companion:webrtc-signal-to-phone -> companion-server.mjs -> WS này) để
+// tắt/bật mic điện thoại từ xa mà không cần renegotiate WebRTC. Nhớ trạng
+// thái mong muốn ở đây để áp dụng lại mỗi khi có localStream mới (ví dụ khi
+// Flip Camera gọi lại getCam(), track audio cũ bị stop() và thay track mới
+// — track mới phải giữ đúng trạng thái mute hiện tại thay vì tự bật lại).
+let micWanted = true;
 
 function vtrack() { return localStream && localStream.getVideoTracks()[0]; }
+function atrack() { return localStream && localStream.getAudioTracks()[0]; }
+
+function applyMicWanted() {
+  const at = atrack();
+  if (at) at.enabled = micWanted;
+  $('mic-status').style.display = micWanted ? 'none' : 'block';
+}
 
 async function getCam(constraints) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -54,6 +70,11 @@ async function getCam(constraints) {
   if (vt) vt.contentHint = 'motion';
   $('preview').srcObject = localStream;
   $('preview').style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+  // FEAT-COMP-MIC-01: getUserMedia() luôn tạo audio track MỚI ở trạng thái
+  // enabled=true mặc định — nếu người dùng đã tắt mic từ PC trước đó rồi
+  // sau đó bấm "Flip Camera" (gọi lại getCam()), track mới phải bị tắt lại
+  // ngay để không vô tình "bật mic trở lại" ngoài ý muốn của PC.
+  applyMicWanted();
 }
 
 async function swapTracks() {
@@ -123,6 +144,15 @@ function connectWS() {
     else if (msg.type === 'peer-left') {
       log('Desktop disconnected.');
     }
+    else if (msg.type === 'mic-toggle') {
+      // { type: 'mic-toggle', enabled: boolean } gửi từ nút mic trong PiP
+      // "Companion Camera" (Alt+C) trên PC. Dùng track.enabled thay vì
+      // stop()/replaceTrack để có thể bật lại tức thì, không cần renegotiate
+      // SDP và không cần xin lại quyền mic.
+      micWanted = !!msg.enabled;
+      applyMicWanted();
+      log(micWanted ? 'Mic: ON' : 'Mic: MUTED (từ Iris PC)');
+    }
   };
 }
 
@@ -137,7 +167,13 @@ $('start').onclick = async () => {
     log('STANDBY');
     return;
   }
-  try { 
+  try {
+    // FEAT-COMP-MIC-01: mỗi lần bấm CONNECT thủ công là một phiên mới —
+    // đồng bộ với reset phía PC (companionStream.setMicEnabled(true) khi
+    // nhận offer mới), tránh trường hợp lần trước bị tắt mic rồi quên bật
+    // lại khiến phiên kết nối mới im lặng ngay từ đầu.
+    micWanted = true;
+    $('mic-status').style.display = 'none';
     await getCam(); 
     connectWS(); 
     started = true; 

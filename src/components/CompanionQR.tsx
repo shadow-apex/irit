@@ -105,7 +105,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  let webUrl = wsTunnelUrl ? wsTunnelUrl.replace(/^wss?:\/\//, 'https://') : `http://${ip}:8080`;
+  let webUrl = wsTunnelUrl ? wsTunnelUrl.replace(/^wss?:\/\//, 'https://') : `https://${ip}:8444`;
   if (wsToken) {
     webUrl += `?token=${wsToken}`;
   }
