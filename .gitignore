@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.pyc
+*.log
+sidecar/runtime/
+roadmap.md
+.env_test*
+.ui-shots/
