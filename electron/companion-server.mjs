@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -141,8 +142,13 @@ export function sendSignalToPhone(data) {
 export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini) {
   if (wss) return;
 
-  // Generate a random secure token for this session
-  wsToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  // AUDIT-COMP-01 FIX: Math.random() KHÔNG phải CSPRNG — nó dùng thuật toán
+  // xorshift/PRNG thường có thể dự đoán được nếu biết vài output trước đó
+  // (V8 dùng xorshift128+). Với 1 token dùng để xác thực kết nối điều khiển
+  // camera/mic từ xa (qua ngrok, tức là public internet), phải dùng CSPRNG
+  // thật sự. crypto.randomBytes(32) cho 256 bit entropy, encode hex để an
+  // toàn khi nhét vào query string URL.
+  wsToken = crypto.randomBytes(32).toString('hex');
 
   httpServer = createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);

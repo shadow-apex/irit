@@ -10,12 +10,23 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8443;
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 const CERT_DIR = path.join(ROOT, 'cert');
+
+// AUDIT-PHONECAM-01: trước bản vá này, phòng signaling (phone/viewer) không
+// có bất kỳ xác thực nào — server HTTPS bind '0.0.0.0' (mở ra cả LAN, và ra
+// internet nếu port-forward/ngrok), nghĩa là bất kỳ ai biết/đoán được URL
+// cũng join được vào phòng và xem thẳng stream camera của bạn (chỉ cần gửi
+// {"type":"join","role":"viewer"}). Sinh 1 token ngẫu nhiên bằng CSPRNG mỗi
+// lần khởi động server, in ra kèm URL/QR để bạn quét là tự động mang theo
+// token — không cần nhớ/gõ tay. Cho phép ghi đè bằng biến môi trường
+// ROOM_TOKEN nếu bạn muốn 1 token cố định (VD chạy như service nền).
+const ROOM_TOKEN = process.env.ROOM_TOKEN || crypto.randomBytes(16).toString('hex');
 
 // ---- TLS cert (generated once with mkcert — see README Setup) -------------
 const certPath = path.join(CERT_DIR, 'cert.pem');
@@ -71,7 +82,7 @@ const peers = { phone: null, viewer: null };
 const other = (role) => (role === 'phone' ? 'viewer' : 'phone');
 function emit(ws, obj) { if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj)); }
 
-function attachSignaling(wss) {
+function attachSignaling(wss, { requireToken = false } = {}) {
   wss.on('connection', (ws) => {
     ws.role = null;
 
@@ -80,6 +91,15 @@ function attachSignaling(wss) {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
 
       if (msg.type === 'join') {
+        // AUDIT-PHONECAM-01 (tiếp): chỉ cổng HTTPS/WSS công khai (0.0.0.0)
+        // mới bắt buộc token — cổng HTTP mirror cho OBS đã bind 127.0.0.1,
+        // tự thân đã là ranh giới tin cậy (chỉ tiến trình trên cùng máy mới
+        // gọi được), không cần thêm 1 lớp token nữa.
+        if (requireToken && msg.token !== ROOM_TOKEN) {
+          console.log('[ws] tu choi join: token sai/thieu');
+          try { ws.close(4001, 'invalid token'); } catch {}
+          return;
+        }
         const role = msg.role === 'phone' ? 'phone' : 'viewer';
         if (peers[role] && peers[role] !== ws) {
           emit(peers[role], { type: 'replaced' });          // a newer tab took this slot
@@ -109,13 +129,13 @@ function attachSignaling(wss) {
   });
 }
 
-attachSignaling(new WebSocketServer({ server }));
+attachSignaling(new WebSocketServer({ server }), { requireToken: true });
 
 // localhost-only HTTP mirror — lets OBS Browser Source / local tools load source.html over plain
 // ws:// with no cert (receive-only viewer; the phone side stays HTTPS/WSS). Bound to 127.0.0.1 only.
 const HTTP_PORT = process.env.HTTP_PORT ? Number(process.env.HTTP_PORT) : 8080;
 const httpServer = http.createServer(handleRequest);
-attachSignaling(new WebSocketServer({ server: httpServer }));
+attachSignaling(new WebSocketServer({ server: httpServer })); // requireToken: false — 127.0.0.1 only
 httpServer.listen(HTTP_PORT, '127.0.0.1');
 
 // ---- LAN IP autodetect + boot ---------------------------------------------
@@ -146,16 +166,17 @@ function lanIPs() {
 server.listen(PORT, '0.0.0.0', () => {
   const ips = lanIPs();
   console.log('\n  iphone-stream up  (HTTPS + WSS, port ' + PORT + ')\n');
-  console.log('  PC viewer : https://localhost:' + PORT + '/viewer.html');
-  console.log('  OBS source: http://localhost:' + HTTP_PORT + '/source.html   (Browser Source — no cert)');
+  console.log('  Room token: ' + ROOM_TOKEN + '  (đã tự gắn vào các URL bên dưới)');
+  console.log('  PC viewer : https://localhost:' + PORT + '/viewer.html?t=' + ROOM_TOKEN);
+  console.log('  OBS source: http://localhost:' + HTTP_PORT + '/source.html   (Browser Source — no cert, khong can token)');
   if (ips.length) {
     console.log('\n  On the iPhone (same Wi-Fi, OR plugged in via USB), open in Safari:');
     for (const ip of ips)
-      console.log('    phone   : https://' + ip + ':' + PORT + '/phone.html' + (isUSB(ip) ? '   <-- USB cable (lowest jitter)' : ''));
+      console.log('    phone   : https://' + ip + ':' + PORT + '/phone.html?t=' + ROOM_TOKEN + (isUSB(ip) ? '   <-- USB cable (lowest jitter)' : ''));
     console.log('\n  First time on the phone? Trust the CA first: https://' + ips[0] + ':' + PORT + '/rootCA.pem');
     if (ips.some(isUSB)) console.log('  USB link detected — most stable latency; set the viewer jitter buffer to 0.');
     // QR of the primary phone URL — scan with the iPhone camera to open it without typing
-    const phoneUrl = 'https://' + ips[0] + ':' + PORT + '/phone.html';
+    const phoneUrl = 'https://' + ips[0] + ':' + PORT + '/phone.html?t=' + ROOM_TOKEN;
     try {
       console.log('\n  Scan with the iPhone camera to open ' + phoneUrl + ' :');
       require('qrcode-terminal').generate(phoneUrl, { small: true });

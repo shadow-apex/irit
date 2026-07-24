@@ -92,6 +92,13 @@ const pendingClaudeAnnouncements = [];
 
 let isVisionEnabled = false;
 let visionInterval = null;
+// AUDIT-VIS-02: hash của frame gần nhất đã gửi cho Gemini, dùng để bỏ qua
+// gửi frame TRÙNG LẶP khi màn hình đứng yên (đọc tài liệu, xem slide tĩnh,
+// v.v — chiếm phần lớn thời gian thực tế của tính năng "screen vision").
+// Không cần thư viện decode ảnh (sharp/jimp): nếu bitmap gốc không đổi thì
+// buffer JPEG xuất ra cũng giống hệt nhau (encode là deterministic), nên so
+// sánh hash của buffer JPEG là đủ, rẻ hơn nhiều so với so sánh từng pixel.
+let lastVisionFrameHash = null;
 
 let isRobotVisionEnabled = false;
 let robotVisionInterval = null;
@@ -117,8 +124,8 @@ async function captureScreenForVision() {
     thumbnailSize: { width: thumbW, height: thumbH },
   });
   // toJPEG(50) ≈ 30-80 KB per frame — well within Gemini's bandwidth limits
-  const base64 = sources[0].thumbnail.toJPEG(50).toString("base64");
-  return base64;
+  const jpegBuffer = sources[0].thumbnail.toJPEG(50);
+  return jpegBuffer;
 }
 
 function stopVisionLoop() {
@@ -134,6 +141,7 @@ function toggleScreenVision() {
   isVisionEnabled = !isVisionEnabled;
   if (isVisionEnabled) {
     if (!visionInterval) {
+      lastVisionFrameHash = null; // luôn gửi frame đầu tiên khi vừa bật lại
       visionInterval = setInterval(async () => {
         // Auto-stop if Gemini disconnected or vision was toggled off mid-interval
         if (!liveSession || !isVisionEnabled) {
@@ -141,7 +149,16 @@ function toggleScreenVision() {
           return;
         }
         try {
-          const base64 = await captureScreenForVision();
+          const jpegBuffer = await captureScreenForVision();
+          // AUDIT-VIS-02: hash cheap trên buffer JPEG thô (rẻ hơn nhiều so
+          // với base64-encode + gửi qua WebSocket). Nếu giống hệt frame
+          // trước -> màn hình đứng yên -> bỏ qua, không tốn băng thông/token
+          // Gemini cho một hình ảnh Gemini đã "nhìn thấy" rồi.
+          const hash = crypto.createHash("sha1").update(jpegBuffer).digest("hex");
+          if (hash === lastVisionFrameHash) return;
+          lastVisionFrameHash = hash;
+
+          const base64 = jpegBuffer.toString("base64");
           liveSession.sendRealtimeInput([{
             mimeType: "image/jpeg",
             data: base64,
@@ -1859,13 +1876,18 @@ async function startOmniParserTask(args) {
     const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
     emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
 
+    // AUDIT-VIS-01 FIX: timeout thực tế là 90s (đủ cho YOLO+OCR chạy trên máy
+    // yếu) nhưng thông báo lỗi cũ ghi cứng "20s" — sai lệch này từng khiến
+    // việc debug độ trễ dễ hiểu lầm ("tưởng đã set 20s nhưng đợi hoài không
+    // timeout"). Gộp về 1 hằng số duy nhất để không còn lệch nhau lần nữa.
+    const PARSE_TIMEOUT_MS = 90000;
     const parseController = new AbortController();
-    const parseTimeout = setTimeout(() => parseController.abort(), 90000);
+    const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
     let response;
     try {
       response = await fetch(omniUrl, { method: "POST", body: formData, signal: parseController.signal });
     } catch (fetchErr) {
-      if (fetchErr.name === "AbortError") throw new Error("OmniParser API timed out after 20s");
+      if (fetchErr.name === "AbortError") throw new Error(`OmniParser API timed out after ${PARSE_TIMEOUT_MS / 1000}s`);
       throw fetchErr;
     } finally {
       clearTimeout(parseTimeout);
@@ -2068,24 +2090,95 @@ async function openUrlOrApp(args) {
 // Chỉ khi KHÔNG tìm thấy thiết bị nào khớp trong robots.json mới rơi về
 // đường cũ (SMART_HOME_WEBHOOK_URL / mock), giữ tương thích ngược cho ai
 // đang dùng Home Assistant webhook.
-function findRobotDeviceByName(device) {
-  if (!device) return null;
+// AUDIT-SH-01 FIX: Thuật toán cũ dùng substring match hai chiều
+// (needle.includes(name) || name.includes(needle)). Đây là nguồn rủi ro gọi
+// NHẦM thiết bị thật sự nghiêm trọng: nếu robots.json có "Đèn phòng ngủ" và
+// "Đèn phòng khách", câu lệnh "tắt đèn phòng" sẽ khớp substring với CẢ HAI
+// (vì "đèn phòng" là con của cả hai tên) — code cũ chỉ lấy thiết bị đầu tiên
+// dò được trong Object.entries(), tức là chọn BỪA một trong hai theo thứ tự
+// key trong file JSON, hoàn toàn không báo cho người dùng biết đang có nhập
+// nhằng. Với thiết bị vật lý (bật/tắt đèn, hoặc tệ hơn là robot/cánh tay),
+// "chọn bừa" là không chấp nhận được.
+//
+// Cách sửa: chuẩn hoá bỏ dấu tiếng Việt + tách từ (token), rồi:
+//  1) Ưu tiên khớp CHÍNH XÁC theo id hoặc theo tên (không phân biệt hoa
+//     thường/dấu) — trường hợp phổ biến nhất và không có gì mơ hồ.
+//  2) Nếu không có khớp chính xác, tìm các thiết bị mà TẤT CẢ các từ trong
+//     câu lệnh đều xuất hiện trong tên thiết bị (khớp theo từ trọn vẹn, VD
+//     "đèn" không còn khớp nhầm vào giữa chữ "khuyến" nữa vì so theo token
+//     chứ không phải theo ký tự con).
+//  3) Nếu bước 2 tìm ra NHIỀU HƠN 1 thiết bị khớp cùng mức độ -> coi là mơ
+//     hồ (ambiguous) và KHÔNG đoán: trả lỗi rõ ràng để AI hỏi lại người
+//     dùng "bạn muốn nói đèn nào?" thay vì âm thầm điều khiển sai thiết bị.
+function normalizeViText(s) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // bỏ dấu
+    .replace(/đ/gi, "d")
+    .toLowerCase()
+    .trim();
+}
+
+function tokenize(s) {
+  return normalizeViText(s).split(/\s+/).filter(Boolean);
+}
+
+function resolveRobotDevice(device) {
+  if (!device) return { status: "none" };
   const robots = getRobotsConfig();
-  const needle = String(device).trim().toLowerCase();
-  if (robots[device]) return device; // khớp thẳng theo key/id
+
+  // 1) Khớp chính xác theo id (key trong robots.json) — không đổi hành vi cũ
+  if (robots[device]) return { status: "ok", id: device };
+
+  const needleNorm = normalizeViText(device);
+  const needleTokens = tokenize(device);
+
+  // 2) Khớp chính xác theo id hoặc tên (chuẩn hoá dấu + hoa/thường)
+  const exactMatches = [];
   for (const [id, cfg] of Object.entries(robots)) {
-    const name = (cfg?.name || "").toLowerCase();
-    if (id.toLowerCase() === needle || name === needle || (name && needle.includes(name)) || (name && name.includes(needle))) {
-      return id;
+    const nameNorm = normalizeViText(cfg?.name || "");
+    if (normalizeViText(id) === needleNorm || nameNorm === needleNorm) {
+      exactMatches.push(id);
     }
   }
-  return null;
+  if (exactMatches.length === 1) return { status: "ok", id: exactMatches[0] };
+  if (exactMatches.length > 1) return { status: "ambiguous", ids: exactMatches };
+
+  // 3) Khớp theo token: mọi từ trong lệnh phải xuất hiện TRỌN VẸN trong tên
+  // thiết bị (không phải substring ký tự) để tránh khớp nhầm kiểu "đèn" lọt
+  // vào giữa 1 từ khác không liên quan.
+  if (needleTokens.length > 0) {
+    const tokenMatches = [];
+    for (const [id, cfg] of Object.entries(robots)) {
+      const nameTokens = tokenize(cfg?.name || "");
+      if (needleTokens.every((t) => nameTokens.includes(t))) {
+        tokenMatches.push(id);
+      }
+    }
+    if (tokenMatches.length === 1) return { status: "ok", id: tokenMatches[0] };
+    if (tokenMatches.length > 1) return { status: "ambiguous", ids: tokenMatches };
+  }
+
+  return { status: "none" };
 }
 
 async function triggerSmartHome({ device, action }) {
   // 1) Ưu tiên robots.json nếu có thiết bị khớp và có control_url
-  const matchedId = findRobotDeviceByName(device);
-  if (matchedId) {
+  const resolved = resolveRobotDevice(device);
+
+  if (resolved.status === "ambiguous") {
+    // AUDIT-SH-01: không được đoán bừa khi tên gọi khớp nhiều thiết bị cùng
+    // lúc. Trả lỗi để AI/người dùng biết cần nói tên cụ thể hơn.
+    const robots = getRobotsConfig();
+    const names = resolved.ids.map((id) => robots[id]?.name || id).join(", ");
+    return {
+      status: "error",
+      error: `Tên thiết bị "${device}" khớp với nhiều hơn 1 thiết bị (${names}). Hãy nói tên cụ thể hơn để tránh điều khiển nhầm.`,
+    };
+  }
+
+  if (resolved.status === "ok") {
+    const matchedId = resolved.id;
     const robots = getRobotsConfig();
     if (robots[matchedId]?.control_url) {
       const result = await triggerRobotAction({ robot_id: matchedId, action, params: {} });

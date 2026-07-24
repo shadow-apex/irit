@@ -145,8 +145,9 @@ async function makeOffer() {
 
 function connectWS() {
   ws = new WebSocket('wss://' + location.host);
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'phone' })); log('connected — waiting for the PC viewer…'); };
-  ws.onclose = () => log('signaling closed');
+  const roomToken = new URLSearchParams(location.search).get('t') || '';
+  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'phone', token: roomToken })); log('connected — waiting for the PC viewer…'); };
+  ws.onclose = (ev) => log(ev.code === 4001 ? 'sai token — mở lại link/QR do server in ra' : 'signaling closed');
   ws.onerror = () => log('signaling error — is the CA trusted on this iPhone?');
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);

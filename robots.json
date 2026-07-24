@@ -5,7 +5,15 @@
       "camera_url": "http://192.168.1.15:81/stream",
       "control_url": "http://192.168.1.15/control",
       "token": "doi-chuoi-bi-mat-nay-thanh-token-rieng-cua-ban",
-      "has_arm": true
+      "has_arm": false,
+      "_note": "AUDIT-ARM-01: board nay (ESP32-CAM, myiris_robot.yaml) chi con 1 servo 'turret' xoay camera (khong phai canh tay 4 khop day du) - ESP32-CAM khong con du GPIO trong cho shoulder/elbow/gripper. has_arm=false de UI khong hien 3 slider khong co tac dung that. Muon dieu khien canh tay day du, dung entry 'esp32_arm_1' ben duoi (board rieng, xem myiris_arm.yaml)."
+    },
+    "esp32_arm_1": {
+      "name": "Canh Tay Robot (4 khop)",
+      "control_url": "http://192.168.1.16/control",
+      "token": "doi-chuoi-bi-mat-nay-thanh-token-rieng-cua-ban",
+      "has_arm": true,
+      "_note": "Board ESP32 rieng (khong phai -CAM), firmware: myiris_arm.yaml + myiris_arm_control.h. Doi IP + token cho dung phan cung cua ban."
     },
     "usb_robot_1": {
       "name": "Robot USB (Arduino qua usb_server.py)",
@@ -23,7 +31,7 @@
       "name": "My ESPHome Robot",
       "camera_url": "http://192.168.1.xxx:81/stream",
       "control_url": "http://192.168.1.xxx/control",
-      "has_arm": true
+      "has_arm": false
     }
   }
 }

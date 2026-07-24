@@ -66,6 +66,10 @@ Renderer song song:
 
 ## Cau truc thu muc
 
+> **[THÔNG BÁO] Sơ đồ hình cây chi tiết:** Vì dự án có rất nhiều file, sơ đồ toàn bộ các file đã được tôi tạo tự động và lưu riêng. Bạn (và Claude) có thể xem sơ đồ chi tiết toàn tập tại: **[references/project_tree.md](file:///C:/Users/vanha/Downloads/myiris/.agents/skills/myiris/references/project_tree.md)**
+
+Dưới đây là sơ đồ rút gọn của các file cốt lõi nhất:
+
 ```
 myiris/
 |-- electron/
@@ -338,6 +342,7 @@ WARNING: MediaPipe WASM URL version phai khop chinh xac voi npm package version!
 
 - Hotkey: `Super+Shift+V` (global, bat/tat)
 - Khi bat: WebRTC stream man hinh chinh -> Gemini nhin thay realtime
+- **Tối ưu (Hash skip)**: Ảnh buffer JPEG được băm SHA-1. Nếu mã băm giống frame trước (màn hình tĩnh), hệ thống bỏ qua không gửi để tiết kiệm băng thông và token.
 - Component `CenterStage.tsx` hien thi icon sang khi dang active
 - Gemini cung co the tu goi `toggle_screen_vision` tool khi user noi "hay nhin man hinh cua toi"
 
@@ -377,15 +382,20 @@ WARNING: MediaPipe WASM URL version phai khop chinh xac voi npm package version!
 - **Cơ chế**: Chạy app `iris-companion` (Expo) thông qua ngrok tunnel.
 - **Cách kết nối**: App sinh mã QR chứa URL ngrok thực tế (thay vì LAN IP để vượt tường lửa). Người dùng quét mã bằng Expo Go.
 - **IPC Handler**: `companion:start-expo` (khởi chạy process ngrok) và `companion:get-tunnel-url` (polling lấy link thật).
+- **Bảo mật (CSPRNG)**: Sử dụng `crypto.randomBytes(32).toString('hex')` thay vì `Math.random()` để sinh session token, đảm bảo an toàn tuyệt đối qua ngrok public internet.
+- **Bảo mật (ROOM_TOKEN)**: Server signaling riêng (`PHONE_CAMERA/server.js` cổng 8443) bắt buộc kiểm tra `ROOM_TOKEN` trong message `join` để ngăn chặn truy cập trái phép xem luồng camera. Cổng 8080 local cho OBS được giữ nguyên không cần token vì đã có ranh giới local.
 
 ---
 
-## Robot Cameras (PiP / Điều khiển)
+## Robot Cameras (PiP / Điều khiển) & Smart Home
 
 - **Giao diện**: Hiển thị dưới dạng cửa sổ trôi (Picture-in-Picture) có thể kéo thả (`DraggablePiP`), hạ z-index (500) khi thu nhỏ để không vướng UI khác.
 - **Config**: Đọc cấu hình từ `robots.json` (tự động xử lý an toàn nếu file rỗng hoặc không tồn tại).
 - **Tránh cache & chống lag**: URL stream camera sử dụng `?ts=Date.now()` để ép trình duyệt tải mới, refresh mỗi 3s. Tự động phục hồi khi URL sống lại.
 - **Điều khiển**: Có Gemini tool `trigger_robot_action` gửi tín hiệu HTTP tới `control_url` của robot, hoặc chạy Mock mode nếu chưa config.
+- **Smart Home Matching**: Khớp lệnh thoại thiết bị bằng Exact match (id, name) hoặc Token-based match (toàn bộ từ khóa). Trả về lỗi `ambiguous` nếu khớp nhiều thiết bị, TUYỆT ĐỐI KHÔNG dùng substring match để tránh gọi nhầm thiết bị.
+- **Bảo mật & Firmware (ESP32)**: Endpoint `/control` trên robot yêu cầu xác thực bằng header `Authorization: Bearer <token>`. Firmware tự kiểm tra `MAX_BODY_SIZE` tại header, dùng `reserve()` cấp phát bộ nhớ liền khối chống tràn RAM (heap fragmentation), và luôn kẹp cứng góc servo (0-180) ở tầng vi điều khiển.
+- **Cánh tay 4 khớp (Arm)**: Cánh tay đầy đủ 4 servo (Base, Shoulder, Elbow, Gripper) đã được tách sang một board ESP32 riêng (cấu hình `myiris_arm.yaml`) do mạch ESP32-CAM không đủ GPIO an toàn. Khai báo cánh tay mới trong `robots.json` với IP và token độc lập.
 
 ---
 

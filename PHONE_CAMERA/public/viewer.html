@@ -140,8 +140,9 @@ function newPC() {
 
 function connectWS() {
   ws = new WebSocket(WS);
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'viewer' })); log('connected — waiting for phone…'); };
-  ws.onclose = () => log('signaling closed — reload to retry');
+  const roomToken = new URLSearchParams(location.search).get('t') || '';
+  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'viewer', token: roomToken })); log('connected — waiting for phone…'); };
+  ws.onclose = (ev) => log(ev.code === 4001 ? 'sai token — mo lai link co ?t=... do server in ra' : 'signaling closed — reload to retry');
   ws.onerror = () => log('signaling error');
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
