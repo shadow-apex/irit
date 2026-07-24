@@ -28,6 +28,7 @@ import HoloBackdrop from "./components/HoloBackdrop";
 import RobotCameras from "./components/RobotCameras";
 import CompanionVideo from "./components/CompanionVideo";
 import CompanionWebRTC from "./components/CompanionWebRTC";
+import { companionStream } from "./lib/companionStream";
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -213,6 +214,40 @@ export default function App() {
     return () => {
       cleanupRobot();
       cleanupCompanion();
+    };
+  }, [hasBridge]);
+
+  // AUTO-OPEN-COMP-PIP: tự động bật cửa sổ Companion Camera (PiP, tương
+  // đương bấm Alt+C) ngay khi điện thoại kết nối thành công — không cần
+  // người dùng phải tự bấm Alt+C thủ công sau khi quét QR. Xử lý cho cả 2
+  // đường kết nối:
+  //  1) WebRTC (thẻ "WebRTC (Camera)" / QR https://<ip>:8444) — CompanionWebRTC.tsx
+  //     gọi companionStream.setStream(stream) ngay khi nhận được track đầu
+  //     tiên từ điện thoại (pc.ontrack), nên subscribe ở đây là đủ.
+  //  2) Expo Go (đường JPEG frame cũ, qua onCompanionFrame) — không có
+  //     stream nào để subscribe, nên tự mở PiP ngay khi frame ĐẦU TIÊN của
+  //     phiên kết nối hiện tại tới (rồi thôi, không mở lại liên tục mỗi
+  //     frame — dùng cờ `hasOpenedForExpoSession` để tránh gọi setState dư
+  //     thừa 1 lần mỗi frame).
+  useEffect(() => {
+    const unsubscribeStream = companionStream.subscribeStream((stream) => {
+      if (stream) setShowCompanionPip(true);
+    });
+
+    let hasOpenedForExpoSession = false;
+    let cleanupExpoFrame = () => {};
+    if (hasBridge && window.iris?.onCompanionFrame) {
+      cleanupExpoFrame = window.iris.onCompanionFrame(() => {
+        if (!hasOpenedForExpoSession) {
+          hasOpenedForExpoSession = true;
+          setShowCompanionPip(true);
+        }
+      });
+    }
+
+    return () => {
+      unsubscribeStream();
+      cleanupExpoFrame();
     };
   }, [hasBridge]);
 

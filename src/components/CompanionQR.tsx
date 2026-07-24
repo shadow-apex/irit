@@ -8,7 +8,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
   const [wsTunnelUrl, setWsTunnelUrl] = useState<string | null>(null);
   const [wsToken, setWsToken] = useState<string | null>(null);
   const [phoneCamUrl, setPhoneCamUrl] = useState<string | null>(null);
-  const [showExpo, setShowExpo] = useState(false);
+  const [activeTab, setActiveTab] = useState<'iris' | 'obs' | 'expo'>('iris');
 
   useEffect(() => {
     let cancelled = false;
@@ -105,6 +105,11 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  // HTTPS_CAM FIX: Safari trên iOS chặn getUserMedia (camera) nếu origin
+  // không phải secure context. Companion server giờ chạy thêm HTTPS/WSS
+  // trên port 8444 (dùng cert mkcert tại PHONE_CAMERA/cert/) song song với
+  // HTTP 8080, nên fallback QR code (khi không có ngrok tunnel) phải trỏ
+  // sang https://<ip>:8444 để Alt+Q mở được camera trên iPhone Safari.
   let webUrl = wsTunnelUrl ? wsTunnelUrl.replace(/^wss?:\/\//, 'https://') : `https://${ip}:8444`;
   if (wsToken) {
     webUrl += `?token=${wsToken}`;
@@ -125,14 +130,20 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
         
         <div style={{ padding: "0 30px", marginTop: 20, display: "flex", gap: 10 }}>
           <button 
-            onClick={() => setShowExpo(false)}
-            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid", borderColor: !showExpo ? "#28cdaa" : "#333", backgroundColor: !showExpo ? "#152a1e" : "#222", color: !showExpo ? "#28cdaa" : "#888", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontWeight: "bold" }}
+            onClick={() => setActiveTab('iris')}
+            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid", borderColor: activeTab === 'iris' ? "#28cdaa" : "#333", backgroundColor: activeTab === 'iris' ? "#152a1e" : "#222", color: activeTab === 'iris' ? "#28cdaa" : "#888", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontWeight: "bold" }}
           >
-            <Globe size={16} /> WebRTC (Camera)
+            <Smartphone size={16} /> Iris Camera
           </button>
           <button 
-            onClick={() => setShowExpo(true)}
-            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid", borderColor: showExpo ? "#28cdaa" : "#333", backgroundColor: showExpo ? "#152a1e" : "#222", color: showExpo ? "#28cdaa" : "#888", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontWeight: "bold" }}
+            onClick={() => setActiveTab('obs')}
+            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid", borderColor: activeTab === 'obs' ? "#28cdaa" : "#333", backgroundColor: activeTab === 'obs' ? "#152a1e" : "#222", color: activeTab === 'obs' ? "#28cdaa" : "#888", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontWeight: "bold" }}
+          >
+            <Globe size={16} /> OBS/Python
+          </button>
+          <button 
+            onClick={() => setActiveTab('expo')}
+            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid", borderColor: activeTab === 'expo' ? "#28cdaa" : "#333", backgroundColor: activeTab === 'expo' ? "#152a1e" : "#222", color: activeTab === 'expo' ? "#28cdaa" : "#888", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontWeight: "bold" }}
           >
             <MonitorSmartphone size={16} /> Expo Go
           </button>
@@ -140,7 +151,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
 
         <div style={{ padding: "20px 30px 30px", display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
           
-          {showExpo ? (
+          {activeTab === 'expo' ? (
             <>
               <div style={{ color: "#aaa", textAlign: "center", margin: 0, lineHeight: 1.5, fontSize: 14 }}>
                 Mở app <strong>Expo Go</strong> trên điện thoại và quét mã QR này.<br/>
@@ -153,27 +164,41 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 ) : qrUrl ? (
                   <img src={qrUrl} alt="Expo QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                 ) : (
-                  <div style={{ color: "red" }}>Lỗi lấy thông tin IP</div>
+                  <div style={{ color: "#d32f2f", fontWeight: "bold" }}>Lỗi lấy thông tin IP</div>
+                )}
+              </div>
+            </>
+          ) : activeTab === 'obs' ? (
+            <>
+              <div style={{ color: "#aaa", textAlign: "center", margin: 0, lineHeight: 1.5, fontSize: 14 }}>
+                Mở ứng dụng Camera và quét mã này để dùng với <strong>OBS Studio</strong> hoặc <strong>Python YOLO</strong>.
+              </div>
+              
+              <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {phoneCamQrUrl ? (
+                  <img src={phoneCamQrUrl} alt="OBS QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                ) : (
+                  <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 13, padding: 10 }}>
+                    Không có URL Camera OBS!<br/><br/>
+                    <span style={{fontSize: 12, fontWeight: "normal", color: "#000"}}>
+                      Hãy chắc chắn server <code>PHONE_CAMERA</code> đang chạy.
+                    </span>
+                  </div>
                 )}
               </div>
             </>
           ) : (
             <>
               <div style={{ color: "#aaa", textAlign: "center", margin: 0, lineHeight: 1.5, fontSize: 14 }}>
-                Mở ứng dụng <strong>Camera</strong> trên điện thoại (đặc biệt là iPhone) và quét mã QR này để bắt đầu truyền video (WebRTC).
+                Mở ứng dụng <strong>Camera</strong> trên điện thoại và quét mã QR này để truyền video vào <strong>Iris (Alt+C)</strong>.
               </div>
               
               <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {phoneCamQrUrl ? (
-                  <img src={phoneCamQrUrl} alt="WebRTC QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                ) : wsTunnelUrl ? (
-                  <img src={webQrUrl} alt="Web QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                {wsTunnelUrl ? (
+                  <img src={webQrUrl} alt="Iris Web QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                 ) : (
                   <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 13, padding: 10 }}>
-                    Không có URL Camera!<br/><br/>
-                    <span style={{fontSize: 12, fontWeight: "normal", color: "#000"}}>
-                      Hãy chắc chắn rằng bạn đang chạy lệnh <code>npm run dev</code> và server <code>PHONE_CAMERA</code> đã khởi động thành công.
-                    </span>
+                    Đang chờ tạo đường dẫn ngrok tunnel...
                   </div>
                 )}
               </div>
@@ -184,7 +209,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
             <div style={{ color: "#eee", fontWeight: "bold", marginBottom: 8, fontSize: 13 }}>
               URL kết nối (dành cho dán thủ công / dùng chung với OBS)
             </div>
-            {phoneCamUrl ? (
+            {activeTab === 'obs' && phoneCamUrl ? (
               <>
                 <code
                   onClick={() => navigator.clipboard?.writeText(phoneCamUrl)}
@@ -193,22 +218,32 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 >
                   {phoneCamUrl}
                 </code>
-                <div style={{ color: "#888", fontSize: 11, marginTop: 6 }}>Lưu ý: Bạn phải cài đặt chứng chỉ bảo mật (mkcert) thì Safari/Chrome mới cho phép truy cập Camera! Nếu dùng OBS, bạn có thể copy link này.</div>
+                <div style={{ color: "#888", fontSize: 11, marginTop: 6 }}>Lưu ý: URL này dùng cho hệ thống OBS/Python độc lập.</div>
               </>
-            ) : wsTunnelUrl ? (
+            ) : activeTab === 'iris' && wsTunnelUrl ? (
               <>
                 <code
-                  onClick={() => navigator.clipboard?.writeText(showExpo ? wsTunnelUrl : webUrl)}
+                  onClick={() => navigator.clipboard?.writeText(webUrl)}
                   title="Bấm để copy"
                   style={{ display: "block", background: "#000", padding: "8px 10px", borderRadius: 4, fontSize: 12, color: "rgb(40, 205, 170)", wordBreak: "break-all", cursor: "pointer" }}
                 >
-                  {showExpo ? wsTunnelUrl : webUrl}
+                  {webUrl}
                 </code>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 6 }}>Bấm vào URL để copy.</div>
               </>
+            ) : activeTab === 'expo' && ip ? (
+              <>
+                <code
+                  onClick={() => navigator.clipboard?.writeText(`exp://${ip}:8081`)}
+                  title="Bấm để copy"
+                  style={{ display: "block", background: "#000", padding: "8px 10px", borderRadius: 4, fontSize: 12, color: "rgb(40, 205, 170)", wordBreak: "break-all", cursor: "pointer" }}
+                >
+                  {`exp://${ip}:8081`}
+                </code>
+              </>
             ) : (
               <div style={{ color: "#888", fontSize: 12 }}>
-                Đang chờ hệ thống Camera khởi động...
+                Đang chờ hệ thống khởi động...
               </div>
             )}
           </div>

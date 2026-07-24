@@ -1,16 +1,27 @@
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// HTTPS_CAM FIX: Safari trên iOS chỉ cho phép `getUserMedia` (mở camera) trên
+// "secure context" — tức HTTPS hoặc localhost. Vì companion server chạy trên
+// LAN IP (http://<lan-ip>:8080), Safari coi đó là insecure origin và chặn
+// camera của điện thoại khi dùng thẻ WebRTC (Alt+C / Alt+Q). Cặp cert/key đã
+// được tạo sẵn bằng mkcert (self-signed, trust local) tại PHONE_CAMERA/cert/.
+const CERT_DIR = path.join(__dirname, '..', 'PHONE_CAMERA', 'cert');
+const CERT_PATH = path.join(CERT_DIR, 'cert.pem');
+const KEY_PATH = path.join(CERT_DIR, 'key.pem');
+const HTTPS_PORT = 8444;
+
 let wss = null;
 let httpServer = null;
+let httpsServer = null;
 let activeConnection = null;
 let heartbeatInterval = null;
 
@@ -86,7 +97,8 @@ async function startNgrokTunnel(emitEvent) {
         const res = await fetch('http://127.0.0.1:4040/api/tunnels');
         const data = await res.json();
         if (data && data.tunnels && data.tunnels.length > 0) {
-          ngrokWsTunnelUrl = data.tunnels[0].public_url;
+          const tunnel8080 = data.tunnels.find(t => t.config && t.config.addr && t.config.addr.includes('8080'));
+          ngrokWsTunnelUrl = tunnel8080 ? tunnel8080.public_url : data.tunnels[0].public_url;
           console.log("[Companion] Recovered ngrok URL from API:", ngrokWsTunnelUrl);
         } else {
           throw connectErr;
@@ -151,9 +163,10 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   // toàn khi nhét vào query string URL.
   wsToken = crypto.randomBytes(32).toString('hex');
 
-  httpServer = createServer((req, res) => {
+  // Shared request handler for both HTTP (8080) and HTTPS (8444) servers.
+  const requestHandler = (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    
+
     // Serve Web Companion HTML
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/companion.html')) {
       const htmlPath = path.join(__dirname, 'companion.html');
@@ -168,42 +181,58 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
       res.writeHead(404);
       res.end();
     }
-  });
+  };
 
+  httpServer = createServer(requestHandler);
+
+  // HTTPS_CAM FIX: `new WebSocketServer({ server })` only binds `upgrade` to
+  // ONE http(s).Server instance. Since we now run two servers (HTTP 8080 +
+  // HTTPS 8444) sharing the same signaling logic, `wss` is created in
+  // "noServer" mode and its 'upgrade' handling is wired manually to BOTH
+  // servers below — so a WebRTC phone client connecting via wss://<ip>:8444
+  // reaches the exact same `wss` instance (and `activeConnection`,
+  // heartbeat, token auth, etc.) as one connecting via ws://<ip>:8080.
   wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on('upgrade', (request, socket, head) => {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+  const handleUpgrade = (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
     });
-  });
+  };
+  httpServer.on('upgrade', handleUpgrade);
 
   httpServer.listen(8080, () => {
     emitEvent({ type: "log", level: "info", message: "Companion HTTP/WS Server started on port 8080" });
   });
 
-  // Try to start HTTPS server on port 8444 using PHONE_CAMERA certs if they exist
-  try {
-    const certPath = path.join(__dirname, '../PHONE_CAMERA/cert/cert.pem');
-    const keyPath = path.join(__dirname, '../PHONE_CAMERA/cert/key.pem');
-    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-      const httpsServer = https.createServer({
-        key: fs.readFileSync(keyPath),
-        cert: fs.readFileSync(certPath)
-      }, httpServer);
-      
-      httpsServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+  // Try to bring up the HTTPS/WSS server on 8444 using the mkcert-issued
+  // cert in PHONE_CAMERA/cert/. This is required for Safari on iOS to allow
+  // getUserMedia() (camera) over the LAN — Safari treats plain HTTP on a LAN
+  // IP as an insecure context and silently blocks camera access.
+  if (fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) {
+    try {
+      const httpsOptions = {
+        cert: fs.readFileSync(CERT_PATH),
+        key: fs.readFileSync(KEY_PATH),
+      };
+      httpsServer = createHttpsServer(httpsOptions, requestHandler);
+      httpsServer.on('upgrade', handleUpgrade);
+      httpsServer.on('error', (err) => {
+        emitEvent({ type: "log", level: "error", message: `Companion HTTPS Server error: ${err.message}` });
       });
-
-      httpsServer.listen(8444, () => {
-        emitEvent({ type: "log", level: "info", message: "Companion HTTPS/WSS Server started on port 8444 (for local iOS Safari)" });
+      httpsServer.listen(HTTPS_PORT, () => {
+        emitEvent({ type: "log", level: "info", message: `Companion HTTPS/WSS Server started on port ${HTTPS_PORT}` });
       });
+    } catch (err) {
+      httpsServer = null;
+      emitEvent({ type: "log", level: "error", message: `Companion: failed to start HTTPS server: ${err.message}` });
     }
-  } catch (e) {
-    console.error("Failed to start companion HTTPS server:", e);
+  } else {
+    emitEvent({
+      type: "log",
+      level: "warn",
+      message: `Companion: cert.pem/key.pem not found in ${CERT_DIR} — HTTPS server on port ${HTTPS_PORT} was not started. iPhone Safari will block camera access without HTTPS (run mkcert to generate them).`,
+    });
   }
 
   // Fire-and-forget: the LAN server is already usable while the tunnel comes up.
@@ -315,6 +344,12 @@ export function stopCompanionServer() {
   if (httpServer) {
     try { httpServer.close(); } catch {}
     httpServer = null;
+  }
+  // Same EADDRINUSE reasoning applies to the HTTPS server on 8444 — it must
+  // also be closed explicitly, or the port stays bound on the next start.
+  if (httpsServer) {
+    try { httpsServer.close(); } catch {}
+    httpsServer = null;
   }
   // ─────────────────────────────────────────────────────────────────────
   if (ngrokConnected) {
