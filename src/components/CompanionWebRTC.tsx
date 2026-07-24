@@ -23,7 +23,7 @@ export default function CompanionWebRTC() {
 
           pc.onicecandidate = (e) => {
             if (e.candidate) {
-              window.iris.sendCompanionWebRTCSignal({ type: 'ice', candidate: e.candidate });
+              window.iris.sendCompanionWebRTCSignal?.({ type: 'ice', candidate: e.candidate });
             }
           };
 
@@ -46,7 +46,7 @@ export default function CompanionWebRTC() {
           await pc.setRemoteDescription(msg.sdp);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          window.iris.sendCompanionWebRTCSignal({ type: 'answer', sdp: pc.localDescription });
+          window.iris.sendCompanionWebRTCSignal?.({ type: 'answer', sdp: pc.localDescription });
           
         } else if (msg.type === 'ice' && msg.candidate && pcRef.current) {
           await pcRef.current.addIceCandidate(msg.candidate);
@@ -92,7 +92,7 @@ export default function CompanionWebRTC() {
       const dataUrl = canvas.toDataURL('image/jpeg', 0.2);
       const base64 = dataUrl.split(',')[1];
       if (base64) {
-        window.iris.sendCompanionWebRTCFrame(base64);
+        window.iris.sendCompanionWebRTCFrame?.(base64);
       }
     }, 1000); // 1 FPS
 
@@ -135,7 +135,7 @@ export default function CompanionWebRTC() {
       
       audioWorkletNode.port.onmessage = (e) => {
         // e.data is an ArrayBuffer containing Int16 PCM
-        window.iris.sendCompanionWebRTCAudio(e.data);
+        window.iris.sendCompanionWebRTCAudio?.(e.data);
       };
       
       source.connect(audioWorkletNode);

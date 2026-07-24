@@ -187,6 +187,11 @@ type IrisApi = {
   sendCompanionWebRTCSignal?: (signal: any) => void;
   sendCompanionWebRTCFrame?: (base64: string) => void;
   sendCompanionWebRTCAudio?: (pcm: ArrayBuffer) => void;
+  triggerRobotAction?: (args: {
+    robot_id: string;
+    action: string;
+    params?: Record<string, unknown>;
+  }) => Promise<{ status: string; message?: string; error?: string }>;
 };
 interface Window {
   iris: IrisApi;

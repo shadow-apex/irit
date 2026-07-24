@@ -16,8 +16,10 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "npx --yes kill-port 5173 8080 8081 4040 && taskkill /F /IM ngrok.exe >nul 2>&1 || exit 0",
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
+    "predev": "npx --yes kill-port 5173 8080 8081 4040 8443 && taskkill /F /IM ngrok.exe >nul 2>&1 || exit 0",
+    "dev": "concurrently -k -n VITE,ELECTRON,PHONE_CAM -c cyan,magenta,yellow \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\" \"npm run camera\"",
+    "camera": "node -e \"require('fs').existsSync('PHONE_CAMERA/node_modules')||require('child_process').execSync('npm install',{cwd:'PHONE_CAMERA',stdio:'inherit'})\" && node PHONE_CAMERA/server.js",
+    "camera:install": "npm install --prefix PHONE_CAMERA",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",

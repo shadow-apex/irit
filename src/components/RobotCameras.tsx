@@ -247,7 +247,7 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
     // "unhandled promise rejection" âm thầm, không ai biết lệnh có gửi
     // được hay không.
     const sendAction = (action: string) => {
-      window.iris.triggerRobotAction({ robot_id: expandedId, action }).catch((err: any) => {
+      window.iris.triggerRobotAction?.({ robot_id: expandedId, action })?.catch((err: any) => {
         console.error("[RobotCameras] Loi gui lenh dieu khien:", err);
       });
     };
