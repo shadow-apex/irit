@@ -131,15 +131,73 @@ export function getCompanionWsToken() {
   return wsToken;
 }
 
-export function isCompanionHttpsReady() {
-  return httpsServer !== null;
-}
-
+// AUDIT-COMP-B FIX (sample rate mismatch / rè, noise):
+// Bản cũ chỉ nhìn 4 byte đầu có phải "RIFF" không rồi CẮT CỨNG 44 byte, sau
+// đó main.mjs gửi buffer đó vào Gemini với mimeType cứng "audio/pcm;rate=16000"
+// — bất kể file WAV thật sự được ghi ở sample rate nào, hay thậm chí buffer
+// đó CÓ PHẢI PCM tuyến tính hay không.
+//
+// Rủi ro thật: `Audio.AndroidOutputFormat.DEFAULT` trong iris-companion/App.js
+// (đường Expo Go cũ) không đảm bảo sinh ra RIFF/WAV PCM 16kHz thật trên mọi
+// máy Android — nhiều máy sẽ ra container khác (vd AMR/3GP ép 8kHz) dù code
+// yêu cầu extension '.wav'. Khi đó buffer không bắt đầu bằng "RIFF" nên hàm
+// cũ không cắt gì cả và đẩy thẳng dữ liệu KHÔNG PHẢI PCM vào Gemini như thể
+// nó là PCM 16kHz -> ra tiếng rè/nhiễu hoặc im lặng.
+//
+// Sửa: đọc đúng các trường trong header WAV chuẩn (audioFormat, numChannels,
+// sampleRate, bitsPerSample) thay vì đoán mù, tìm đúng chunk "fmt "/"data"
+// (không giả định cố định offset 44 vì có máy chèn thêm chunk khác trước).
+// Trả về `{ pcm, sampleRate, valid }` để tầng gọi biết:
+//   - sampleRate THẬT của chunk này (không còn giả định cứng 16000)
+//   - valid=false nếu không phải RIFF/WAVE hoặc không phải PCM tuyến tính
+//     16-bit mono/stereo — tầng gọi nên DROP chunk này thay vì gửi rác vào
+//     Gemini (im lặng 1 chunk lỗi tốt hơn nhiều so với 1 chunk nhiễu).
 function stripWavHeader(buffer) {
-  if (buffer.length > 44 && buffer.slice(0, 4).toString('ascii') === 'RIFF') {
-    return buffer.slice(44);
+  const FALLBACK_SAMPLE_RATE = 16000;
+
+  if (buffer.length <= 44 || buffer.slice(0, 4).toString('ascii') !== 'RIFF' || buffer.slice(8, 12).toString('ascii') !== 'WAVE') {
+    // Không phải RIFF/WAVE hợp lệ (vd Android trả về container khác dù đặt
+    // tên .wav). Không có header đáng tin để đọc sampleRate -> đánh dấu
+    // invalid để tầng gọi có thể chọn drop thay vì gửi rác.
+    return { pcm: buffer, sampleRate: FALLBACK_SAMPLE_RATE, valid: false };
   }
-  return buffer;
+
+  // Tìm chunk "fmt " thay vì giả định luôn nằm ở offset 12 — một số bộ ghi âm
+  // (đặc biệt trên Android) chèn thêm chunk khác (vd "JUNK", "LIST") trước
+  // "fmt ", nên không thể tin cứng là header luôn đúng 44 byte.
+  let offset = 12;
+  let fmtFound = false;
+  let audioFormat = 0, numChannels = 0, sampleRate = FALLBACK_SAMPLE_RATE, bitsPerSample = 0;
+  let dataOffset = -1;
+
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.slice(offset, offset + 4).toString('ascii');
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const chunkBodyStart = offset + 8;
+
+    if (chunkId === 'fmt ' && chunkBodyStart + 16 <= buffer.length) {
+      audioFormat = buffer.readUInt16LE(chunkBodyStart);
+      numChannels = buffer.readUInt16LE(chunkBodyStart + 2);
+      sampleRate = buffer.readUInt32LE(chunkBodyStart + 4);
+      bitsPerSample = buffer.readUInt16LE(chunkBodyStart + 14);
+      fmtFound = true;
+    } else if (chunkId === 'data') {
+      dataOffset = chunkBodyStart;
+      break; // "data" luôn là chunk audio thật sự -> dừng ở đây
+    }
+
+    offset = chunkBodyStart + chunkSize + (chunkSize % 2); // chunk được pad chẵn byte
+  }
+
+  const isLinearPcm = audioFormat === 1 && bitsPerSample === 16 && (numChannels === 1 || numChannels === 2);
+
+  if (!fmtFound || dataOffset === -1 || !isLinearPcm) {
+    // Có RIFF/WAVE header nhưng không phải PCM 16-bit ta mong đợi (vd bị nén
+    // AMR/ADPCM) -> không an toàn để đẩy thẳng vào Gemini như PCM.
+    return { pcm: buffer.slice(Math.max(dataOffset, 44)), sampleRate, valid: false };
+  }
+
+  return { pcm: buffer.slice(dataOffset), sampleRate, valid: true };
 }
 
 export function sendSignalToPhone(data) {
@@ -152,7 +210,9 @@ export function sendSignalToPhone(data) {
  * Khởi tạo WebSocket server trên cổng 8080.
  *
  * @param {Function} emitEvent  — gửi log event ra renderer
- * @param {Function} sendAudioChunk — chuyển PCM buffer vào Gemini Live
+ * @param {Function} sendAudioChunk — chuyển PCM buffer vào Gemini Live.
+ *   AUDIT-COMP-B: nay nhận thêm tham số thứ 2 (sampleRate) đọc thật từ header
+ *   WAV của chunk, không còn giả định cứng 16000Hz.
  * @param {object}   mainWindow — BrowserWindow để gửi frame ra renderer (hiển thị UI)
  * @param {Function} [sendFrameToGemini] — nếu có, gửi base64 JPEG frame trực tiếp vào Gemini Live
  */
@@ -309,7 +369,21 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
           // lên đều bị bỏ qua trong im lặng, khiến mic điện thoại "kết nối
           // nhưng không có tiếng". Khôi phục: bóc header WAV (nếu có) rồi
           // đẩy buffer PCM thẳng vào Gemini Live.
-          sendAudioChunk(stripWavHeader(message));
+          //
+          // AUDIT-COMP-B FIX: dùng sampleRate ĐỌC ĐƯỢC từ header thay vì
+          // giả định cứng 16000, và DROP chunk nếu không phải PCM tuyến tính
+          // hợp lệ — tránh gửi dữ liệu rác (vd container nén trên 1 số máy
+          // Android) vào Gemini như thể là PCM sạch, nguyên nhân gây rè/nhiễu.
+          const { pcm, sampleRate, valid } = stripWavHeader(message);
+          if (!valid) {
+            emitEvent({
+              type: "log",
+              level: "warn",
+              message: "Companion: audio chunk không phải PCM 16-bit hợp lệ (WAV header thiếu/khác định dạng) — đã bỏ qua để tránh gây nhiễu, kiểm tra cấu hình ghi âm phía điện thoại.",
+            });
+            return;
+          }
+          sendAudioChunk(pcm, sampleRate);
         }
       } catch (err) {
         emitEvent({ type: "log", level: "warn", message: `Companion: malformed message ignored: ${err.message}` });

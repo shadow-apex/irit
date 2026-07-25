@@ -28,7 +28,7 @@ import { runComputerSession } from "./computer-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
 import { initTelegramBot } from "./telegram-bot.mjs";
-import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, isCompanionHttpsReady, sendSignalToPhone } from "./companion-server.mjs";
+import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, sendSignalToPhone } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3423,12 +3423,21 @@ function sendFrameToGemini(base64Jpeg) {
   }
 }
 
-function sendAudioChunk(arrayBuffer) {
+// AUDIT-COMP-B FIX: `sampleRate` giờ là tham số thật (mặc định 16000 để
+// tương thích ngược với 2 nơi gọi hiện có — companion:webrtc-audio và
+// live:audio — cả hai đều đã tự resample về đúng 16kHz PCM ở phía renderer
+// bằng AudioContext({sampleRate:16000}), xem CompanionWebRTC.tsx). Trước
+// đây giá trị này bị hardcode ngay trong hàm này, nên khi companion-server.mjs
+// nhận được 1 chunk audio KHÔNG thực sự ở 16kHz (đường Expo Go legacy trên
+// Android — xem stripWavHeader trong companion-server.mjs), Gemini vẫn bị
+// báo sai là "đây là 16kHz" -> giải mã sai tốc độ -> tiếng rè/nhiễu.
+function sendAudioChunk(arrayBuffer, sampleRate = 16000) {
   if (!liveSession || !arrayBuffer) return;
   const buffer = Buffer.from(new Uint8Array(arrayBuffer));
   if (!buffer.byteLength) return;
+  const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 16000;
   liveSession.sendRealtimeInput({
-    audio: { data: buffer.toString("base64"), mimeType: "audio/pcm;rate=16000" },
+    audio: { data: buffer.toString("base64"), mimeType: `audio/pcm;rate=${rate}` },
   });
 }
 
@@ -3665,7 +3674,6 @@ app.whenReady().then(() => {
   // (port 8081) tunnel above. See companion-server.mjs for why these can't share one.
   ipcMain.handle("companion:get-ws-tunnel", () => getCompanionWsTunnel());
   ipcMain.handle("companion:get-ws-token", () => getCompanionWsToken());
-  ipcMain.handle("companion:get-https-ready", () => isCompanionHttpsReady());
   ipcMain.handle("companion:get-phone-cam-url", () => {
     try {
       const p = path.join(__dirname, "../PHONE_CAMERA/.url");
@@ -3680,9 +3688,6 @@ app.whenReady().then(() => {
   // WebRTC Media Stream Handlers (Renderer -> Gemini)
   ipcMain.on("companion:webrtc-frame", (e, base64) => {
     if (typeof sendFrameToGemini === 'function') sendFrameToGemini(base64);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("companion:frame", base64);
-    }
   });
   ipcMain.on("companion:webrtc-audio", (e, pcm) => {
     sendAudioChunk(pcm);
