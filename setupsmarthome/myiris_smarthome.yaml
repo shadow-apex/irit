@@ -1,0 +1,41 @@
+esphome:
+  name: myiris-smarthome
+  friendly_name: "MyIris Smart Relay"
+  includes:
+    - smarthome_control.h
+
+esp32:
+  board: esp32dev # Dành cho mạch ESP32 thông dụng (VD: NodeMCU ESP32)
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "TEN_WIFI_CUA_BAN"
+  password: "MAT_KHAU_WIFI"
+
+captive_portal:
+
+# Bắt buộc phải có Web Server để nhận lệnh HTTP POST từ MyIris
+web_server:
+  port: 80
+
+# -------------------------------------------------------------
+# KHAI BÁO CÁC THIẾT BỊ (RELAY / CÔNG TẮC)
+# -------------------------------------------------------------
+switch:
+  - platform: gpio
+    pin: GPIO26  # Nối chân IN của Relay vào chân số 26 của ESP32
+    name: "Công tắc phòng khách"
+    id: relay_1
+    # inverted: true  # Bỏ comment dòng này nếu relay của bạn kích mức thấp (LOW)
+
+# -------------------------------------------------------------
+# NHÚNG CODE C++ ĐỂ NHẬN LỆNH TỪ IRIS
+# -------------------------------------------------------------
+custom_component:
+  - lambda: |-
+      auto smarthome_control = new SmartHomeControl();
+      return {smarthome_control};

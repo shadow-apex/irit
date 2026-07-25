@@ -1,0 +1,104 @@
+# =================================================================
+# CÁNH TAY ROBOT 4 KHỚP (Base / Shoulder / Elbow / Gripper)
+# =================================================================
+# AUDIT-ARM-01: Board camera (myiris_robot.yaml) chạy trên ESP32-CAM
+# (AI-Thinker) — sau khi cấp cho camera, 2 động cơ bánh xe, và 1 servo
+# base, board đó CHỈ CÒN ĐÚNG 1 GPIO an toàn (GPIO16). Không đủ để gắn
+# thêm 3 servo (shoulder/elbow/gripper) — kể cả đi qua driver I2C như
+# PCA9685 cũng cần tối thiểu 2 chân SDA/SCL trống mà board không còn.
+#
+# Vì vậy cánh tay 4 khớp được tách sang 1 board ESP32 THƯỜNG (dev kit,
+# không phải bản -CAM) rẻ và có nhiều GPIO trống hơn hẳn — dùng đúng
+# kiến trúc multi-robot mà main.mjs/robots.json đã hỗ trợ sẵn: mỗi
+# "robot" trong robots.json có control_url riêng, không nhất thiết phải
+# chung 1 board vật lý với camera.
+#
+# Đăng ký board này thành 1 entry MỚI trong robots.json, VD:
+#   "esp32_arm_1": {
+#     "name": "Canh Tay Robot",
+#     "control_url": "http://<IP-cua-board-nay>/control",
+#     "token": "doi-chuoi-bi-mat-nay-thanh-token-rieng-cua-ban",
+#     "has_arm": true
+#   }
+# (xem robots.json — bản audit đã set has_arm:false ở robot camera vì
+# nó chỉ có 1 servo "turret" xoay camera, không phải cánh tay đầy đủ)
+# =================================================================
+
+esphome:
+  name: myiris-arm
+  friendly_name: MyIris Robot Arm
+  includes:
+    - myiris_arm_control.h
+
+esp32:
+  # Dùng board ESP32 dev kit thường (VD esp32dev / nodemcu-32s) — KHÔNG
+  # phải esp32cam. Đổi lại giá trị "board" đúng với module bạn đang có
+  # (xem danh sách board hợp lệ trong docs ESPHome).
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: "TEN_WIFI_CUA_BAN"
+  password: "MAT_KHAU_WIFI"
+  ap:
+    ssid: "Myiris-Arm-AP"
+    password: "password123"
+
+captive_portal:
+
+web_server:
+  port: 80
+
+api:
+
+# -------------------------------------------------------------
+# 4 SERVO — mỗi servo 1 GPIO PWM (ledc) riêng. Một ESP32 dev kit
+# thường có ~25 GPIO khả dụng nên không cần chia sẻ qua I2C/PCA9685;
+# nếu sau này bạn muốn gắn thêm nhiều servo hơn nữa (>8), hãy chuyển
+# sang PCA9685 (platform: pca9685, chỉ tốn 2 chân SDA/SCL cho tối đa
+# 16 kênh PWM).
+# -------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO13
+    id: pwm_base
+    frequency: 50Hz
+  - platform: ledc
+    pin: GPIO14
+    id: pwm_shoulder
+    frequency: 50Hz
+  - platform: ledc
+    pin: GPIO27
+    id: pwm_elbow
+    frequency: 50Hz
+  - platform: ledc
+    pin: GPIO26
+    id: pwm_gripper
+    frequency: 50Hz
+
+servo:
+  - id: servo_base
+    output: pwm_base
+    min_level: 2.5%
+    max_level: 12.5%
+  - id: servo_shoulder
+    output: pwm_shoulder
+    min_level: 2.5%
+    max_level: 12.5%
+  - id: servo_elbow
+    output: pwm_elbow
+    min_level: 2.5%
+    max_level: 12.5%
+  - id: servo_gripper
+    output: pwm_gripper
+    min_level: 2.5%
+    max_level: 12.5%
+
+custom_component:
+  - lambda: |-
+      auto myiris_arm_control = new MyIrisArmControl();
+      return {myiris_arm_control};
