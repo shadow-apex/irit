@@ -157,26 +157,6 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 Mở app <strong>Expo Go</strong> trên điện thoại và quét mã QR này.<br/>
                 (Kết nối qua Wi-Fi nội bộ: <code>{ip}</code>)
               </div>
-              {/* BUG-COMP-TOKEN FIX: app Expo Go cần nhập tay IP + token vào
-                  2 ô riêng trong app (nó không đọc được deep-link params từ
-                  QR exp://). Hiện token ngay ở đây để người dùng copy dán
-                  sang app, tránh phải mở tab "Iris Camera" tìm token rồi lại
-                  quay về tab này. Không có token này thì companion-server.mjs
-                  sẽ luôn từ chối kết nối (Invalid token). */}
-              {wsToken && (
-                <div style={{ background: "#152a1e", border: "1px solid #255a3a", borderRadius: 8, padding: 12, width: "100%" }}>
-                  <div style={{ color: "#eee", fontWeight: "bold", marginBottom: 6, fontSize: 12 }}>
-                    Token xác thực (dán vào ô "Token" trong app Iris Companion)
-                  </div>
-                  <code
-                    onClick={() => navigator.clipboard?.writeText(wsToken)}
-                    title="Bấm để copy"
-                    style={{ display: "block", background: "#000", padding: "8px 10px", borderRadius: 4, fontSize: 11, color: "rgb(40, 205, 170)", wordBreak: "break-all", cursor: "pointer" }}
-                  >
-                    {wsToken}
-                  </code>
-                </div>
-              )}
               
               <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {loading ? (
@@ -211,14 +191,17 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
             <>
               <div style={{ color: "#aaa", textAlign: "center", margin: 0, lineHeight: 1.5, fontSize: 14 }}>
                 Mở ứng dụng <strong>Camera</strong> trên điện thoại và quét mã QR này để truyền video vào <strong>Iris (Alt+C)</strong>.
+                {!wsTunnelUrl && ip ? (
+                  <><br /><span style={{ fontSize: 12 }}>(Đang dùng Wi-Fi nội bộ: <code>{ip}</code> — QR sẽ tự đổi sang ngrok tunnel nếu/khi tunnel đó sẵn sàng.)</span></>
+                ) : null}
               </div>
-              
+
               <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {wsTunnelUrl ? (
+                {ip || wsTunnelUrl ? (
                   <img src={webQrUrl} alt="Iris Web QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                 ) : (
                   <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 13, padding: 10 }}>
-                    Đang chờ tạo đường dẫn ngrok tunnel...
+                    Đang lấy địa chỉ IP...
                   </div>
                 )}
               </div>
@@ -240,7 +223,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 </code>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 6 }}>Lưu ý: URL này dùng cho hệ thống OBS/Python độc lập.</div>
               </>
-            ) : activeTab === 'iris' && wsTunnelUrl ? (
+            ) : activeTab === 'iris' && (ip || wsTunnelUrl) ? (
               <>
                 <code
                   onClick={() => navigator.clipboard?.writeText(webUrl)}

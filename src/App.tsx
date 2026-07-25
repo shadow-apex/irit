@@ -232,10 +232,8 @@ export default function App() {
   useEffect(() => {
     const unsubscribeStream = companionStream.subscribeStream((stream) => {
       if (stream) {
-        // Kết nối camera thành công: tắt khung QR (không cần quét nữa)
-        // và hiện camera PiP (tương đương bấm Alt+C).
-        setShowCompanionQR(false);
         setShowCompanionPip(true);
+        setShowCompanionQR(false);
       }
     });
 
@@ -245,8 +243,8 @@ export default function App() {
       cleanupExpoFrame = window.iris.onCompanionFrame(() => {
         if (!hasOpenedForExpoSession) {
           hasOpenedForExpoSession = true;
-          setShowCompanionQR(false);
           setShowCompanionPip(true);
+          setShowCompanionQR(false);
         }
       });
     }

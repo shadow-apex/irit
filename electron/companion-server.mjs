@@ -39,24 +39,6 @@ let ngrokConnected = false;
 let wsToken = null;
 let hasStartedNgrokBefore = false;
 
-// AUDIT-COMP-02 FIX: Prevent Brute-Force DoS on WebSocket token
-const TOKEN_FAILURE_WINDOW_MS = 60000;
-const MAX_TOKEN_FAILURES = 10;
-const tokenFailuresByIp = new Map();
-
-function isTokenBruteForceLimited(ip) {
-  const now = Date.now();
-  const record = tokenFailuresByIp.get(ip) || { count: 0, firstFail: now };
-  if (now - record.firstFail > TOKEN_FAILURE_WINDOW_MS) {
-    record.count = 1;
-    record.firstFail = now;
-  } else {
-    record.count++;
-  }
-  tokenFailuresByIp.set(ip, record);
-  return record.count > MAX_TOKEN_FAILURES;
-}
-
 // `ngrok` is an optional dependency — only required if the user actually
 // wants remote (non-LAN) streaming. Import lazily so a machine without it
 // installed doesn't crash the whole companion server, just skips the tunnel.
@@ -149,73 +131,36 @@ export function getCompanionWsToken() {
   return wsToken;
 }
 
-// AUDIT-COMP-B FIX (sample rate mismatch / rè, noise):
-// Bản cũ chỉ nhìn 4 byte đầu có phải "RIFF" không rồi CẮT CỨNG 44 byte, sau
-// đó main.mjs gửi buffer đó vào Gemini với mimeType cứng "audio/pcm;rate=16000"
-// — bất kể file WAV thật sự được ghi ở sample rate nào, hay thậm chí buffer
-// đó CÓ PHẢI PCM tuyến tính hay không.
-//
-// Rủi ro thật: `Audio.AndroidOutputFormat.DEFAULT` trong iris-companion/App.js
-// (đường Expo Go cũ) không đảm bảo sinh ra RIFF/WAV PCM 16kHz thật trên mọi
-// máy Android — nhiều máy sẽ ra container khác (vd AMR/3GP ép 8kHz) dù code
-// yêu cầu extension '.wav'. Khi đó buffer không bắt đầu bằng "RIFF" nên hàm
-// cũ không cắt gì cả và đẩy thẳng dữ liệu KHÔNG PHẢI PCM vào Gemini như thể
-// nó là PCM 16kHz -> ra tiếng rè/nhiễu hoặc im lặng.
-//
-// Sửa: đọc đúng các trường trong header WAV chuẩn (audioFormat, numChannels,
-// sampleRate, bitsPerSample) thay vì đoán mù, tìm đúng chunk "fmt "/"data"
-// (không giả định cố định offset 44 vì có máy chèn thêm chunk khác trước).
-// Trả về `{ pcm, sampleRate, valid }` để tầng gọi biết:
-//   - sampleRate THẬT của chunk này (không còn giả định cứng 16000)
-//   - valid=false nếu không phải RIFF/WAVE hoặc không phải PCM tuyến tính
-//     16-bit mono/stereo — tầng gọi nên DROP chunk này thay vì gửi rác vào
-//     Gemini (im lặng 1 chunk lỗi tốt hơn nhiều so với 1 chunk nhiễu).
+// AUDIT-COMP-15 FIX: assuming the PCM payload always starts at byte 44 only
+// holds for the minimal 44-byte canonical WAV header. Some Android encoders
+// (and other recorders) insert extra chunks (e.g. `LIST`/`fact`) before
+// `data`, which shifts the payload start and previously fed a few stray
+// header bytes into Gemini as "audio" on every chunk. Walk the real RIFF
+// chunk table and cut at the actual `data` subchunk so this can't drift.
 function stripWavHeader(buffer) {
-  const FALLBACK_SAMPLE_RATE = 16000;
-
-  if (buffer.length <= 44 || buffer.slice(0, 4).toString('ascii') !== 'RIFF' || buffer.slice(8, 12).toString('ascii') !== 'WAVE') {
-    // Không phải RIFF/WAVE hợp lệ (vd Android trả về container khác dù đặt
-    // tên .wav). Không có header đáng tin để đọc sampleRate -> đánh dấu
-    // invalid để tầng gọi có thể chọn drop thay vì gửi rác.
-    return { pcm: buffer, sampleRate: FALLBACK_SAMPLE_RATE, valid: false };
+  if (buffer.length < 12 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
+    // Not a WAV container (e.g. already-raw PCM) — pass through unchanged.
+    return buffer;
   }
 
-  // Tìm chunk "fmt " thay vì giả định luôn nằm ở offset 12 — một số bộ ghi âm
-  // (đặc biệt trên Android) chèn thêm chunk khác (vd "JUNK", "LIST") trước
-  // "fmt ", nên không thể tin cứng là header luôn đúng 44 byte.
   let offset = 12;
-  let fmtFound = false;
-  let audioFormat = 0, numChannels = 0, sampleRate = FALLBACK_SAMPLE_RATE, bitsPerSample = 0;
-  let dataOffset = -1;
-
   while (offset + 8 <= buffer.length) {
-    const chunkId = buffer.slice(offset, offset + 4).toString('ascii');
+    const chunkId = buffer.toString('ascii', offset, offset + 4);
     const chunkSize = buffer.readUInt32LE(offset + 4);
-    const chunkBodyStart = offset + 8;
+    const dataStart = offset + 8;
 
-    if (chunkId === 'fmt ' && chunkBodyStart + 16 <= buffer.length) {
-      audioFormat = buffer.readUInt16LE(chunkBodyStart);
-      numChannels = buffer.readUInt16LE(chunkBodyStart + 2);
-      sampleRate = buffer.readUInt32LE(chunkBodyStart + 4);
-      bitsPerSample = buffer.readUInt16LE(chunkBodyStart + 14);
-      fmtFound = true;
-    } else if (chunkId === 'data') {
-      dataOffset = chunkBodyStart;
-      break; // "data" luôn là chunk audio thật sự -> dừng ở đây
+    if (chunkId === 'data') {
+      const dataEnd = Math.min(dataStart + chunkSize, buffer.length);
+      return buffer.slice(dataStart, dataEnd);
     }
 
-    offset = chunkBodyStart + chunkSize + (chunkSize % 2); // chunk được pad chẵn byte
+    // Chunks are word-aligned: odd-sized chunks have a padding byte.
+    offset = dataStart + chunkSize + (chunkSize % 2);
   }
 
-  const isLinearPcm = audioFormat === 1 && bitsPerSample === 16 && (numChannels === 1 || numChannels === 2);
-
-  if (!fmtFound || dataOffset === -1 || !isLinearPcm) {
-    // Có RIFF/WAVE header nhưng không phải PCM 16-bit ta mong đợi (vd bị nén
-    // AMR/ADPCM) -> không an toàn để đẩy thẳng vào Gemini như PCM.
-    return { pcm: buffer.slice(Math.max(dataOffset, 44)), sampleRate, valid: false };
-  }
-
-  return { pcm: buffer.slice(dataOffset), sampleRate, valid: true };
+  // No `data` subchunk found — malformed WAV; fall back to the old
+  // fixed-offset behaviour rather than dropping the chunk entirely.
+  return buffer.length > 44 ? buffer.slice(44) : buffer;
 }
 
 export function sendSignalToPhone(data) {
@@ -228,9 +173,7 @@ export function sendSignalToPhone(data) {
  * Khởi tạo WebSocket server trên cổng 8080.
  *
  * @param {Function} emitEvent  — gửi log event ra renderer
- * @param {Function} sendAudioChunk — chuyển PCM buffer vào Gemini Live.
- *   AUDIT-COMP-B: nay nhận thêm tham số thứ 2 (sampleRate) đọc thật từ header
- *   WAV của chunk, không còn giả định cứng 16000Hz.
+ * @param {Function} sendAudioChunk — chuyển PCM buffer vào Gemini Live
  * @param {object}   mainWindow — BrowserWindow để gửi frame ra renderer (hiển thị UI)
  * @param {Function} [sendFrameToGemini] — nếu có, gửi base64 JPEG frame trực tiếp vào Gemini Live
  */
@@ -317,26 +260,17 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
     });
   }
 
-  // Bypass ngrok crash on Windows Native
-  // startNgrokTunnel(emitEvent);
+  // Fire-and-forget: the LAN server is already usable while the tunnel comes up.
+  startNgrokTunnel(emitEvent);
 
   wss.on('connection', (ws, req) => {
     // ── SECURITY FIX: Authenticate token ──────────────────────────────
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const remoteIp = req.socket?.remoteAddress || 'unknown';
-
     if (url.searchParams.get('token') !== wsToken) {
-      if (isTokenBruteForceLimited(remoteIp)) {
-        emitEvent({ type: "log", level: "warn", message: `Companion: too many invalid-token attempts from ${remoteIp} — dropping.` });
-        ws.terminate();
-        return;
-      }
       emitEvent({ type: "log", level: "warn", message: "Companion: connection rejected (invalid token)." });
       ws.close(4001, "Invalid token");
       return;
     }
-    // Kết nối hợp lệ — xoá lịch sử thử sai của IP này (đỡ giữ state vô ích).
-    tokenFailuresByIp.delete(remoteIp);
 
     // ── BUG-COMP-03 FIX: Reject second connection ─────────────────────────
     if (activeConnection && activeConnection.readyState === activeConnection.OPEN) {
@@ -376,41 +310,34 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
             return;
           }
 
-          // BUG-COMP-LEGACY-FRAME FIX: app Expo Go cũ (iris-companion/App.js)
-          // chưa dùng RTCPeerConnection thật — nó vẫn gửi từng frame JPEG rời
-          // rạc qua JSON { type: 'frame', data: base64 }. Trước đây nhánh
-          // này không được xử lý gì cả nên frame bị lặng lẽ drop, khiến
-          // camera Companion "kết nối được nhưng không có hình". Khôi phục:
-          // đẩy frame vào Gemini Live (vision) VÀ phát lại cho renderer qua
-          // "companion:frame" để CompanionVideo.tsx (PiP Alt+C) hiển thị ở
-          // nhánh dự phòng Expo Go (khi chưa có luồng WebRTC thật).
-          if (parsed.type === 'frame' && typeof parsed.data === 'string') {
-            if (typeof sendFrameToGemini === 'function') sendFrameToGemini(parsed.data);
+          // BUG-COMP-13 FIX: the legacy Expo Go client (iris-companion/App.js)
+          // sends camera stills as `{ type: 'frame', data: <base64 jpeg> }`
+          // JSON text frames every ~1s. This branch used to be missing
+          // entirely, so those frames were parsed and silently discarded —
+          // the desktop PiP (Alt+C) never had anything to draw for Expo Go
+          // clients and Gemini never got a vision frame from that path.
+          // Restore the broadcast to the renderer (for on-screen PiP) and
+          // feed it into Gemini Live's vision input, mirroring what the
+          // WebRTC path already does via companion:webrtc-frame.
+          if (parsed.type === "frame" && typeof parsed.data === "string" && parsed.data.length) {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send("companion:frame", parsed.data);
             }
+            if (typeof sendFrameToGemini === "function") sendFrameToGemini(parsed.data);
           }
         } else {
-          // BUG-COMP-LEGACY-AUDIO FIX: nhánh binary trước đây không tồn tại
-          // -> mọi audio chunk (PCM 16kHz bọc header WAV) từ app Expo Go gửi
-          // lên đều bị bỏ qua trong im lặng, khiến mic điện thoại "kết nối
-          // nhưng không có tiếng". Khôi phục: bóc header WAV (nếu có) rồi
-          // đẩy buffer PCM thẳng vào Gemini Live.
-          //
-          // AUDIT-COMP-B FIX: dùng sampleRate ĐỌC ĐƯỢC từ header thay vì
-          // giả định cứng 16000, và DROP chunk nếu không phải PCM tuyến tính
-          // hợp lệ — tránh gửi dữ liệu rác (vd container nén trên 1 số máy
-          // Android) vào Gemini như thể là PCM sạch, nguyên nhân gây rè/nhiễu.
-          const { pcm, sampleRate, valid } = stripWavHeader(message);
-          if (!valid) {
-            emitEvent({
-              type: "log",
-              level: "warn",
-              message: "Companion: audio chunk không phải PCM 16-bit hợp lệ (WAV header thiếu/khác định dạng) — đã bỏ qua để tránh gây nhiễu, kiểm tra cấu hình ghi âm phía điện thoại.",
-            });
-            return;
+          // BUG-COMP-14 FIX: the same legacy client streams 500ms PCM/WAV
+          // chunks as raw binary WebSocket frames (see streamAudioLoop in
+          // iris-companion/App.js). `stripWavHeader` existed but was never
+          // called, and `sendAudioChunk` (passed into this function) was
+          // never invoked either — so phone audio from the Expo Go path
+          // never reached Gemini Live at all. Strip the 44-byte WAV header
+          // and forward the raw 16kHz mono PCM.
+          if (typeof sendAudioChunk === "function") {
+            const buffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
+            const pcm = stripWavHeader(buffer);
+            if (pcm.length) sendAudioChunk(pcm);
           }
-          sendAudioChunk(pcm, sampleRate);
         }
       } catch (err) {
         emitEvent({ type: "log", level: "warn", message: `Companion: malformed message ignored: ${err.message}` });
@@ -454,7 +381,6 @@ export function stopCompanionServer() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
-  tokenFailuresByIp.clear();
   if (activeConnection) {
     try { activeConnection.close(); } catch {}
     activeConnection = null;

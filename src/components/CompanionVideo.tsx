@@ -45,6 +45,14 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = webrtcStream;
+      if (webrtcStream) {
+        // BUG-COMP-WEBRTC-03 FIX: some Chromium builds don't honor the
+        // `autoPlay` attribute reliably when `srcObject` is (re)assigned
+        // after mount — calling play() explicitly is the documented
+        // workaround. Errors here are expected/harmless (e.g. a stale
+        // AbortError if the stream changes again immediately after).
+        videoRef.current.play().catch(() => {});
+      }
     }
   }, [webrtcStream]);
 
@@ -124,6 +132,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           ref={videoRef}
           autoPlay
           playsInline
+          muted
           style={{
             width: "100%",
             height: "100%",
