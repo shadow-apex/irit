@@ -3680,6 +3680,9 @@ app.whenReady().then(() => {
   // WebRTC Media Stream Handlers (Renderer -> Gemini)
   ipcMain.on("companion:webrtc-frame", (e, base64) => {
     if (typeof sendFrameToGemini === 'function') sendFrameToGemini(base64);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("companion:frame", base64);
+    }
   });
   ipcMain.on("companion:webrtc-audio", (e, pcm) => {
     sendAudioChunk(pcm);

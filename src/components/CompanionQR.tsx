@@ -8,7 +8,6 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
   const [wsTunnelUrl, setWsTunnelUrl] = useState<string | null>(null);
   const [wsToken, setWsToken] = useState<string | null>(null);
   const [phoneCamUrl, setPhoneCamUrl] = useState<string | null>(null);
-  const [httpsReady, setHttpsReady] = useState<boolean | null>(null);
   const [activeTab, setActiveTab] = useState<'iris' | 'obs' | 'expo'>('iris');
 
   useEffect(() => {
@@ -38,23 +37,12 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
     const pollWsTunnel = async () => {
       if (cancelled || !window.iris?.getCompanionWsTunnel) return;
       try {
-        // BUG-COMP-QR-TOKEN-01 FIX: `wsToken` được server tạo ra NGAY LẬP
-        // TỨC lúc khởi động (crypto.randomBytes chạy trước cả bước gọi
-        // ngrok trong companion-server.mjs), nhưng trước đây dòng
-        // `setWsToken(token)` bị lồng bên trong `if (url)` — nghĩa là nếu
-        // ngrok chưa kết nối được (thiếu IRIS_NGROK_AUTHTOKEN, mạng chặn,
-        // v.v.) thì token永远 không vào state, kể cả khi muốn dùng QR dự
-        // phòng qua LAN (https://<ip>:8444) thì URL đó cũng thiếu
-        // `?token=` và bị server từ chối kết nối (invalid token).
-        // Giờ lấy token ngay khi có, không phụ thuộc vào việc ngrok đã
-        // xong hay chưa.
-        const token = window.iris.getCompanionWsToken ? await window.iris.getCompanionWsToken() : null;
-        if (token && !cancelled) setWsToken(token);
-
         const url = await window.iris.getCompanionWsTunnel();
+        const token = window.iris.getCompanionWsToken ? await window.iris.getCompanionWsToken() : null;
         if (url) {
           if (!cancelled) {
             setWsTunnelUrl(url);
+            if (token) setWsToken(token);
           }
           return;
         }
@@ -102,22 +90,6 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
       } catch (err) {
       } finally {
         if (!cancelled) setLoading(false);
-      }
-
-      // UPGRADE: check once whether the local mkcert TLS cert loaded (see
-      // isCompanionHttpsReady() in companion-server.mjs). This never flips
-      // mid-session — the HTTPS server either bound at startup or it didn't
-      // — so a single check is enough; no need to poll it every 2s like the
-      // tunnel/token above.
-      try {
-        if (window.iris?.getCompanionHttpsReady) {
-          const ready = await window.iris.getCompanionHttpsReady();
-          if (!cancelled) setHttpsReady(ready);
-        } else {
-          if (!cancelled) setHttpsReady(null);
-        }
-      } catch (err) {
-        if (!cancelled) setHttpsReady(null);
       }
 
       pollTunnel();
@@ -185,6 +157,26 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 Mở app <strong>Expo Go</strong> trên điện thoại và quét mã QR này.<br/>
                 (Kết nối qua Wi-Fi nội bộ: <code>{ip}</code>)
               </div>
+              {/* BUG-COMP-TOKEN FIX: app Expo Go cần nhập tay IP + token vào
+                  2 ô riêng trong app (nó không đọc được deep-link params từ
+                  QR exp://). Hiện token ngay ở đây để người dùng copy dán
+                  sang app, tránh phải mở tab "Iris Camera" tìm token rồi lại
+                  quay về tab này. Không có token này thì companion-server.mjs
+                  sẽ luôn từ chối kết nối (Invalid token). */}
+              {wsToken && (
+                <div style={{ background: "#152a1e", border: "1px solid #255a3a", borderRadius: 8, padding: 12, width: "100%" }}>
+                  <div style={{ color: "#eee", fontWeight: "bold", marginBottom: 6, fontSize: 12 }}>
+                    Token xác thực (dán vào ô "Token" trong app Iris Companion)
+                  </div>
+                  <code
+                    onClick={() => navigator.clipboard?.writeText(wsToken)}
+                    title="Bấm để copy"
+                    style={{ display: "block", background: "#000", padding: "8px 10px", borderRadius: 4, fontSize: 11, color: "rgb(40, 205, 170)", wordBreak: "break-all", cursor: "pointer" }}
+                  >
+                    {wsToken}
+                  </code>
+                </div>
+              )}
               
               <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {loading ? (
@@ -219,49 +211,21 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
             <>
               <div style={{ color: "#aaa", textAlign: "center", margin: 0, lineHeight: 1.5, fontSize: 14 }}>
                 Mở ứng dụng <strong>Camera</strong> trên điện thoại và quét mã QR này để truyền video vào <strong>Iris (Alt+C)</strong>.
-                {!wsTunnelUrl && httpsReady === true && (
-                  <><br /><span style={{ color: "#f0c040" }}>Đang dùng chế độ Wi-Fi nội bộ (chưa có ngrok tunnel) — điện thoại phải cùng mạng Wi-Fi với máy tính.</span></>
-                )}
               </div>
-
-              {/* BUG-COMP-QR-IRIS-01 FIX: Trước đây QR chỉ hiện khi `wsTunnelUrl`
-                  (ngrok) sẵn sàng, nên nếu ngrok không kết nối được (thiếu
-                  IRIS_NGROK_AUTHTOKEN, mạng chặn, chưa cài package `ngrok`...)
-                  thì tab "Iris Camera" kẹt mãi ở thông báo lỗi dù server LAN
-                  HTTPS (cổng 8444) đã sẵn sàng dùng ngay. `webUrl`/`webQrUrl`
-                  bên dưới đã tự động fallback về `https://<ip>:8444?token=...`
-                  khi chưa có `wsTunnelUrl` — giờ chỉ cần render nó ngay khi có
-                  `ip` và `wsToken`, thay vì chặn cứng theo `wsTunnelUrl`.
-
-                  UPGRADE (httpsReady): nhưng nếu server LAN HTTPS 8444 KHÔNG
-                  khởi động được (thiếu cert mkcert — xem isCompanionHttpsReady
-                  trong companion-server.mjs), QR đó sẽ trỏ tới một cổng chết
-                  và quét vào sẽ báo lỗi kết nối. Trường hợp này ưu tiên cảnh
-                  báo rõ ràng thay vì hiện QR trông "bình thường" nhưng chết. */}
+              
               <div style={{ width: 250, height: 250, backgroundColor: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {wsTunnelUrl || (ip && wsToken && httpsReady !== false) ? (
+                {wsTunnelUrl ? (
                   <img src={webQrUrl} alt="Iris Web QR Code" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                ) : ip && wsToken && httpsReady === false ? (
-                  <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 12, padding: 10, lineHeight: 1.5 }}>
-                    Chưa có cert HTTPS cục bộ!<br /><br />
-                    <span style={{ fontSize: 11, fontWeight: "normal", color: "#000" }}>
-                      Điện thoại cần kết nối qua HTTPS mới mở được camera. Chạy{" "}
-                      <code>PHONE_CAMERA/setup.ps1</code> (PowerShell) để tự động tạo{" "}
-                      <code>cert.pem</code>/<code>key.pem</code>, hoặc xem hướng dẫn thủ công tại{" "}
-                      <code>PHONE_CAMERA/README.md</code> (mục Quick start). Nếu không muốn cài mkcert, cứ
-                      để yên — Iris sẽ tự chuyển sang QR ngrok tunnel ở trên ngay khi kết nối xong.
-                    </span>
-                  </div>
                 ) : (
                   <div style={{ color: "#d32f2f", fontWeight: "bold", textAlign: "center", fontSize: 13, padding: 10 }}>
-                    Đang khởi động server companion...
+                    Đang chờ tạo đường dẫn ngrok tunnel...
                   </div>
                 )}
               </div>
             </>
           )}
 
-          <div style={{ background: "#152a1e", border: "1px solid "  + ((phoneCamUrl || wsTunnelUrl || (ip && wsToken && httpsReady !== false)) ? "#255a3a" : "#2a2a2a"), borderRadius: 8, padding: 16, width: "100%" }}>
+          <div style={{ background: "#152a1e", border: "1px solid "  + ((phoneCamUrl || wsTunnelUrl) ? "#255a3a" : "#2a2a2a"), borderRadius: 8, padding: 16, width: "100%" }}>
             <div style={{ color: "#eee", fontWeight: "bold", marginBottom: 8, fontSize: 13 }}>
               URL kết nối (dành cho dán thủ công / dùng chung với OBS)
             </div>
@@ -276,7 +240,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 </code>
                 <div style={{ color: "#888", fontSize: 11, marginTop: 6 }}>Lưu ý: URL này dùng cho hệ thống OBS/Python độc lập.</div>
               </>
-            ) : activeTab === 'iris' && (wsTunnelUrl || (ip && wsToken && httpsReady !== false)) ? (
+            ) : activeTab === 'iris' && wsTunnelUrl ? (
               <>
                 <code
                   onClick={() => navigator.clipboard?.writeText(webUrl)}

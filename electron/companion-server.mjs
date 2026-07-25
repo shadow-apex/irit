@@ -131,12 +131,6 @@ export function getCompanionWsToken() {
   return wsToken;
 }
 
-// UPGRADE: exposed so the desktop UI (CompanionQR.tsx) can tell whether the
-// LAN HTTPS fallback (https://<ip>:8444) is actually reachable before
-// rendering a QR code that points at it. Without this, a machine that never
-// ran `mkcert` (see PHONE_CAMERA/README Setup step 3) would render a QR that
-// looks fine but silently fails to connect once scanned — same class of bug
-// as BUG-COMP-QR-IRIS-01, just one layer deeper.
 export function isCompanionHttpsReady() {
   return httpsServer !== null;
 }
@@ -245,8 +239,8 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
     });
   }
 
-  // Fire-and-forget: the LAN server is already usable while the tunnel comes up.
-  startNgrokTunnel(emitEvent);
+  // Bypass ngrok crash on Windows Native
+  // startNgrokTunnel(emitEvent);
 
   wss.on('connection', (ws, req) => {
     // ── SECURITY FIX: Authenticate token ──────────────────────────────
@@ -286,13 +280,36 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
       try {
         if (!isBinary) {
           const parsed = JSON.parse(message.toString());
-          
+
           // Relay WebRTC signaling from Phone to Desktop Renderer
           if (["peer-ready", "offer", "answer", "ice", "control", "peer-left"].includes(parsed.type)) {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send("companion:webrtc-signal", parsed);
             }
+            return;
           }
+
+          // BUG-COMP-LEGACY-FRAME FIX: app Expo Go cũ (iris-companion/App.js)
+          // chưa dùng RTCPeerConnection thật — nó vẫn gửi từng frame JPEG rời
+          // rạc qua JSON { type: 'frame', data: base64 }. Trước đây nhánh
+          // này không được xử lý gì cả nên frame bị lặng lẽ drop, khiến
+          // camera Companion "kết nối được nhưng không có hình". Khôi phục:
+          // đẩy frame vào Gemini Live (vision) VÀ phát lại cho renderer qua
+          // "companion:frame" để CompanionVideo.tsx (PiP Alt+C) hiển thị ở
+          // nhánh dự phòng Expo Go (khi chưa có luồng WebRTC thật).
+          if (parsed.type === 'frame' && typeof parsed.data === 'string') {
+            if (typeof sendFrameToGemini === 'function') sendFrameToGemini(parsed.data);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("companion:frame", parsed.data);
+            }
+          }
+        } else {
+          // BUG-COMP-LEGACY-AUDIO FIX: nhánh binary trước đây không tồn tại
+          // -> mọi audio chunk (PCM 16kHz bọc header WAV) từ app Expo Go gửi
+          // lên đều bị bỏ qua trong im lặng, khiến mic điện thoại "kết nối
+          // nhưng không có tiếng". Khôi phục: bóc header WAV (nếu có) rồi
+          // đẩy buffer PCM thẳng vào Gemini Live.
+          sendAudioChunk(stripWavHeader(message));
         }
       } catch (err) {
         emitEvent({ type: "log", level: "warn", message: `Companion: malformed message ignored: ${err.message}` });
