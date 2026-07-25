@@ -39,6 +39,24 @@ let ngrokConnected = false;
 let wsToken = null;
 let hasStartedNgrokBefore = false;
 
+// AUDIT-COMP-02 FIX: Prevent Brute-Force DoS on WebSocket token
+const TOKEN_FAILURE_WINDOW_MS = 60000;
+const MAX_TOKEN_FAILURES = 10;
+const tokenFailuresByIp = new Map();
+
+function isTokenBruteForceLimited(ip) {
+  const now = Date.now();
+  const record = tokenFailuresByIp.get(ip) || { count: 0, firstFail: now };
+  if (now - record.firstFail > TOKEN_FAILURE_WINDOW_MS) {
+    record.count = 1;
+    record.firstFail = now;
+  } else {
+    record.count++;
+  }
+  tokenFailuresByIp.set(ip, record);
+  return record.count > MAX_TOKEN_FAILURES;
+}
+
 // `ngrok` is an optional dependency — only required if the user actually
 // wants remote (non-LAN) streaming. Import lazily so a machine without it
 // installed doesn't crash the whole companion server, just skips the tunnel.
@@ -305,11 +323,20 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   wss.on('connection', (ws, req) => {
     // ── SECURITY FIX: Authenticate token ──────────────────────────────
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const remoteIp = req.socket?.remoteAddress || 'unknown';
+
     if (url.searchParams.get('token') !== wsToken) {
+      if (isTokenBruteForceLimited(remoteIp)) {
+        emitEvent({ type: "log", level: "warn", message: `Companion: too many invalid-token attempts from ${remoteIp} — dropping.` });
+        ws.terminate();
+        return;
+      }
       emitEvent({ type: "log", level: "warn", message: "Companion: connection rejected (invalid token)." });
       ws.close(4001, "Invalid token");
       return;
     }
+    // Kết nối hợp lệ — xoá lịch sử thử sai của IP này (đỡ giữ state vô ích).
+    tokenFailuresByIp.delete(remoteIp);
 
     // ── BUG-COMP-03 FIX: Reject second connection ─────────────────────────
     if (activeConnection && activeConnection.readyState === activeConnection.OPEN) {
@@ -427,6 +454,7 @@ export function stopCompanionServer() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+  tokenFailuresByIp.clear();
   if (activeConnection) {
     try { activeConnection.close(); } catch {}
     activeConnection = null;
