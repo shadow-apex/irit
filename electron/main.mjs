@@ -2372,25 +2372,19 @@ function stopSidecar(handle, { timeoutMs = 3000 } = {}) {
   });
 }
 
-/** Trả về đường dẫn thư mục ghi âm theo ngày: meeting_recordings/YYYY-MM-DD/ */
-function getMeetingRecordingsDir() {
+/** Tạo đường dẫn riêng cho mỗi cuộc họp, lưu cả file âm thanh và tóm tắt vào đó */
+function buildMeetingWavPath() {
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
-  const dir = path.join(repoRoot, "meeting_recordings", `${y}-${m}-${d}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-/** Tên file theo giờ:phút:giây để không đè lên các cuộc họp khác trong cùng ngày */
-function buildMeetingWavPath() {
-  const dir = getMeetingRecordingsDir();
-  const now = new Date();
   const hh = String(now.getHours()).padStart(2, "0");
   const mi = String(now.getMinutes()).padStart(2, "0");
   const ss = String(now.getSeconds()).padStart(2, "0");
-  return path.join(dir, `meeting_${hh}-${mi}-${ss}.wav`);
+  
+  const dir = path.join(repoRoot, "meeting_recordings", `meeting_${y}-${m}-${d}_${hh}-${mi}-${ss}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `audio.wav`);
 }
 
 let meetingRecorder = null; // handle { proc, state, exitCode }
@@ -2449,10 +2443,17 @@ async function toggleMeetingRecording() {
 
     const summary = response.text;
 
+    // Lưu tóm tắt vào chung thư mục chứa file wav
+    const mdPath = wavPath.replace(".wav", ".md");
+    fs.writeFileSync(mdPath, summary, "utf8");
+
     if (mainWindow) {
-      mainWindow.webContents.send("hud:message", { title: "Tóm tắt cuộc họp", content: summary });
+      mainWindow.webContents.send("hud:message", { 
+        title: "Tóm tắt cuộc họp", 
+        content: summary + `\n\n*(Đã lưu file tại: ${mdPath})*` 
+      });
     }
-    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. File ghi âm: ${wavPath}` };
+    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. Đã lưu tại: ${mdPath}` };
   } catch (err) {
     if (mainWindow) {
       mainWindow.webContents.send("hud:message", { title: "Lỗi tóm tắt", content: err.message });
