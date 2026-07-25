@@ -495,3 +495,9 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-message-body { overflow-y: auto; flex: 1; min-height: 0; font-size: 15px; line-height: 1.7; color: #f2f7ff; padding-right: 8px; }
 .hud-message-body p { margin-top: 0; margin-bottom: 14px; }
 .hud-message-body p:last-child { margin-bottom: 0; }
+
+/* Micro-animations */
+.hover-scale-btn { transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), background 0.2s; }
+.hover-scale-btn:hover { transform: scale(1.15); }
+@keyframes slideInFromRight { 0% { opacity: 0; transform: translateX(30px) translateY(10px) scale(0.95); } 100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); } }
+.pip-slide-in { animation: slideInFromRight 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }

@@ -219,8 +219,10 @@ export default function App() {
 
   // AUTO-OPEN-COMP-PIP: tự động bật cửa sổ Companion Camera (PiP, tương
   // đương bấm Alt+C) ngay khi điện thoại kết nối thành công — không cần
-  // người dùng phải tự bấm Alt+C thủ công sau khi quét QR. Xử lý cho cả 2
-  // đường kết nối:
+  // người dùng phải tự bấm Alt+C thủ công sau khi quét QR. Đồng thời tự
+  // TẮT khung QR (nếu đang mở) vì lúc này không còn cần quét nữa — tránh
+  // vướng đè lên/che khuất cửa sổ camera vừa mở. Xử lý cho cả 2 đường kết
+  // nối:
   //  1) WebRTC (thẻ "WebRTC (Camera)" / QR https://<ip>:8444) — CompanionWebRTC.tsx
   //     gọi companionStream.setStream(stream) ngay khi nhận được track đầu
   //     tiên từ điện thoại (pc.ontrack), nên subscribe ở đây là đủ.
@@ -1197,11 +1199,17 @@ export default function App() {
 
   useEffect(() => {
     if (!hasBridge) return;
-    return window.iris.onHudMessage((msg: { title: string; content: string }) => {
+    return window.iris.onHudMessage((msg: { title: string; content: string } | null) => {
+      if (!msg) {
+        setHudMessage(null);
+        lastHudMsgRef.current = null;
+        return;
+      }
       const now = Date.now();
       const last = lastHudMsgRef.current;
+      const isPersistent = msg.title === "Live Teleprompter" || msg.title === "Meeting Summarizer" || msg.title === "Tóm tắt cuộc họp" || msg.title === "Lỗi tóm tắt";
       // Ignore identical messages sent within the last 15 seconds
-      if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000) {
+      if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000 && !isPersistent) {
         return;
       }
       lastHudMsgRef.current = { ...msg, time: now };
@@ -1211,6 +1219,9 @@ export default function App() {
 
   useEffect(() => {
     if (!hudMessage) return;
+    const isPersistent = hudMessage.title === "Live Teleprompter" || hudMessage.title === "Meeting Summarizer" || hudMessage.title === "Tóm tắt cuộc họp" || hudMessage.title === "Lỗi tóm tắt";
+    if (isPersistent) return;
+
     const timer = setTimeout(() => {
       setHudMessage(null);
     }, 3000);

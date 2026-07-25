@@ -97,6 +97,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
               hình chờ QR/ngrok vì lúc đó chưa có mic nào để tắt). */}
           {webrtcStream && (
             <button
+              className="hover-scale-btn"
               onClick={(e) => {
                 e.stopPropagation();
                 companionStream.requestMicToggle(!micEnabled);

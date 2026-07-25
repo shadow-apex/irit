@@ -93,7 +93,7 @@ export default function DraggablePiP({
 
   return (
     <div
-      className="hud-hit"
+      className="hud-hit pip-slide-in"
       style={{
         ...style,
         backgroundColor: "#111",
