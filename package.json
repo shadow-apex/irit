@@ -16,7 +16,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "npx --yes kill-port 5173 8080 8081 4040 8443 8000 && taskkill /F /IM ngrok.exe >nul 2>&1 || exit 0",
+    "predev": "npx --yes kill-port 5173 8080 8081 4040 8443 8000 && node scripts/kill-old-ngrok.mjs",
     "dev": "concurrently -k -n VITE,ELECTRON,PHONE,OMNI -c cyan,magenta,yellow,blue \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\" \"npm run camera\" \"python reponew/toado/api_server.py\"",
     "camera": "node -e \"require('fs').existsSync('PHONE_CAMERA/node_modules')||require('child_process').execSync('npm install',{cwd:'PHONE_CAMERA',stdio:'inherit'})\" && node PHONE_CAMERA/server.js",
     "camera:install": "npm install --prefix PHONE_CAMERA",
