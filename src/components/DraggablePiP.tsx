@@ -20,6 +20,7 @@ export default function DraggablePiP({
 }: DraggablePiPProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [position, setPosition] = useState(defaultPosition);
+  const [savedPosition, setSavedPosition] = useState(defaultPosition);
   const [isDragging, setIsDragging] = useState(false);
   const [localZIndex, setLocalZIndex] = useState(() => ++globalZIndex);
   
@@ -29,9 +30,6 @@ export default function DraggablePiP({
     // Bring to front khi click vào bất cứ đâu trên cửa sổ (kể cả viền)
     setLocalZIndex(++globalZIndex);
 
-    // Không cho phép drag nếu đang phóng to
-    if (isExpanded) return;
-    
     // Nếu bấm vào nút thì không drag
     if ((e.target as HTMLElement).closest("button")) return;
 
@@ -71,9 +69,8 @@ export default function DraggablePiP({
   const style: React.CSSProperties = isExpanded
     ? {
         position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
+        top: position.y,
+        left: position.x,
         width: "80vw",
         height: "80vh",
         maxWidth: 1000,
@@ -129,6 +126,17 @@ export default function DraggablePiP({
             className="t-btn small"
             onClick={(e) => {
               e.stopPropagation();
+              if (!isExpanded) {
+                setSavedPosition(position);
+                const targetW = Math.min(window.innerWidth * 0.8, 1000);
+                const targetH = Math.min(window.innerHeight * 0.8, 800);
+                setPosition({
+                  x: (window.innerWidth - targetW) / 2,
+                  y: (window.innerHeight - targetH) / 2,
+                });
+              } else {
+                setPosition(savedPosition);
+              }
               setIsExpanded(!isExpanded);
             }}
             title={isExpanded ? "Thu nhỏ (Mini Player)" : "Phóng to (Theater Mode)"}
