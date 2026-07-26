@@ -59,6 +59,16 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   const sessionStartRef = useRef<number | null>(null);
   const [muted, setMuted] = useState(false);
 
+  // Silent/whisper mode: mutes Iris's SPOKEN OUTPUT only (mic stays live, so
+  // you can keep talking to it). Uses a ref (not just state) because the
+  // onAudioChunk -> playGeminiAudio callback is registered once in App.tsx
+  // and reads the gain node fresh on every chunk rather than closing over a
+  // particular render's state — same reason `muted` above mutates
+  // inputStreamRef tracks directly instead of relying on state.
+  const outputGainRef = useRef<GainNode | null>(null);
+  const silentOutputRef = useRef(false);
+  const [silentOutput, setSilentOutputState] = useState(false);
+
   // Passive audio level meters (mic in / Gemini out) for the reactive HUD.
   useEffect(() => {
     let raf = 0;
@@ -175,11 +185,22 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     }
 
     let analyser = outputAnalyserRef.current;
-    if (!analyser || analyser.context !== context) {
+    let gainNode = outputGainRef.current;
+    const isNewContext = !analyser || analyser.context !== context;
+    if (isNewContext) {
       analyser = context.createAnalyser();
       analyser.fftSize = 256;
-      analyser.connect(context.destination);
       outputAnalyserRef.current = analyser;
+
+      gainNode = context.createGain();
+      gainNode.gain.value = silentOutputRef.current ? 0 : 1;
+      gainNode.connect(context.destination);
+      outputGainRef.current = gainNode;
+
+      // Wired once per AudioContext — connecting on every chunk instead
+      // would stack duplicate analyser->gain edges and make playback louder
+      // with each new chunk.
+      analyser.connect(gainNode);
     }
 
     const source = context.createBufferSource();
@@ -193,6 +214,20 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     source.start(startAt);
     playbackTimeRef.current = startAt + buffer.duration;
     playbackSourcesRef.current.push(source);
+  }
+
+  /**
+   * Toggle whisper/silent mode: Gemini keeps generating audio (and its
+   * transcript keeps flowing into Comms as usual) but nothing plays out of
+   * the speaker. Distinct from toggleMute() above, which mutes the
+   * microphone input instead.
+   */
+  function setSilentOutput(next: boolean) {
+    silentOutputRef.current = next;
+    setSilentOutputState(next);
+    if (outputGainRef.current) {
+      outputGainRef.current.gain.value = next ? 0 : 1;
+    }
   }
 
   function toggleMute() {
@@ -219,10 +254,12 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     outputLevelRef,
     sessionStartRef,
     muted,
+    silentOutput,
     start,
     stop,
     flushPlayback,
     playGeminiAudio,
     toggleMute,
+    setSilentOutput,
   };
 }

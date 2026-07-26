@@ -28,6 +28,7 @@ import HoloBackdrop from "./components/HoloBackdrop";
 import RobotCameras from "./components/RobotCameras";
 import CompanionVideo from "./components/CompanionVideo";
 import CompanionWebRTC from "./components/CompanionWebRTC";
+import ActionLanes from "./components/ActionLanes";
 import { companionStream } from "./lib/companionStream";
 
 const MAX_LOGS = 80;
@@ -80,6 +81,7 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsSnapshot | null>(null);
   const [installingAgents, setInstallingAgents] = useState(false);
+  const [actionLanes, setActionLanes] = useState<any[]>([]);
   // Bumped whenever a run completes or sessions change so the gate ✓s re-scan.
   const [agentsTick, setAgentsTick] = useState(0);
   // The PO's live session is mid-question — set while status is "pending",
@@ -219,10 +221,8 @@ export default function App() {
 
   // AUTO-OPEN-COMP-PIP: tự động bật cửa sổ Companion Camera (PiP, tương
   // đương bấm Alt+C) ngay khi điện thoại kết nối thành công — không cần
-  // người dùng phải tự bấm Alt+C thủ công sau khi quét QR. Đồng thời tự
-  // TẮT khung QR (nếu đang mở) vì lúc này không còn cần quét nữa — tránh
-  // vướng đè lên/che khuất cửa sổ camera vừa mở. Xử lý cho cả 2 đường kết
-  // nối:
+  // người dùng phải tự bấm Alt+C thủ công sau khi quét QR. Xử lý cho cả 2
+  // đường kết nối:
   //  1) WebRTC (thẻ "WebRTC (Camera)" / QR https://<ip>:8444) — CompanionWebRTC.tsx
   //     gọi companionStream.setStream(stream) ngay khi nhận được track đầu
   //     tiên từ điện thoại (pc.ontrack), nên subscribe ở đây là đủ.
@@ -233,10 +233,7 @@ export default function App() {
   //     thừa 1 lần mỗi frame).
   useEffect(() => {
     const unsubscribeStream = companionStream.subscribeStream((stream) => {
-      if (stream) {
-        setShowCompanionPip(true);
-        setShowCompanionQR(false);
-      }
+      if (stream) setShowCompanionPip(true);
     });
 
     let hasOpenedForExpoSession = false;
@@ -246,7 +243,6 @@ export default function App() {
         if (!hasOpenedForExpoSession) {
           hasOpenedForExpoSession = true;
           setShowCompanionPip(true);
-          setShowCompanionQR(false);
         }
       });
     }
@@ -313,10 +309,22 @@ export default function App() {
     if (!hasBridge) return;
     const offAudio = window.iris.onAudioChunk((chunk) => audio.playGeminiAudio(chunk));
     const offInterrupt = window.iris.onAudioInterrupt(() => audio.flushPlayback());
+    const unsubActionLanes = window.iris.onActionLanesChange((payload) => {
+      setActionLanes(payload);
+    });
     return () => {
       offAudio();
       offInterrupt();
+      unsubActionLanes();
     };
+  }, [hasBridge]);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    // Silent/whisper mode: Iris (via the set_silent_mode voice tool) tells
+    // main.mjs to broadcast this; we only mute speaker output here — the
+    // mic and the rest of the conversation keep working normally.
+    return window.iris.onSilentModeChange(({ enabled }) => audio.setSilentOutput(enabled));
   }, [hasBridge]);
 
   // Voice-commanded sleep (design.md D6): Gemini's go_to_sleep tool tells main
@@ -1199,17 +1207,11 @@ export default function App() {
 
   useEffect(() => {
     if (!hasBridge) return;
-    return window.iris.onHudMessage((msg: { title: string; content: string } | null) => {
-      if (!msg) {
-        setHudMessage(null);
-        lastHudMsgRef.current = null;
-        return;
-      }
+    return window.iris.onHudMessage((msg: { title: string; content: string }) => {
       const now = Date.now();
       const last = lastHudMsgRef.current;
-      const isPersistent = msg.title === "Live Teleprompter" || msg.title === "Meeting Summarizer" || msg.title === "Tóm tắt cuộc họp" || msg.title === "Lỗi tóm tắt";
       // Ignore identical messages sent within the last 15 seconds
-      if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000 && !isPersistent) {
+      if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000) {
         return;
       }
       lastHudMsgRef.current = { ...msg, time: now };
@@ -1219,9 +1221,6 @@ export default function App() {
 
   useEffect(() => {
     if (!hudMessage) return;
-    const isPersistent = hudMessage.title === "Live Teleprompter" || hudMessage.title === "Meeting Summarizer" || hudMessage.title === "Tóm tắt cuộc họp" || hudMessage.title === "Lỗi tóm tắt";
-    if (isPersistent) return;
-
     const timer = setTimeout(() => {
       setHudMessage(null);
     }, 3000);
@@ -1454,6 +1453,8 @@ export default function App() {
         <div className="hud-vignette" />
         <HoloBackdrop running={sidecarRunning && windowFocused} />
 
+        <ActionLanes actions={actionLanes} />
+
         <TopBar
           geminiDot={dotState(geminiStatus, ["connected"])}
           claudeDot={dotState(claudeStatus, ["ready"])}
@@ -1474,6 +1475,7 @@ export default function App() {
               transcript={transcript}
               scrollRef={commsScrollRef}
               awake={sidecarRunning}
+              silentOutput={audio.silentOutput}
               onSendSupplement={sendContextSupplement}
             />
             <CameraDock

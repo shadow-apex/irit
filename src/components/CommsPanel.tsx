@@ -1,5 +1,5 @@
 import { type RefObject } from "react";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, VolumeX } from "lucide-react";
 import type { TranscriptLine } from "../types";
 import ContextSupplementInput from "./ContextSupplementInput";
 
@@ -7,11 +7,13 @@ export default function CommsPanel({
   transcript,
   scrollRef,
   awake,
+  silentOutput,
   onSendSupplement,
 }: {
   transcript: TranscriptLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
   awake: boolean;
+  silentOutput?: boolean;
   onSendSupplement: (text: string) => void;
 }) {
   return (
@@ -19,6 +21,11 @@ export default function CommsPanel({
       <div className="col-head">
         <MessageSquare size={14} />
         <span>Iris Conversation</span>
+        {silentOutput && (
+          <span title="Silent Mode (No voice)" className="silent-badge" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px", color: "var(--tx-dim)" }}>
+            <VolumeX size={14} /> Im lặng
+          </span>
+        )}
       </div>
       <div className="comms-scroll" ref={scrollRef}>
         {transcript.length === 0 ? (

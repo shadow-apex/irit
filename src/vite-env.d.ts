@@ -165,6 +165,8 @@ type IrisApi = {
   sendAudioChunk: (chunk: ArrayBuffer) => void;
   onAudioChunk: (callback: (chunk: LiveAudioChunk) => void) => () => void;
   onAudioInterrupt: (callback: () => void) => () => void;
+  onSilentModeChange: (callback: (payload: { enabled: boolean }) => void) => () => void;
+  onActionLanesChange: (callback: (payload: any[]) => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
   sendHandGesture: (gesture: string | { type: string; x?: number; y?: number }) => void;
   onHudStats: (callback: (stats: any) => void) => () => void;
@@ -183,7 +185,6 @@ type IrisApi = {
   onToggleCompanionPip?: (callback: () => void) => () => void;
   getCompanionWsTunnel?: () => Promise<string | null>;
   getCompanionWsToken?: () => Promise<string | null>;
-  getCompanionHttpsReady?: () => Promise<boolean>;
   getPhoneCamUrl?: () => Promise<string | null>;
   onCompanionWebRTCSignal?: (callback: (signal: any) => void) => () => void;
   sendCompanionWebRTCSignal?: (signal: any) => void;

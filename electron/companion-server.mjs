@@ -131,36 +131,11 @@ export function getCompanionWsToken() {
   return wsToken;
 }
 
-// AUDIT-COMP-15 FIX: assuming the PCM payload always starts at byte 44 only
-// holds for the minimal 44-byte canonical WAV header. Some Android encoders
-// (and other recorders) insert extra chunks (e.g. `LIST`/`fact`) before
-// `data`, which shifts the payload start and previously fed a few stray
-// header bytes into Gemini as "audio" on every chunk. Walk the real RIFF
-// chunk table and cut at the actual `data` subchunk so this can't drift.
 function stripWavHeader(buffer) {
-  if (buffer.length < 12 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
-    // Not a WAV container (e.g. already-raw PCM) — pass through unchanged.
-    return buffer;
+  if (buffer.length > 44 && buffer.slice(0, 4).toString('ascii') === 'RIFF') {
+    return buffer.slice(44);
   }
-
-  let offset = 12;
-  while (offset + 8 <= buffer.length) {
-    const chunkId = buffer.toString('ascii', offset, offset + 4);
-    const chunkSize = buffer.readUInt32LE(offset + 4);
-    const dataStart = offset + 8;
-
-    if (chunkId === 'data') {
-      const dataEnd = Math.min(dataStart + chunkSize, buffer.length);
-      return buffer.slice(dataStart, dataEnd);
-    }
-
-    // Chunks are word-aligned: odd-sized chunks have a padding byte.
-    offset = dataStart + chunkSize + (chunkSize % 2);
-  }
-
-  // No `data` subchunk found — malformed WAV; fall back to the old
-  // fixed-offset behaviour rather than dropping the chunk entirely.
-  return buffer.length > 44 ? buffer.slice(44) : buffer;
+  return buffer;
 }
 
 export function sendSignalToPhone(data) {
@@ -301,42 +276,12 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
       try {
         if (!isBinary) {
           const parsed = JSON.parse(message.toString());
-
+          
           // Relay WebRTC signaling from Phone to Desktop Renderer
           if (["peer-ready", "offer", "answer", "ice", "control", "peer-left"].includes(parsed.type)) {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send("companion:webrtc-signal", parsed);
             }
-            return;
-          }
-
-          // BUG-COMP-13 FIX: the legacy Expo Go client (iris-companion/App.js)
-          // sends camera stills as `{ type: 'frame', data: <base64 jpeg> }`
-          // JSON text frames every ~1s. This branch used to be missing
-          // entirely, so those frames were parsed and silently discarded —
-          // the desktop PiP (Alt+C) never had anything to draw for Expo Go
-          // clients and Gemini never got a vision frame from that path.
-          // Restore the broadcast to the renderer (for on-screen PiP) and
-          // feed it into Gemini Live's vision input, mirroring what the
-          // WebRTC path already does via companion:webrtc-frame.
-          if (parsed.type === "frame" && typeof parsed.data === "string" && parsed.data.length) {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("companion:frame", parsed.data);
-            }
-            if (typeof sendFrameToGemini === "function") sendFrameToGemini(parsed.data);
-          }
-        } else {
-          // BUG-COMP-14 FIX: the same legacy client streams 500ms PCM/WAV
-          // chunks as raw binary WebSocket frames (see streamAudioLoop in
-          // iris-companion/App.js). `stripWavHeader` existed but was never
-          // called, and `sendAudioChunk` (passed into this function) was
-          // never invoked either — so phone audio from the Expo Go path
-          // never reached Gemini Live at all. Strip the 44-byte WAV header
-          // and forward the raw 16kHz mono PCM.
-          if (typeof sendAudioChunk === "function") {
-            const buffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
-            const pcm = stripWavHeader(buffer);
-            if (pcm.length) sendAudioChunk(pcm);
           }
         }
       } catch (err) {

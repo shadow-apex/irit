@@ -28,6 +28,16 @@ import { runComputerSession } from "./computer-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { saveToMemory, queryMemory } from "./memory-session.mjs";
 import { initTelegramBot } from "./telegram-bot.mjs";
+import {
+  submitAction,
+  getActionStatus,
+  listActiveActions,
+  laneSnapshot,
+  cancelAction,
+  subscribeActionLanes,
+} from "./action-lane.mjs";
+import * as browserAgent from "./browser-agent.mjs";
+import * as smarthomeRules from "./smarthome-rules.mjs";
 import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, sendSignalToPhone } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
@@ -85,6 +95,18 @@ let modelTranscriptBuffer = "";
 // instead of dropping Iris back to the "Press W to wake" sleep screen.
 let resumptionHandle = null;
 let userStopped = false;
+
+// Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
+// generates audio and its transcript still lands in Comms), but playback is
+// muted client-side — see set_silent_mode / SILENT_MODE below and the
+// matching audio.setSilentOutput() in src/hooks/useAudioPipeline.ts.
+let silentMode = false;
+
+// Smart-home automation rules (electron/smarthome-rules.mjs) are evaluated
+// on a plain timer, independent of Gemini/Claude turns entirely — this is
+// what lets "turn off the lights at 10pm" keep working even mid-conversation
+// or while Claude Code is busy on something else.
+let smarthomeRuleTimer = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -2372,19 +2394,25 @@ function stopSidecar(handle, { timeoutMs = 3000 } = {}) {
   });
 }
 
-/** Tạo đường dẫn riêng cho mỗi cuộc họp, lưu cả file âm thanh và tóm tắt vào đó */
-function buildMeetingWavPath() {
+/** Trả về đường dẫn thư mục ghi âm theo ngày: meeting_recordings/YYYY-MM-DD/ */
+function getMeetingRecordingsDir() {
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
+  const dir = path.join(repoRoot, "meeting_recordings", `${y}-${m}-${d}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Tên file theo giờ:phút:giây để không đè lên các cuộc họp khác trong cùng ngày */
+function buildMeetingWavPath() {
+  const dir = getMeetingRecordingsDir();
+  const now = new Date();
   const hh = String(now.getHours()).padStart(2, "0");
   const mi = String(now.getMinutes()).padStart(2, "0");
   const ss = String(now.getSeconds()).padStart(2, "0");
-  
-  const dir = path.join(repoRoot, "meeting_recordings", `meeting_${y}-${m}-${d}_${hh}-${mi}-${ss}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `audio.wav`);
+  return path.join(dir, `meeting_${hh}-${mi}-${ss}.wav`);
 }
 
 let meetingRecorder = null; // handle { proc, state, exitCode }
@@ -2443,17 +2471,10 @@ async function toggleMeetingRecording() {
 
     const summary = response.text;
 
-    // Lưu tóm tắt vào chung thư mục chứa file wav
-    const mdPath = wavPath.replace(".wav", ".md");
-    fs.writeFileSync(mdPath, summary, "utf8");
-
     if (mainWindow) {
-      mainWindow.webContents.send("hud:message", { 
-        title: "Tóm tắt cuộc họp", 
-        content: summary + `\n\n*(Đã lưu file tại: ${mdPath})*` 
-      });
+      mainWindow.webContents.send("hud:message", { title: "Tóm tắt cuộc họp", content: summary });
     }
-    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. Đã lưu tại: ${mdPath}` };
+    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. File ghi âm: ${wavPath}` };
   } catch (err) {
     if (mainWindow) {
       mainWindow.webContents.send("hud:message", { title: "Lỗi tóm tắt", content: err.message });
@@ -2622,6 +2643,208 @@ function toggleLiveTranscriber() {
   return { status: "success", message: "Đã tắt Nhắc Tuồng." };
 }
 
+// =============================================================================
+// PARALLEL ACTION LANES — multi-app orchestration
+// =============================================================================
+// See electron/action-lane.mjs. Every quick/background action below runs in
+// a named lane instead of Claude's single run-queue slot, so a long DEV/PO
+// Claude Code run never blocks "turn off the lights" or a browser lookup,
+// and vice versa.
+
+function laneEventLogger(label) {
+  return (event) => {
+    if (event.status === "completed") {
+      emitEvent({ type: "log", level: "info", message: `${label}: hoàn tất (${event.id}).` });
+    } else if (event.status === "error") {
+      emitEvent({ type: "log", level: "error", message: `${label}: lỗi (${event.id}) — ${event.error}` });
+    }
+  };
+}
+
+async function getIrisStatusTool() {
+  return {
+    status: "success",
+    actions: listActiveActions(),
+    lanes: laneSnapshot(),
+    silent_mode: silentMode,
+  };
+}
+
+async function getActionStatusTool(args = {}) {
+  const { action_id } = args;
+  if (!action_id) return { status: "error", error: "Thiếu action_id." };
+  return getActionStatus(action_id);
+}
+
+async function stopActionTool(args = {}) {
+  const { action_id } = args;
+  if (!action_id) return { status: "error", error: "Thiếu action_id." };
+  const ok = cancelAction(action_id);
+  return ok
+    ? { status: "success", message: `Đã yêu cầu dừng hành động ${action_id}.` }
+    : { status: "error", error: `Không tìm thấy hành động đang chạy: ${action_id}` };
+}
+
+// -----------------------------------------------------------------------
+// Full computer-use sessions now go through the "computer" lane (limit 1)
+// instead of a bare fire-and-forget call, so Iris can report progress and
+// so a second "take over the computer" request while one is already
+// running gets queued instead of fighting over the mouse.
+// -----------------------------------------------------------------------
+async function startComputerUseTaskLaned(args) {
+  const { task } = args || {};
+  if (!task || !String(task).trim()) {
+    return { status: "error", message: "Thiếu 'task' để điều khiển máy tính." };
+  }
+  const submitted = submitAction({
+    lane: "computer",
+    label: `Computer use: ${task}`,
+    fn: () =>
+      runComputerSession(task, (streamEvent) => {
+        if (streamEvent.text) {
+          emitEvent({ type: "log", level: "info", message: `[ComputerUse] ${streamEvent.text}` });
+        }
+      }),
+    onEvent: laneEventLogger("Computer use"),
+  });
+  const message =
+    submitted.status === "started"
+      ? "Đã bắt đầu điều khiển máy tính, đang chạy nền."
+      : "Một phiên điều khiển máy tính khác đang chạy — lệnh này đã được xếp hàng và sẽ tự chạy tiếp theo.";
+  return { ...submitted, message };
+}
+
+// -----------------------------------------------------------------------
+// Browser agent (feature: trình duyệt tự hành) — direct Playwright actions.
+// These are quick (sub-few-second) DOM operations, so — like
+// computer_use_type / computer_use_omniparser — they are awaited and their
+// real result (extracted text, click confirmation, etc.) is returned
+// straight to Gemini, not just a "started" ack. The "browser" lane still
+// caps concurrency so two calls can't drive the same page at once.
+// -----------------------------------------------------------------------
+function runBrowserAction(fn, label) {
+  return async (args) => {
+    const submitted = submitAction({
+      lane: "browser",
+      label,
+      fn: () => fn(args || {}),
+      onEvent: laneEventLogger(label),
+    });
+    // Poll the lane's own record for completion instead of a second promise
+    // chain — keeps a single source of truth for the action's result.
+    while (true) {
+      const record = getActionStatus(submitted.id);
+      if (record.status === "completed") return record.result;
+      if (record.status === "error") return { status: "error", error: record.error };
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  };
+}
+
+const browserOpenTool = runBrowserAction(browserAgent.browserOpen, "Mở trang web");
+const browserClickTool = runBrowserAction(browserAgent.browserClick, "Click trong trình duyệt");
+const browserTypeTool = runBrowserAction(browserAgent.browserType, "Nhập văn bản trong trình duyệt");
+const browserExtractTextTool = runBrowserAction(browserAgent.browserExtractText, "Đọc nội dung trang");
+const browserScreenshotTool = runBrowserAction(browserAgent.browserScreenshot, "Chụp màn hình trình duyệt");
+const browserCloseTool = runBrowserAction(browserAgent.browserClose, "Đóng trình duyệt");
+
+// -----------------------------------------------------------------------
+// Smart-home automation rules (feature: tự động hoá bằng ngôn ngữ tự nhiên)
+// -----------------------------------------------------------------------
+function createSmarthomeRuleTool(args = {}) {
+  try {
+    const rule = smarthomeRules.createRule(args);
+    return { status: "success", rule, message: `Đã tạo automation: ${rule.label}` };
+  } catch (error) {
+    return { status: "error", error: error.message };
+  }
+}
+
+function listSmarthomeRulesTool() {
+  return { status: "success", rules: smarthomeRules.listRules() };
+}
+
+function deleteSmarthomeRuleTool({ rule_id } = {}) {
+  if (!rule_id) return { status: "error", error: "Thiếu rule_id." };
+  const removed = smarthomeRules.deleteRule(rule_id);
+  return removed
+    ? { status: "success", message: `Đã xoá automation ${rule_id}.` }
+    : { status: "error", error: `Không tìm thấy automation: ${rule_id}` };
+}
+
+function setSmarthomeRuleEnabledTool({ rule_id, enabled } = {}) {
+  if (!rule_id) return { status: "error", error: "Thiếu rule_id." };
+  const rule = smarthomeRules.setRuleEnabled(rule_id, Boolean(enabled));
+  return rule
+    ? { status: "success", rule }
+    : { status: "error", error: `Không tìm thấy automation: ${rule_id}` };
+}
+
+// Ticks every 20s, independent of any Gemini/Claude turn. Each due rule
+// fires through the "smarthome" lane (reusing the existing triggerSmartHome
+// device path) so many rules — or a rule firing while the user is mid
+// conversation — never block each other or anything else.
+function startSmarthomeRuleEvaluator() {
+  if (smarthomeRuleTimer) return;
+  smarthomeRuleTimer = setInterval(() => {
+    smarthomeRules
+      .evaluateRules(
+        (action) =>
+          new Promise((resolve, reject) => {
+            submitAction({
+              lane: "smarthome",
+              label: `Automation: ${action.device} → ${action.action}`,
+              fn: async () => {
+                try {
+                  const result = await triggerSmartHome(action);
+                  if (result.status === "error") reject(new Error(result.error));
+                  else resolve(result);
+                  return result;
+                } catch (err) {
+                  // Make sure the outer Promise settles even if
+                  // triggerSmartHome throws instead of returning
+                  // {status:"error"} — otherwise this would hang forever.
+                  reject(err);
+                  throw err;
+                }
+              },
+              onEvent: laneEventLogger("Smart-home automation"),
+            });
+          }),
+        {
+          onFired: ({ rule, status, error }) => {
+            emitEvent({
+              type: "log",
+              level: status === "success" ? "info" : "error",
+              message:
+                status === "success"
+                  ? `[Automation] Đã chạy: ${rule.label}`
+                  : `[Automation] Lỗi khi chạy "${rule.label}": ${error}`,
+            });
+          },
+        }
+      )
+      .catch((err) => {
+        emitEvent({ type: "log", level: "error", message: `[Automation] Lỗi vòng lặp đánh giá rule: ${err.message}` });
+      });
+  }, 20000);
+}
+
+// -----------------------------------------------------------------------
+// Silent / whisper mode (feature: chế độ im lặng)
+// -----------------------------------------------------------------------
+function setSilentModeTool({ enabled } = {}) {
+  silentMode = Boolean(enabled);
+  emitToRenderer("iris:silent-mode", { enabled: silentMode });
+  return {
+    status: "success",
+    silent_mode: silentMode,
+    message: silentMode
+      ? "Đã bật chế độ im lặng — Iris vẫn nghe và trả lời bằng chữ, nhưng không phát ra tiếng."
+      : "Đã tắt chế độ im lặng — Iris nói bình thường trở lại.",
+  };
+}
+
 async function executeClaudeTool(name, args = {}) {
   switch (name) {
     case "display_hud_message":
@@ -2650,11 +2873,39 @@ async function executeClaudeTool(name, args = {}) {
     case "toggle_live_transcriber":
       return toggleLiveTranscriber();
     case "start_computer_use_task":
-      return startComputerUseTask(args);
+      return startComputerUseTaskLaned(args);
     case "computer_use_omniparser":
       return startOmniParserTask(args);
     case "computer_use_type":
       return startComputerUseType(args);
+    case "get_iris_status":
+      return getIrisStatusTool();
+    case "get_action_status":
+      return getActionStatusTool(args);
+    case "stop_action":
+      return stopActionTool(args);
+    case "browser_open":
+      return browserOpenTool(args);
+    case "browser_click":
+      return browserClickTool(args);
+    case "browser_type":
+      return browserTypeTool(args);
+    case "browser_extract_text":
+      return browserExtractTextTool(args);
+    case "browser_screenshot":
+      return browserScreenshotTool(args);
+    case "browser_close":
+      return browserCloseTool(args);
+    case "create_smarthome_rule":
+      return createSmarthomeRuleTool(args);
+    case "list_smarthome_rules":
+      return listSmarthomeRulesTool();
+    case "delete_smarthome_rule":
+      return deleteSmarthomeRuleTool(args);
+    case "set_smarthome_rule_enabled":
+      return setSmarthomeRuleEnabledTool(args);
+    case "set_silent_mode":
+      return setSilentModeTool(args);
     case "check_claude_status":
       return checkClaudeStatus();
     case "submit_claude_task":
@@ -2915,6 +3166,147 @@ function buildClaudeTools() {
           }
         },
         {
+          name: "get_iris_status",
+          description:
+            "Report what Iris is currently doing across ALL parallel lanes at once — background computer-use sessions, browser actions, and smart-home automations — plus whether silent mode is on. Use for 'what are you doing right now' / 'what's still running' questions. For Claude Code work specifically, use check_claude_status or get_claude_task_status instead.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "get_action_status",
+          description: "Check the status (queued/running/completed/error) of a background action previously started by start_computer_use_task, given its action id.",
+          parameters: {
+            type: "object",
+            properties: { action_id: { type: "string", description: "The id returned when the action was started." } },
+            required: ["action_id"],
+          },
+        },
+        {
+          name: "stop_action",
+          description: "Stop a running or queued background action (e.g. a computer-use session) by its action id.",
+          parameters: {
+            type: "object",
+            properties: { action_id: { type: "string", description: "The id of the action to stop." } },
+            required: ["action_id"],
+          },
+        },
+        {
+          name: "browser_open",
+          description:
+            "Open a URL in Iris's own automated browser tab (separate from start_computer_use_task's full-screen control). Fast and precise for simple browsing — use this instead of the computer-use tool whenever the request is purely about a webpage.",
+          parameters: {
+            type: "object",
+            properties: {
+              url: { type: "string", description: "The URL or bare domain to open, e.g. 'https://google.com' or 'wikipedia.org'." },
+              headless: { type: "boolean", description: "True (default) to run without a visible window; false to show the browser window." },
+            },
+            required: ["url"],
+          },
+        },
+        {
+          name: "browser_click",
+          description: "Click an element on the currently open page in Iris's automated browser tab, by its visible text or a CSS selector.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "Visible text of the element to click, e.g. 'Sign in'." },
+              selector: { type: "string", description: "A CSS selector, if known, as an alternative to text." },
+            },
+          },
+        },
+        {
+          name: "browser_type",
+          description: "Type text into a field on the currently open page in Iris's automated browser tab (e.g. a search box), optionally pressing Enter after.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The text to type." },
+              selector: { type: "string", description: "CSS selector of the input field; if omitted, types into whatever is focused." },
+              submit: { type: "boolean", description: "Press Enter after typing (e.g. to submit a search)." },
+            },
+            required: ["text"],
+          },
+        },
+        {
+          name: "browser_extract_text",
+          description: "Read back the visible text of the currently open page (or a specific element) in Iris's automated browser tab — use this to answer questions about page content aloud.",
+          parameters: {
+            type: "object",
+            properties: { selector: { type: "string", description: "CSS selector to read from; omit to read the whole page." } },
+          },
+        },
+        {
+          name: "browser_screenshot",
+          description: "Take a screenshot of the currently open page in Iris's automated browser tab.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "browser_close",
+          description: "Close Iris's automated browser tab/session.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "create_smarthome_rule",
+          description:
+            "Create a standing smart-home automation from a natural-language request, e.g. 'turn off the living room light at 10pm' or 'turn on the fan every 30 minutes'. Translate what the user said into the structured trigger/condition/action fields yourself before calling this — do not ask the user to phrase it in structured form.",
+          parameters: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "Short human label for the rule." },
+              trigger: {
+                type: "object",
+                description:
+                  "Either { type: 'time', at: 'HH:MM' } for a specific time each day, or { type: 'interval', every_minutes: N } to repeat every N minutes.",
+              },
+              condition: {
+                type: "object",
+                description:
+                  "Optional. { type: 'none' } (default) or { type: 'day_of_week', days: ['mon','tue',...] } to restrict which days it can fire.",
+              },
+              action: {
+                type: "object",
+                description: "{ device: string, action: string } — same device/action names used by trigger_smart_home.",
+              },
+            },
+            required: ["trigger", "action"],
+          },
+        },
+        {
+          name: "list_smarthome_rules",
+          description: "List all smart-home automation rules currently configured, with their status (enabled/disabled).",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "delete_smarthome_rule",
+          description: "Delete a smart-home automation rule by its id.",
+          parameters: {
+            type: "object",
+            properties: { rule_id: { type: "string", description: "The rule id from list_smarthome_rules." } },
+            required: ["rule_id"],
+          },
+        },
+        {
+          name: "set_smarthome_rule_enabled",
+          description: "Enable or disable a smart-home automation rule without deleting it.",
+          parameters: {
+            type: "object",
+            properties: {
+              rule_id: { type: "string", description: "The rule id from list_smarthome_rules." },
+              enabled: { type: "boolean", description: "True to enable, false to pause it." },
+            },
+            required: ["rule_id", "enabled"],
+          },
+        },
+        {
+          name: "set_silent_mode",
+          description:
+            "Turn Iris's spoken voice output on or off. When silent mode is on, Iris keeps listening and keeps responding (in the Comms text panel) but does not play audio out loud — use when the user asks for quiet, whisper mode, 'don't talk out loud', or to be muted, and to turn it back off when they ask to speak normally again.",
+          parameters: {
+            type: "object",
+            properties: { enabled: { type: "boolean", description: "True to go silent, false to resume speaking aloud." } },
+            required: ["enabled"],
+          },
+        },
+        {
           name: "display_hud_message",
           description: "Display a large, glowing text message directly on the center of the user's screen in the Iris Glass HUD. Use this for presenting reports, summaries, or alerts directly to the user instead of opening external text editors like notepad.",
           parameters: {
@@ -3144,11 +3536,12 @@ function buildLiveConfig(resumeHandle) {
         {
           text: [
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-            "LANGUAGE RULE: If the user speaks to you in Vietnamese, reply in Vietnamese. If the user speaks to you in English, reply in English. If the user explicitly asks you to speak another language, you may do so.",
             "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
             "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work.",
             `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
             "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
+            "PARALLEL ACTION LANES — these run independently of Claude and of each other, so use them directly instead of submit_claude_task when they fit, and never make the user wait behind a busy Claude session for them: (1) BROWSER — for 'open this website', 'click X', 'read me this page', 'search for Y on the web page', use browser_open / browser_click / browser_type / browser_extract_text / browser_screenshot directly; only fall back to start_computer_use_task if the request needs the whole screen or a non-browser app. (2) COMPUTER USE — start_computer_use_task now runs in its own lane and returns an action id immediately; use get_action_status(action_id) or get_iris_status if asked for progress, and stop_action(action_id) if asked to stop it. (3) SMART HOME — trigger_smart_home for an immediate one-off command ('turn on the light now'); create_smarthome_rule for a standing automation ('turn off the light at 10pm every night', 'turn on the fan every 30 minutes') — translate the request into the trigger/condition/action fields yourself, do not ask the user to speak in structured form. Use list_smarthome_rules / delete_smarthome_rule / set_smarthome_rule_enabled to manage existing automations. (4) STATUS — get_iris_status answers 'what are you doing / what's still running' across all of the above at once.",
+            "SILENT MODE — call set_silent_mode(enabled: true) when the user asks for quiet / whisper mode / to stop talking out loud / to be muted (e.g. 'im lặng thôi', 'đừng nói to', 'chế độ thì thầm'). While silent, keep listening and keep responding normally — your replies still show as text in the Comms panel — you simply are not played aloud, so do not treat it as ending the conversation. Call set_silent_mode(enabled: false) when the user asks to speak normally / out loud again.",
             `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
             "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
             workspaceContextLine(),
@@ -3425,21 +3818,12 @@ function sendFrameToGemini(base64Jpeg) {
   }
 }
 
-// AUDIT-COMP-B FIX: `sampleRate` giờ là tham số thật (mặc định 16000 để
-// tương thích ngược với 2 nơi gọi hiện có — companion:webrtc-audio và
-// live:audio — cả hai đều đã tự resample về đúng 16kHz PCM ở phía renderer
-// bằng AudioContext({sampleRate:16000}), xem CompanionWebRTC.tsx). Trước
-// đây giá trị này bị hardcode ngay trong hàm này, nên khi companion-server.mjs
-// nhận được 1 chunk audio KHÔNG thực sự ở 16kHz (đường Expo Go legacy trên
-// Android — xem stripWavHeader trong companion-server.mjs), Gemini vẫn bị
-// báo sai là "đây là 16kHz" -> giải mã sai tốc độ -> tiếng rè/nhiễu.
-function sendAudioChunk(arrayBuffer, sampleRate = 16000) {
+function sendAudioChunk(arrayBuffer) {
   if (!liveSession || !arrayBuffer) return;
   const buffer = Buffer.from(new Uint8Array(arrayBuffer));
   if (!buffer.byteLength) return;
-  const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 16000;
   liveSession.sendRealtimeInput({
-    audio: { data: buffer.toString("base64"), mimeType: `audio/pcm;rate=${rate}` },
+    audio: { data: buffer.toString("base64"), mimeType: "audio/pcm;rate=16000" },
   });
 }
 
@@ -3643,6 +4027,10 @@ app.whenReady().then(() => {
     app.dock.setIcon(appIcon);
   }
   installAppMenu();
+
+  // Feature: NL smart-home automation rules — evaluated on a plain timer,
+  // independent of any voice conversation (see electron/smarthome-rules.mjs).
+  startSmarthomeRuleEvaluator();
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "audioCapture" || permission === "videoCapture");
@@ -3984,6 +4372,11 @@ app.on("before-quit", async () => {
     clearInterval(hudStatsInterval);
     hudStatsInterval = null;
   }
+  if (smarthomeRuleTimer) {
+    clearInterval(smarthomeRuleTimer);
+    smarthomeRuleTimer = null;
+  }
+  browserAgent.browserClose().catch(() => {});
   stopLive();
   stopCompanionServer();
   // BUG-COMP-05 FIX: Kill zombie expo process so it doesn't hold port 8081.

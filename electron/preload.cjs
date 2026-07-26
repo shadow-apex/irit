@@ -13,7 +13,6 @@ contextBridge.exposeInMainWorld("iris", {
   getCompanionTunnel: () => ipcRenderer.invoke("companion:get-tunnel"),
   getCompanionWsTunnel: () => ipcRenderer.invoke("companion:get-ws-tunnel"),
   getCompanionWsToken: () => ipcRenderer.invoke("companion:get-ws-token"),
-  getCompanionHttpsReady: () => ipcRenderer.invoke("companion:get-https-ready"),
   getPhoneCamUrl: () => ipcRenderer.invoke("companion:get-phone-cam-url"),
   selectSession: (id) => ipcRenderer.invoke("sessions:select", id),
   newSession: (label) => ipcRenderer.invoke("sessions:new", label),
@@ -86,6 +85,16 @@ contextBridge.exposeInMainWorld("iris", {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("live:interrupt", handler);
     return () => ipcRenderer.removeListener("live:interrupt", handler);
+  },
+  onSilentModeChange: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("iris:silent-mode", handler);
+    return () => ipcRenderer.removeListener("iris:silent-mode", handler);
+  },
+  onActionLanesChange: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("iris:action-lanes-change", listener);
+    return () => ipcRenderer.removeListener("iris:action-lanes-change", listener);
   },
   onSidecarEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);

@@ -5,15 +5,6 @@ import { Audio } from 'expo-av';
 
 export default function App() {
   const [ipAddress, setIpAddress] = useState('192.168.1.10');
-  // BUG-COMP-TOKEN FIX: companion-server.mjs luôn yêu cầu query param
-  // ?token=... để xác thực (chống ai đó ngoài mạng LAN đoán được cổng
-  // 8080 rồi kết nối bừa vào camera/mic). Trước đây app này không có chỗ
-  // nào để nhập/gửi token đó, nên MỌI lần kết nối đều bị server từ chối
-  // ngay lập tức (đóng WebSocket với code 4001 "Invalid token") — dù các
-  // lỗi xử lý frame/audio phía server có được sửa hay không cũng vô ích.
-  // Token hiện ra ở màn hình "Iris Camera" (không phải tab "Expo Go") của
-  // hộp thoại QR trên máy tính — dán vào ô bên dưới trước khi bấm Connect.
-  const [token, setToken] = useState('');
   const [connected, setConnected] = useState(false);
   const [hasPermission, setHasPermission] = useState(null);
   const [statusMsg, setStatusMsg] = useState('STANDBY');
@@ -52,15 +43,7 @@ export default function App() {
       // (shown/copyable in the desktop app's Companion dialog), use it
       // as-is; otherwise treat the input as a bare LAN IP like before.
       const target = ipAddress.trim();
-      let wsUrl = /^wss?:\/\//i.test(target) ? target : `ws://${target}:8080`;
-      // BUG-COMP-TOKEN FIX: gắn token xác thực vào query string. Nếu
-      // `target` đã là một URL tunnel dán sẵn có kèm ?token=... (copy
-      // nguyên từ hộp thoại desktop) thì không ghi đè; ngược lại dùng
-      // token nhập ở ô riêng.
-      const trimmedToken = token.trim();
-      if (trimmedToken && !/[?&]token=/i.test(wsUrl)) {
-        wsUrl += (wsUrl.includes('?') ? '&' : '?') + `token=${encodeURIComponent(trimmedToken)}`;
-      }
+      const wsUrl = /^wss?:\/\//i.test(target) ? target : `ws://${target}:8080`;
       wsRef.current = new WebSocket(wsUrl);
 
       wsRef.current.onopen = async () => {
@@ -238,20 +221,7 @@ export default function App() {
           autoCorrect={false}
           editable={!connected}
         />
-
-        <TextInput
-          style={styles.input}
-          onChangeText={setToken}
-          value={token}
-          placeholder="Token (lấy ở hộp thoại QR trên máy tính, tab Iris Camera)"
-          placeholderTextColor="#666"
-          keyboardType="default"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-          editable={!connected}
-        />
-
+        
         <TouchableOpacity 
           style={[styles.button, connected ? styles.buttonDisconnect : styles.buttonConnect]} 
           onPress={connect}

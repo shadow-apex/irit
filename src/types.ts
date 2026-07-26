@@ -27,6 +27,8 @@ export type TaskCard = {
 
 export interface ReactorInterface {
   onAudioInterrupt: (callback: () => void) => () => void;
+  onSilentModeChange: (callback: (payload: { enabled: boolean }) => void) => () => void;
+  onActionLanesChange: (callback: (payload: any[]) => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
   sendHandGesture: (gesture: string) => void;
 }
