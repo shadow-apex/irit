@@ -34,6 +34,7 @@ import {
   listActiveActions,
   laneSnapshot,
   cancelAction,
+  isCancelled,
   subscribeActionLanes,
 } from "./action-lane.mjs";
 import * as browserAgent from "./browser-agent.mjs";
@@ -2699,12 +2700,19 @@ async function startComputerUseTaskLaned(args) {
   const submitted = submitAction({
     lane: "computer",
     label: `Computer use: ${task}`,
-    fn: () =>
-      runComputerSession(task, (streamEvent) => {
-        if (streamEvent.text) {
-          emitEvent({ type: "log", level: "info", message: `[ComputerUse] ${streamEvent.text}` });
-        }
-      }),
+    fn: (actionId) =>
+      runComputerSession(
+        task,
+        (streamEvent) => {
+          if (streamEvent.text) {
+            emitEvent({ type: "log", level: "info", message: `[ComputerUse] ${streamEvent.text}` });
+          }
+        },
+        // fn() may start running before submitAction() below has returned
+        // (see action-lane.mjs), so this closure must use the actionId
+        // parameter rather than close over the outer `submitted` variable.
+        () => isCancelled(actionId),
+      ),
     onEvent: laneEventLogger("Computer use"),
   });
   const message =
@@ -2736,6 +2744,7 @@ function runBrowserAction(fn, label) {
       const record = getActionStatus(submitted.id);
       if (record.status === "completed") return record.result;
       if (record.status === "error") return { status: "error", error: record.error };
+      if (record.status === "cancelled") return { status: "error", error: "Đã huỷ hành động này trước khi chạy." };
       await new Promise((resolve) => setTimeout(resolve, 60));
     }
   };
@@ -3866,6 +3875,14 @@ function createWindow() {
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
+  if (process.env.IRIS_DEBUG_CONSOLE === "1") {
+    mainWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
+      console.log(`[RENDERER][${level}] ${message} (${sourceId}:${line})`);
+    });
+    mainWindow.webContents.on("render-process-gone", (_e, details) => {
+      console.log("[RENDERER][crashed]", JSON.stringify(details));
+    });
+  }
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(devUrl);
   // Avoid a translucent first-paint flash on the transparent window.
@@ -4031,6 +4048,15 @@ app.whenReady().then(() => {
   // Feature: NL smart-home automation rules — evaluated on a plain timer,
   // independent of any voice conversation (see electron/smarthome-rules.mjs).
   startSmarthomeRuleEvaluator();
+
+  // Feature: Action Lanes UI — push the live list of queued/running
+  // background actions (computer-use, browser, smart-home) to the renderer
+  // any time it changes, so ActionLanes.tsx can render it. Without this
+  // subscription the "iris:action-lanes-change" channel that preload.cjs
+  // and App.tsx already listen for would simply never fire.
+  subscribeActionLanes((activeActions) => {
+    emitToRenderer("iris:action-lanes-change", activeActions);
+  });
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "audioCapture" || permission === "videoCapture");

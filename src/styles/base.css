@@ -182,6 +182,33 @@ input:focus-visible {
   color: var(--cyan-bright);
 }
 
+/* ===== Silent (whisper) mode badge — CommsPanel col-head ===== */
+.silent-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: rgba(var(--amber-rgb), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--amber-rgb), 0.3);
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.silent-badge.is-hidden {
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none;
+}
+
 /* ===== Shared empty state ===== */
 .empty {
   margin: auto;

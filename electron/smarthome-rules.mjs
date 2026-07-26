@@ -57,8 +57,13 @@ function assertValidTrigger(trigger) {
   if (!trigger || !VALID_TRIGGER_TYPES.has(trigger.type)) {
     throw new Error("trigger.type phải là 'time' (kèm 'at': \"HH:MM\") hoặc 'interval' (kèm 'every_minutes').");
   }
-  if (trigger.type === "time" && !/^\d{1,2}:\d{2}$/.test(String(trigger.at || ""))) {
-    throw new Error("trigger.at phải theo định dạng \"HH:MM\", ví dụ \"22:00\".");
+  if (trigger.type === "time") {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(trigger.at || ""));
+    const hh = match ? Number(match[1]) : NaN;
+    const mm = match ? Number(match[2]) : NaN;
+    if (!match || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+      throw new Error("trigger.at phải theo định dạng \"HH:MM\" hợp lệ (giờ 00-23, phút 00-59), ví dụ \"22:00\".");
+    }
   }
   if (trigger.type === "interval" && !(Number(trigger.every_minutes) > 0)) {
     throw new Error("trigger.every_minutes phải là số phút lớn hơn 0.");

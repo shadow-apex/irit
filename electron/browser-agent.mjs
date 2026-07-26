@@ -43,7 +43,24 @@ async function loadPlaywright() {
 async function ensurePage({ headless = true } = {}) {
   const { chromium } = await loadPlaywright();
   if (!browser || !browser.isConnected()) {
-    browser = await chromium.launch({ headless });
+    try {
+      browser = await chromium.launch({ headless });
+    } catch (error) {
+      // The `playwright` package can be installed (loadPlaywright() above
+      // succeeds) while the actual Chromium binary hasn't been downloaded
+      // yet — this is the single most common first-run failure, since
+      // `npm install` does NOT fetch browser binaries by itself. Playwright's
+      // own error for this is a big raw ASCII-art stack trace; catch it here
+      // and surface the same clear, actionable message loadPlaywright()
+      // gives for the "package missing entirely" case.
+      const msg = String(error?.message || error);
+      if (/Executable doesn't exist|playwright install/i.test(msg)) {
+        throw new Error(
+          "Chưa cài trình duyệt Chromium cho Playwright. Chạy `npx playwright install chromium` trong thư mục dự án, sau đó thử lại."
+        );
+      }
+      throw error;
+    }
     context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     page = await context.newPage();
   }

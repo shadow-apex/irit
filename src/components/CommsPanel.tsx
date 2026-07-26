@@ -21,11 +21,13 @@ export default function CommsPanel({
       <div className="col-head">
         <MessageSquare size={14} />
         <span>Iris Conversation</span>
-        {silentOutput && (
-          <span title="Silent Mode (No voice)" className="silent-badge" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px", color: "var(--tx-dim)" }}>
-            <VolumeX size={14} /> Im lặng
-          </span>
-        )}
+        <span
+          className={`silent-badge${silentOutput ? "" : " is-hidden"}`}
+          title="Silent Mode (No voice)"
+          aria-hidden={!silentOutput}
+        >
+          <VolumeX size={12} /> Im lặng
+        </span>
       </div>
       <div className="comms-scroll" ref={scrollRef}>
         {transcript.length === 0 ? (

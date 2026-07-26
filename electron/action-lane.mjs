@@ -72,7 +72,7 @@ async function runJob(lane, job) {
   notifySubscribers();
   job.onEvent?.({ status: "running", id: job.id, lane, label: record.label });
   try {
-    const result = await job.fn();
+    const result = await job.fn(job.id);
     record.status = "completed";
     record.result = result;
     job.onEvent?.({ status: "completed", id: job.id, lane, label: record.label, result });
@@ -93,7 +93,9 @@ async function runJob(lane, job) {
  * Submit a background action into a named lane. Returns immediately with
  * {id, status: "started"|"queued", position, lane} — never awaits the work
  * itself, so the caller (a Gemini tool handler) can reply to the voice
- * conversation right away while the action runs. `fn` is the async worker;
+ * conversation right away while the action runs. `fn(id)` is the async
+ * worker — it receives its own action id so long-running/cooperative
+ * workers (like the computer-use loop) can poll isCancelled(id) themselves;
  * `onEvent` is an optional status-change hook (used to log progress and,
  * for terminal states, feed Iris's normal event stream).
  */

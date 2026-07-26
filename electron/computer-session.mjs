@@ -303,7 +303,7 @@ export async function captureScreenBase64() {
 
 let hasReportedMissingApiKey = false;
 
-export async function runComputerSession(taskDescription, onStream) {
+export async function runComputerSession(taskDescription, onStream, shouldCancel) {
   // Use ANTHROPIC_API_KEY explicitly for Computer Use (requires Claude 3.5 Sonnet)
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -332,6 +332,10 @@ export async function runComputerSession(taskDescription, onStream) {
 
   while (!isComplete && loops < 15) { // max 15 steps per task
     loops++;
+    if (shouldCancel?.()) {
+      onStream({ text: "*Task stopped by user request.*" });
+      return { status: "cancelled" };
+    }
     const { base64: screenshotBase64, width, height } = await captureScreenBase64();
 
     // Gửi ảnh gốc qua OmniParser để lấy ảnh đã đánh Set-of-Marks (khung đỏ +
@@ -521,4 +525,5 @@ export async function runComputerSession(taskDescription, onStream) {
   }
 
   onStream({ text: "*Task Completed.*" });
+  return { status: "completed" };
 }

@@ -186,8 +186,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
 
     let analyser = outputAnalyserRef.current;
     let gainNode = outputGainRef.current;
-    const isNewContext = !analyser || analyser.context !== context;
-    if (isNewContext) {
+    if (!analyser || analyser.context !== context) {
       analyser = context.createAnalyser();
       analyser.fftSize = 256;
       outputAnalyserRef.current = analyser;
