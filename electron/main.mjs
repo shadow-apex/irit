@@ -2465,8 +2465,15 @@ async function toggleMeetingRecording() {
 
     const uploadResult = await ai.files.upload({ file: wavPath, mimeType: "audio/wav" });
 
+    // BUG-MEETING-01 FIX: "gemini-1.5-pro" is a dead model ID — Google has
+    // fully shut down all Gemini 1.0/1.5 models, every call to them now
+    // returns a 404 ("model not found"). Every summarization request was
+    // silently failing and landing in the catch block below as
+    // "Lỗi tóm tắt". Use the Google-maintained "gemini-flash-latest" alias
+    // instead (currently resolves to gemini-3.5-flash) so this doesn't
+    // rot again the next time Google retires a model.
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
+      model: "gemini-flash-latest",
       contents: [uploadResult, "Đây là file ghi âm cuộc họp. Hãy tóm tắt nội dung chính và trích xuất các Action Items (Công việc cần làm) bằng tiếng Việt. Trình bày bằng định dạng Markdown ngắn gọn và đẹp mắt."]
     });
 
@@ -2510,7 +2517,7 @@ function toggleCopilotMode() {
   return { status: "success", message: `AI Copilot: ${copilotEnabled ? "ON" : "OFF"}` };
 }
 
-function toggleLiveTranscriber() {
+async function toggleLiveTranscriber() {
   if (liveTranscriber && (liveTranscriber.state === "starting" || liveTranscriber.state === "stopping")) {
     return { status: "error", error: "Đang xử lý, vui lòng đợi." };
   }
@@ -2579,8 +2586,13 @@ function toggleLiveTranscriber() {
                updateLiveHud();
                
                try {
+                 // BUG-COPILOT-01 FIX: same dead-model issue as the meeting
+                 // summarizer above — "gemini-1.5-flash" 404s on every call,
+                 // so copilotSuggestion silently fell into the catch below
+                 // and stayed "" forever (no visible error, gợi ý never
+                 // appears). Use the maintained alias instead.
                  const response = await ai.models.generateContent({
-                   model: "gemini-1.5-flash",
+                   model: "gemini-flash-latest",
                    contents: "Bạn là một trợ lý ảo nhắc bài (Copilot) hỗ trợ tôi trong một cuộc trò chuyện. Dưới đây là đoạn transcript cuộc hội thoại gần nhất (bao gồm giọng của tôi [Bạn] và người đối diện [Đối tác]):\n\n" +
                      contextText + "\n\n" +
                      "Dựa vào đoạn hội thoại trên, hãy phân tích xem người đối tác có đang hỏi hay cần tôi phản hồi gì không. Nếu có, hãy đưa ra 1-2 câu trả lời ĐỀ XUẤT ngắn gọn, tự nhiên để tôi nói lại. Nếu không có gì đáng trả lời hoặc tôi đang tự nói, chỉ cần trả về đúng 1 chữ 'NONE'."
@@ -2615,13 +2627,16 @@ function toggleLiveTranscriber() {
   }
 
   // --- Dừng ---
-  const handle = liveTranscriber;
-  liveTranscriber = null;
-  liveTranscripts = [];
-  copilotBuffer = [];
-  copilotSuggestion = "";
-  if (copilotTimer) clearTimeout(copilotTimer);
-  
+  // BUG-TELE-01 FIX: giữ nguyên `liveTranscriber` (đừng null ngay) và để
+  // stopSidecar tự đặt state = "stopping" trên chính handle đó, rồi AWAIT
+  // cho tới khi sidecar thật sự thoát mới null hoá + dọn log. Bản gốc null
+  // hoá liveTranscriber NGAY LẬP TỨC rồi mới gọi stopSidecar() (không
+  // await) — nghĩa là guard "starting/stopping" ở đầu hàm không còn thấy
+  // gì để chặn, nên bấm Alt+T lần nữa trong lúc process cũ đang tắt (tối đa
+  // 3s) sẽ spawn THÊM một live_transcriber.py thứ hai chồng lên, tranh mic
+  // với process cũ — và vì liveLogStream/liveTranscripts là biến module
+  // dùng chung, các dòng TRANSCRIPT cuối cùng của phiên cũ (đến trễ) bị ghi
+  // nhầm vào log/HUD của phiên MỚI.
   if (liveLogStream) {
     liveLogStream.write("\n=== Kết thúc phiên ===\n");
     liveLogStream.end();
@@ -2636,10 +2651,12 @@ function toggleLiveTranscriber() {
     }, 2000);
   }
 
-  // Không cần await ở đây vì UI không phải chờ kết quả gì thêm, nhưng
-  // vẫn phải dừng đúng cách (đợi thoát, force-kill nếu cần) để không
-  // giữ device loopback/mic bị khoá cho lần bật kế tiếp.
-  stopSidecar(handle, { timeoutMs: 3000 });
+  await stopSidecar(liveTranscriber, { timeoutMs: 3000 }); // luôn resolve, không treo vô hạn
+  liveTranscriber = null;
+  liveTranscripts = [];
+  copilotBuffer = [];
+  copilotSuggestion = "";
+  if (copilotTimer) clearTimeout(copilotTimer);
 
   return { status: "success", message: "Đã tắt Nhắc Tuồng." };
 }
@@ -4405,6 +4422,19 @@ app.on("before-quit", async () => {
   browserAgent.browserClose().catch(() => {});
   stopLive();
   stopCompanionServer();
+  // BUG-SIDECAR-01 FIX: meeting_recorder.py (Alt+M) and live_transcriber.py
+  // (Alt+T) were never touched here. Nếu người dùng đóng app trong lúc đang
+  // ghi âm/nhắc bài, hai sidecar Python này (và handle mic của chúng) tiếp
+  // tục chạy ngầm vô thời hạn — zombie process thật sự, không do OS dọn hộ
+  // vì tiến trình con vẫn còn stdin/stdout mở. Force-kill trực tiếp thay vì
+  // gọi stopSidecar() (ghi "stop\n" rồi chờ exit) vì app đang thoát ngay
+  // lập tức, không có thời gian chờ graceful shutdown.
+  if (meetingRecorder && meetingRecorder.proc && meetingRecorder.state !== "dead") {
+    try { meetingRecorder.proc.kill("SIGKILL"); } catch { /* ignore */ }
+  }
+  if (liveTranscriber && liveTranscriber.proc && liveTranscriber.state !== "dead") {
+    try { liveTranscriber.proc.kill("SIGKILL"); } catch { /* ignore */ }
+  }
   // BUG-COMP-05 FIX: Kill zombie expo process so it doesn't hold port 8081.
   if (typeof expoProcess !== "undefined" && expoProcess && !expoProcess.killed) {
     try { expoProcess.kill(); } catch { }
