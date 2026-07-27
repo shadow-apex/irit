@@ -224,6 +224,34 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   };
   httpServer.on('upgrade', handleUpgrade);
 
+  // BUGFIX-COMP-PORT-01: `httpServer` (cổng 8080 — server THẬT sự phục vụ
+  // Alt+C: companion.html + WebSocket signaling) trước đây không có handler
+  // cho sự kiện 'error'. Nếu cổng 8080 đã bị chiếm bởi tiến trình khác —
+  // phổ biến nhất là PHONE_CAMERA/server.js, được `npm run dev` khởi động
+  // song song qua script "camera" (xem package.json) và tự bind
+  // 127.0.0.1:8080 — thì `.listen(8080)` bên dưới ném ra 'error' (EADDRINUSE)
+  // không ai bắt, Node coi đây là uncaught exception và có thể crash/treo
+  // toàn bộ tiến trình Electron main. Kết quả nhìn từ UI: PiP Alt+C đứng mãi
+  // ở "Đang chờ điện thoại kết nối...", không có ảnh, không có âm thanh, và
+  // đôi khi cả app không phản hồi — mà không có thông báo lỗi rõ ràng nào.
+  // Bắt lỗi ở đây để: (1) không crash cả app, (2) báo rõ nguyên nhân + cách
+  // khắc phục ra log, và (3) người dùng có thể chỉ đơn giản tắt PHONE_CAMERA
+  // đang chạy (hoặc bỏ script "camera" khỏi `npm run dev`) rồi thử lại.
+  httpServer.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      emitEvent({
+        type: "log",
+        level: "error",
+        message:
+          "Companion: cổng 8080 đã bị chiếm bởi tiến trình khác (thường là PHONE_CAMERA/server.js chạy song song qua `npm run dev`). " +
+          "Camera/mic điện thoại (Alt+C) sẽ KHÔNG hoạt động cho tới khi cổng 8080 được giải phóng — " +
+          "hãy tắt tiến trình đang giữ cổng 8080 (hoặc bỏ script 'camera' khỏi npm run dev) rồi thử lại.",
+      });
+    } else {
+      emitEvent({ type: "log", level: "error", message: `Companion HTTP Server error: ${err?.message}` });
+    }
+  });
+
   httpServer.listen(8080, () => {
     emitEvent({ type: "log", level: "info", message: "Companion HTTP/WS Server started on port 8080" });
   });

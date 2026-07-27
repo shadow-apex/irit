@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import DraggablePiP from "./DraggablePiP";
-import { Smartphone, Mic, MicOff, Volume2, VolumeX, MonitorPlay } from "lucide-react";
+import { Smartphone, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { companionStream } from "../lib/companionStream";
 
 // BUGFIX-COMP-PIP-01: Component này (Alt+C, PiP nhỏ) trước đây hiển thị 1
@@ -17,7 +17,16 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
   const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
   const [speakerMuted, setSpeakerMuted] = useState(true);
-  const [viewMode, setViewMode] = useState<"webrtc" | "obs">("webrtc");
+  // BUGFIX-COMP-PIP-02: Đã bỏ hẳn chế độ "obs" (nút MonitorPlay + <iframe
+  // src="http://localhost:8080/source.html">) — chế độ này KHÔNG BAO GIỜ
+  // hoạt động khi Iris đang chạy: companion-server.mjs chiếm cổng 8080 và
+  // chỉ phục vụ '/' và '/companion.html' (xem electron/companion-server.mjs),
+  // nên request tới /source.html luôn trả 404 -> PiP đen kịt, không ảnh.
+  // Kể cả trong trường hợp source.html load được (chạy PHONE_CAMERA/server.js
+  // riêng, không cùng lúc với Iris vì đụng cổng 8080), trang đó cũng chủ đích
+  // dùng <video muted> — không bao giờ có âm thanh, vì nó được thiết kế làm
+  // OBS Browser Source (chỉ video), không phải nguồn A/V đầy đủ như luồng
+  // WebRTC thật (companionStream) mà PiP này đang dùng làm mặc định.
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeStream((stream) => {
@@ -92,27 +101,10 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {viewMode === "obs" && (
-          <iframe
-            src="http://localhost:8080/source.html"
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              border: "none",
-              zIndex: 5,
-              backgroundColor: "#000",
-            }}
-            title="OBS Source"
-          />
-        )}
-
         <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 6, zIndex: 10 }}>
           <button
-            onClick={() => setViewMode(viewMode === "webrtc" ? "obs" : "webrtc")}
-            title={viewMode === "webrtc" ? "Chuyển sang xem luồng OBS/YOLO" : "Chuyển về luồng WebRTC (Mặc định)"}
+            onClick={() => setSpeakerMuted(!speakerMuted)}
+            title={speakerMuted ? "Bật âm thanh phát ra loa PC" : "Tắt âm thanh phát ra loa PC"}
             style={{
               display: "flex",
               alignItems: "center",
@@ -121,54 +113,31 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
               height: 26,
               borderRadius: 6,
               border: "1px solid #333",
-              background: viewMode === "obs" ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
-              color: viewMode === "obs" ? "rgb(40, 205, 170)" : "#888",
+              background: !speakerMuted ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
+              color: !speakerMuted ? "rgb(40, 205, 170)" : "#888",
               cursor: "pointer",
             }}
           >
-            <MonitorPlay size={13} />
+            {speakerMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
           </button>
-          
-          {viewMode === "webrtc" && (
-            <>
-              <button
-                onClick={() => setSpeakerMuted(!speakerMuted)}
-                title={speakerMuted ? "Bật âm thanh phát ra loa PC" : "Tắt âm thanh phát ra loa PC"}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 26,
-                  height: 26,
-                  borderRadius: 6,
-                  border: "1px solid #333",
-                  background: !speakerMuted ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
-                  color: !speakerMuted ? "rgb(40, 205, 170)" : "#888",
-                  cursor: "pointer",
-                }}
-              >
-                {speakerMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
-              </button>
-              <button
-                onClick={() => companionStream.requestMicToggle(!micEnabled)}
-                title={micEnabled ? "Tắt mic điện thoại" : "Bật mic điện thoại"}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 26,
-                  height: 26,
-                  borderRadius: 6,
-                  border: "1px solid #333",
-                  background: micEnabled ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
-                  color: micEnabled ? "rgb(40, 205, 170)" : "#888",
-                  cursor: "pointer",
-                }}
-              >
-                {micEnabled ? <Mic size={13} /> : <MicOff size={13} />}
-              </button>
-            </>
-          )}
+          <button
+            onClick={() => companionStream.requestMicToggle(!micEnabled)}
+            title={micEnabled ? "Tắt mic điện thoại" : "Bật mic điện thoại"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 26,
+              height: 26,
+              borderRadius: 6,
+              border: "1px solid #333",
+              background: micEnabled ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
+              color: micEnabled ? "rgb(40, 205, 170)" : "#888",
+              cursor: "pointer",
+            }}
+          >
+            {micEnabled ? <Mic size={13} /> : <MicOff size={13} />}
+          </button>
         </div>
       </div>
     </DraggablePiP>
