@@ -26,7 +26,9 @@ import HandoffLayer from "./components/HandoffLayer";
 import BootSequence from "./components/BootSequence";
 import HoloBackdrop from "./components/HoloBackdrop";
 import RobotCameras from "./components/RobotCameras";
+import SmartHomeCameras from "./components/SmartHomeCameras";
 import CompanionVideo from "./components/CompanionVideo";
+import CompanionLiveView from "./components/CompanionLiveView";
 import CompanionWebRTC from "./components/CompanionWebRTC";
 import ActionLanes from "./components/ActionLanes";
 import { companionStream } from "./lib/companionStream";
@@ -69,8 +71,12 @@ export default function App() {
   const [isVisionEnabled, setIsVisionEnabled] = useState(false);
   const [isRobotVisionEnabled, setIsRobotVisionEnabled] = useState(false);
   const [showRobotCameras, setShowRobotCameras] = useState(false);
+  // FEAT-SH-CAM-01: PiP camera nhà thông minh (Alt+H), độc lập với robot PiP.
+  const [showSmartHomeCameras, setShowSmartHomeCameras] = useState(false);
   const [showCompanionQR, setShowCompanionQR] = useState(false);
   const [showCompanionPip, setShowCompanionPip] = useState(false);
+  // FEAT-COMP-LIVE-01: cửa sổ video lớn, ở giữa màn hình, khác panel Alt+C.
+  const [showCompanionLiveView, setShowCompanionLiveView] = useState(false);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
@@ -200,6 +206,8 @@ export default function App() {
     
     let cleanupRobot = () => {};
     let cleanupCompanion = () => {};
+    let cleanupSmartHome = () => {};
+    let cleanupCompanionLiveOpen = () => {};
 
     if (window.iris.onToggleRobotPip) {
       cleanupRobot = window.iris.onToggleRobotPip(() => {
@@ -213,9 +221,27 @@ export default function App() {
       });
     }
 
+    // FEAT-SH-CAM-01: Alt+H toggle PiP camera nhà thông minh.
+    if (window.iris.onToggleSmartHomePip) {
+      cleanupSmartHome = window.iris.onToggleSmartHomePip(() => {
+        setShowSmartHomeCameras(prev => !prev);
+      });
+    }
+
+    // FEAT-COMP-LIVE-01: lệnh thoại/tool "open_companion_live_view" -> main
+    // gửi "companion:open-live-view" -> mở cửa sổ video lớn (không toggle,
+    // luôn mở, giống hành vi take_desk_snapshot/vision:snap-desk).
+    if (window.iris.onOpenCompanionLiveView) {
+      cleanupCompanionLiveOpen = window.iris.onOpenCompanionLiveView(() => {
+        setShowCompanionLiveView(true);
+      });
+    }
+
     return () => {
       cleanupRobot();
       cleanupCompanion();
+      cleanupSmartHome();
+      cleanupCompanionLiveOpen();
     };
   }, [hasBridge]);
 
@@ -252,6 +278,26 @@ export default function App() {
       cleanupExpoFrame();
     };
   }, [hasBridge]);
+
+  // AUTO-OPEN-COMP-LIVE: tự động mở cửa sổ CompanionLiveView (video lớn, ở
+  // giữa màn hình) khi điện thoại VỪA kết nối thành công — khác effect ở
+  // trên (mở panel Alt+C, chỉ là bảng điều khiển). Chỉ tự mở đúng 1 lần cho
+  // mỗi lần chuyển null -> có stream (kết nối mới), không tự mở lại nếu
+  // người dùng vừa bấm đóng bằng tay trong khi stream vẫn còn (VD stream
+  // không đổi nhưng người dùng đóng modal) — so sánh với stream TRƯỚC đó
+  // bằng ref, không dựa vào showCompanionLiveView (nếu không, đóng xong sẽ
+  // bị effect tự mở lại ngay vì stream vẫn "có giá trị").
+  const prevCompanionStreamRef = useRef<MediaStream | null>(null);
+  useEffect(() => {
+    const unsubscribe = companionStream.subscribeStream((stream) => {
+      const wasNull = prevCompanionStreamRef.current === null;
+      prevCompanionStreamRef.current = stream;
+      if (wasNull && stream) {
+        setShowCompanionLiveView(true);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   // "Thinking" detector: you stopped talking but Iris hasn't started speaking
   // yet — that gap gets the orbiting swirl. Driven by the real mic level, so
@@ -1642,7 +1688,11 @@ export default function App() {
 
       {/* Lớp PiP Cameras thả nổi trên cùng */}
       {showRobotCameras && <RobotCameras onClose={() => setShowRobotCameras(false)} />}
+      {showSmartHomeCameras && <SmartHomeCameras onClose={() => setShowSmartHomeCameras(false)} />}
       {showCompanionPip && <CompanionVideo onClose={() => setShowCompanionPip(false)} />}
+      {/* Modal video lớn, ở giữa màn hình — mount SAU CompanionVideo, z-index
+          cao hơn (900) vì đây là modal che toàn màn hình, khác PiP thường. */}
+      {showCompanionLiveView && <CompanionLiveView onClose={() => setShowCompanionLiveView(false)} />}
       
       {/* Cửa sổ Modal */}
       {expandedTask ? <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} onClose={closeReader} /> : null}

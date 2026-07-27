@@ -140,6 +140,8 @@ type IrisApi = {
     agent: AgentRole | null,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
   getRobots: () => Promise<any>;
+  // FEAT-SH-CAM-01: Smart Home Camera Vision config (smarthome_cameras.json)
+  getSmartHomeCamerasConfig?: () => Promise<any>;
   installAgents: () => Promise<AgentsInstallResult>;
   setAgentModel: (
     workstreamId: string,
@@ -186,6 +188,11 @@ type IrisApi = {
   // PiP Global Hotkey Listeners
   onToggleRobotPip?: (callback: () => void) => () => void;
   onToggleCompanionPip?: (callback: () => void) => () => void;
+  // FEAT-SH-CAM-01: Alt+H hotkey listener for the Smart Home Cameras PiP.
+  onToggleSmartHomePip?: (callback: () => void) => () => void;
+  // FEAT-COMP-LIVE-01: main -> renderer signal to open the big centered
+  // Companion Live View window (voice command / tool open_companion_live_view).
+  onOpenCompanionLiveView?: (callback: () => void) => () => void;
   getCompanionWsTunnel?: () => Promise<string | null>;
   getCompanionWsToken?: () => Promise<string | null>;
   getPhoneCamUrl?: () => Promise<string | null>;

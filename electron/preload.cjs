@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld("iris", {
   getSessions: () => ipcRenderer.invoke("sessions:get"),
   getRobots: () => ipcRenderer.invoke("robots:get"),
   triggerRobotAction: (args) => ipcRenderer.invoke("robots:action", args),
+  // FEAT-SH-CAM-01: Smart Home Camera Vision — đọc smarthome_cameras.json,
+  // song song với getRobots()/robots.json nhưng tách domain riêng.
+  getSmartHomeCamerasConfig: () => ipcRenderer.invoke("smarthome-cameras:get-config"),
   getLocalIp: () => ipcRenderer.invoke("network:get-ip"),
   startCompanionExpo: () => ipcRenderer.invoke("companion:start-expo"),
   getCompanionTunnel: () => ipcRenderer.invoke("companion:get-tunnel"),
@@ -132,6 +135,19 @@ contextBridge.exposeInMainWorld("iris", {
     const handler = () => callback();
     ipcRenderer.on("ui:toggle-companion-pip", handler);
     return () => ipcRenderer.removeListener("ui:toggle-companion-pip", handler);
+  },
+  // FEAT-SH-CAM-01: hotkey Alt+H — bật/tắt PiP camera nhà thông minh.
+  onToggleSmartHomePip: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("ui:toggle-smarthome-pip", handler);
+    return () => ipcRenderer.removeListener("ui:toggle-smarthome-pip", handler);
+  },
+  // FEAT-COMP-LIVE-01: lệnh thoại/tool "open_companion_live_view" -> mở cửa
+  // sổ video lớn ở giữa màn hình (CompanionLiveView.tsx), khác panel Alt+C.
+  onOpenCompanionLiveView: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("companion:open-live-view", handler);
+    return () => ipcRenderer.removeListener("companion:open-live-view", handler);
   },
   onCompanionWebRTCSignal: (callback) => {
     const handler = (_event, signal) => callback(signal);

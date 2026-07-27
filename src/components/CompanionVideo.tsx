@@ -17,6 +17,42 @@ import { Smartphone, Monitor, Radio, Copy, Check } from "lucide-react";
 const PC_VIEWER_URL = "https://localhost:8443/viewer.html";
 const OBS_SOURCE_URL = "http://localhost:8080/source.html";
 
+// FEAT-COMP-OBS-PREVIEW-01: theo yêu cầu — nhúng luôn link OBS Source
+// (source.html, cổng 8080 của PHONE_CAMERA/server.js) NGAY trong panel Alt+C
+// dưới dạng <iframe> thật (không phải chỉ link để copy), để người dùng xem
+// trực tiếp được mà không cần mở trình duyệt riêng.
+//
+// Lưu ý về "key" trong link: server.js bind cổng 8080 vào 127.0.0.1
+// (localhost-only) và cố tình KHÔNG bắt buộc token cho source.html
+// (`attachSignaling(..., { requireToken: false })` — xem PHONE_CAMERA/server.js
+// dòng ~138, comment "cổng HTTP mirror cho OBS đã bind 127.0.0.1... không
+// cần thêm 1 lớp token nữa"). Vẫn gắn ROOM_TOKEN (?t=...) vào đây khi có —
+// vô hại (server bỏ qua tham số thừa) và tương lai nếu bạn đổi requireToken
+// thành true cho cổng này thì link vẫn hoạt động luôn, không cần sửa lại.
+//
+// Về "Iris cũng xem được": đây là preview cho NGƯỜI xem trong iframe — nội
+// dung iframe khác domain/context nên KHÔNG thể đọc pixel để gửi cho Gemini
+// (giới hạn bảo mật trình duyệt, không phải bug). Nếu muốn Iris "nhìn" qua
+// camera điện thoại, dùng toggle_camera_stream_vision (Direct Stream
+// Vision) — nó đọc thẳng từ companionStream (hệ thống WebRTC built-in, khác
+// PHONE_CAMERA), đã tự động chạy song song, không cần làm gì thêm ở đây.
+function obsSourceUrlWithToken(token: string | null): string {
+  if (!token) return OBS_SOURCE_URL;
+  return `${OBS_SOURCE_URL}?t=${encodeURIComponent(token)}`;
+}
+
+// Trích token (?t=...) từ phoneUrl (link gốc điện thoại quét, đã có sẵn
+// token) để tái dùng cho link OBS Source ở trên — tránh phải đọc thêm 1 IPC
+// riêng chỉ để lấy ROOM_TOKEN.
+function extractToken(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).searchParams.get("t");
+  } catch {
+    return null;
+  }
+}
+
 function qrImgFor(data: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data)}`;
 }
@@ -122,8 +158,8 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
         </>
       }
       onClose={onClose}
-      defaultPosition={{ x: window.innerWidth - 340, y: 80 }}
-      defaultSize={{ width: 320, height: 400 }}
+      defaultPosition={{ x: window.innerWidth - 360, y: 80 }}
+      defaultSize={{ width: 340, height: 620 }}
     >
       <div
         style={{
@@ -163,6 +199,33 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "rgb(40, 205, 170)", fontSize: 12, fontWeight: "bold" }}>
+            <Radio size={13} />
+            Xem trực tiếp (OBS Source)
+          </div>
+          <div
+            style={{
+              width: "100%",
+              aspectRatio: "16 / 9",
+              borderRadius: 6,
+              overflow: "hidden",
+              border: "1px solid #222",
+              backgroundColor: "#000",
+            }}
+          >
+            {/* Nhúng thẳng source.html — trang này tự nối WebSocket signaling
+                (xem PHONE_CAMERA/public/source.html) và vẽ video nhận được
+                vào <video> của chính nó; iframe chỉ hiển thị lại trang đó. */}
+            <iframe
+              src={obsSourceUrlWithToken(extractToken(phoneUrl))}
+              title="OBS Source Preview"
+              style={{ width: "100%", height: "100%", border: "none" }}
+              allow="autoplay"
+            />
+          </div>
+        </div>
+
         <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
           <ConnectionRow
             icon={<Smartphone size={13} />}
@@ -179,8 +242,8 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           <ConnectionRow
             icon={<Radio size={13} />}
             label="OBS Source"
-            hint="Dán vào Browser Source trong OBS Studio"
-            value={OBS_SOURCE_URL}
+            hint="Dán vào Browser Source trong OBS Studio (hoặc xem preview ở trên)"
+            value={obsSourceUrlWithToken(extractToken(phoneUrl))}
           />
         </div>
       </div>

@@ -154,6 +154,10 @@ function toggleCameraStreamVision() {
     // chung sẽ vừa tốn token vừa gây nhiễu ("nhìn" hai nguồn cùng lúc).
     // Ngắt hẳn vòng lặp desktopCapturer trước khi bật luồng trực tiếp.
     stopVisionLoop();
+    // FEAT-SH-CAM-01: cùng lý do trên, không để chạy song song với Smart
+    // Home Vision hay Robot Vision (chỉ 1 nguồn ảnh gửi Gemini 1 lúc).
+    stopSmartHomeVisionLoop();
+    stopRobotVisionLoop();
     lastCameraStreamFrameHash = null;
     if (mainWindow) mainWindow.webContents.send("vision:toggle-camera-stream", true);
     emitEvent({ type: "camera_stream_vision_state", enabled: true });
@@ -206,6 +210,9 @@ function toggleScreenVision() {
     // Ngược lại với toggleCameraStreamVision(): bật Screen Vision (chụp
     // toàn màn hình) thì tắt Direct Stream Vision, tránh gửi trùng 2 nguồn.
     if (isCameraStreamVisionEnabled) stopCameraStreamVisionLoop();
+    // FEAT-SH-CAM-01: cũng tắt Smart Home Vision / Robot Vision nếu đang bật.
+    if (isSmartHomeVisionEnabled) stopSmartHomeVisionLoop();
+    if (isRobotVisionEnabled) stopRobotVisionLoop();
     if (!visionInterval) {
       lastVisionFrameHash = null; // luôn gửi frame đầu tiên khi vừa bật lại
       visionInterval = setInterval(async () => {
@@ -286,6 +293,111 @@ function getRobotsConfig() {
 
 let activeRobotId = null;
 
+// FEAT-SH-CAM-01: Smart Home Camera Vision — nhân bản đúng kiến trúc Robot
+// Vision ở trên (getRobotsConfig/isRobotVisionEnabled/robotVisionInterval)
+// nhưng cho camera nhà thông minh (smarthome_cameras.json), KHÔNG gộp chung
+// với robots.json vì khác domain (camera nhà không di chuyển/không có
+// control_url) và khác vòng đời bật/tắt (không liên quan gì tới robot).
+let isSmartHomeVisionEnabled = false;
+let smartHomeVisionInterval = null;
+let activeSmartHomeCameraId = null;
+
+let _smartHomeCamerasCache = null;
+let _smartHomeCamerasCacheTime = 0;
+
+function getSmartHomeCamerasConfig() {
+  if (_smartHomeCamerasCache && Date.now() - _smartHomeCamerasCacheTime < 5000) {
+    return _smartHomeCamerasCache;
+  }
+  const configPath = path.join(repoRoot, "smarthome_cameras.json");
+  if (!fs.existsSync(configPath)) {
+    _smartHomeCamerasCache = {};
+    _smartHomeCamerasCacheTime = Date.now();
+    return _smartHomeCamerasCache;
+  }
+  try {
+    const data = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(data);
+    _smartHomeCamerasCache = parsed.cameras || {};
+    _smartHomeCamerasCacheTime = Date.now();
+    return _smartHomeCamerasCache;
+  } catch (err) {
+    console.error("Failed to parse smarthome_cameras.json:", err);
+    _smartHomeCamerasCache = {};
+    _smartHomeCamerasCacheTime = Date.now();
+    return _smartHomeCamerasCache;
+  }
+}
+
+function stopSmartHomeVisionLoop() {
+  if (smartHomeVisionInterval) {
+    clearInterval(smartHomeVisionInterval);
+    smartHomeVisionInterval = null;
+  }
+  isSmartHomeVisionEnabled = false;
+  activeSmartHomeCameraId = null;
+  emitEvent({ type: "smarthome_vision_state", enabled: false });
+  emitEvent({ type: "log", level: "info", message: "Smart Home camera vision loop stopped." });
+}
+
+function toggleSmartHomeVision(args = {}) {
+  const cameraId = args.camera_id;
+  const cameras = getSmartHomeCamerasConfig();
+
+  if (!isSmartHomeVisionEnabled) {
+    if (!cameraId || !cameras[cameraId]) {
+      return { status: "error", error: "Cannot enable Smart Home Vision: Invalid or missing camera_id." };
+    }
+    const url = cameras[cameraId].camera_url;
+    if (!url) {
+      return { status: "error", error: `Cannot enable Smart Home Vision: camera_url is not set for camera ${cameraId}.` };
+    }
+  }
+
+  isSmartHomeVisionEnabled = !isSmartHomeVisionEnabled;
+  if (isSmartHomeVisionEnabled) {
+    // Chỉ 1 nguồn ảnh được gửi cho Gemini tại 1 thời điểm — tắt hẳn các
+    // nguồn vision khác trước khi bật cái này, giống cách
+    // toggleCameraStreamVision() đã làm với toggleScreenVision().
+    stopVisionLoop();
+    stopCameraStreamVisionLoop();
+    stopRobotVisionLoop();
+    if (!smartHomeVisionInterval) {
+      smartHomeVisionInterval = setInterval(async () => {
+        if (!liveSession || !isSmartHomeVisionEnabled) {
+          stopSmartHomeVisionLoop();
+          return;
+        }
+        try {
+          const cams = getSmartHomeCamerasConfig();
+          const url = cams[cameraId]?.camera_url;
+          if (!url) {
+            emitEvent({ type: "log", level: "warn", message: `Camera URL is not set for smart home camera ${cameraId}.` });
+            stopSmartHomeVisionLoop();
+            return;
+          }
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const buffer = await res.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          liveSession.sendRealtimeInput([{
+            mimeType: "image/jpeg",
+            data: base64,
+          }]);
+        } catch (e) {
+          console.error("[IRIS][SmartHomeVision] Error capturing camera:", e);
+        }
+      }, 4000);
+    }
+    activeSmartHomeCameraId = cameraId;
+    emitEvent({ type: "smarthome_vision_state", enabled: true, camera_id: cameraId });
+    return { status: "enabled", message: `Smart Home camera vision enabled for ${cameraId}. I am now streaming camera frames.` };
+  } else {
+    stopSmartHomeVisionLoop();
+    return { status: "disabled", message: "Smart Home camera vision disabled." };
+  }
+}
+
 function toggleRobotVision(args = {}) {
   const robotId = args.robot_id;
   const robots = getRobotsConfig();
@@ -302,6 +414,9 @@ function toggleRobotVision(args = {}) {
 
   isRobotVisionEnabled = !isRobotVisionEnabled;
   if (isRobotVisionEnabled) {
+    // FEAT-SH-CAM-01: chỉ 1 nguồn ảnh gửi Gemini tại 1 thời điểm.
+    if (isSmartHomeVisionEnabled) stopSmartHomeVisionLoop();
+    if (isCameraStreamVisionEnabled) stopCameraStreamVisionLoop();
     if (!robotVisionInterval) {
       robotVisionInterval = setInterval(async () => {
         if (!liveSession || !isRobotVisionEnabled) {
@@ -1887,6 +2002,12 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
       return { status: "success", message: "Toggled Desk Vision (Super+Shift+C)" };
     case "toggle_camera_stream_vision":
       return toggleCameraStreamVision();
+    case "toggle_smarthome_pip":
+      if (mainWindow) mainWindow.webContents.send("ui:toggle-smarthome-pip");
+      return { status: "success", message: "Toggled Smart Home Cameras PiP (Alt+H)" };
+    case "open_companion_live_view":
+      if (mainWindow) mainWindow.webContents.send("companion:open-live-view");
+      return { status: "success", message: "Opened Companion Live View." };
   }
 
   if (!UI_ACTIONS.has(action)) {
@@ -2933,12 +3054,19 @@ async function executeClaudeTool(name, args = {}) {
       return triggerSmartHome(args);
     case "list_robots":
       return { status: "success", robots: getRobotsConfig() };
+    case "list_smarthome_cameras":
+      return { status: "success", cameras: getSmartHomeCamerasConfig() };
     case "toggle_screen_vision":
       return toggleScreenVision();
     case "toggle_robot_vision":
       return toggleRobotVision(args);
     case "toggle_camera_stream_vision":
       return toggleCameraStreamVision();
+    case "toggle_smarthome_vision":
+      return toggleSmartHomeVision(args);
+    case "open_companion_live_view":
+      if (mainWindow) mainWindow.webContents.send("companion:open-live-view");
+      return { status: "success", message: "Requested to open the Companion Live View window." };
     case "trigger_robot_action":
       return triggerRobotAction(args);
     case "toggle_meeting_recorder":
@@ -3216,6 +3344,26 @@ function buildClaudeTools() {
         {
           name: "toggle_camera_stream_vision",
           description: "Turn on or off Direct Stream Vision: watch the Companion phone camera (WebRTC) feed directly instead of capturing the entire desktop screen. Invoke this when the user asks you to watch/follow/monitor 'the camera' or the phone/companion camera specifically (e.g. 'hãy theo dõi camera', 'nhìn qua camera điện thoại giúp tôi') rather than the computer screen.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "list_smarthome_cameras",
+          description: "List all available smart home cameras in the user's configuration (smarthome_cameras.json).",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "toggle_smarthome_vision",
+          description: "Turn on or off Live Smart Home Camera Vision for a specific home camera (e.g. an ESPHome esp32_camera device from setupsmarthome/myiris_smarthome_camera.yaml), allowing you to continuously see through it. Invoke this when the user asks you to watch/monitor a smart home camera (e.g. 'nhìn qua camera phòng khách', 'xem camera cửa trước giúp tôi').",
+          parameters: {
+            type: "object",
+            properties: {
+              camera_id: { type: "string", description: "The ID of the smart home camera to view (key in smarthome_cameras.json)." }
+            }
+          },
+        },
+        {
+          name: "open_companion_live_view",
+          description: "Open a large, centered live video window showing the connected phone's camera feed in real time (smooth video, not the 3.5s AI vision snapshots). Invoke this when the user asks to see/open/watch the phone camera themselves (e.g. 'mở camera điện thoại lên cho tôi xem', 'cho tôi xem camera điện thoại').",
           parameters: { type: "object", properties: {} },
         },
         {
@@ -3556,7 +3704,7 @@ function buildClaudeTools() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision. Use toggle_* to turn features on/off when requested by the user.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_smarthome_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision, open_companion_live_view. Use toggle_* to turn features on/off when requested by the user.",
               },
               target_id: {
                 type: "string",
@@ -3862,6 +4010,7 @@ async function stopLive() {
   stopVisionLoop();
   stopRobotVisionLoop();
   stopCameraStreamVisionLoop();
+  stopSmartHomeVisionLoop();
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
@@ -4137,6 +4286,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("robots:get", () => getRobotsConfig());
+  ipcMain.handle("smarthome-cameras:get-config", () => getSmartHomeCamerasConfig());
   ipcMain.handle("robots:action", (_event, args) => triggerRobotAction(args));
 
   ipcMain.handle("network:get-ip", () => {
@@ -4449,6 +4599,16 @@ app.whenReady().then(() => {
   });
   if (!companionPipRegistered) {
     emitEvent({ type: "log", level: "error", message: `Could not register Companion PiP hotkey Alt+C.` });
+  }
+
+  // Register Alt+H to toggle Smart Home Cameras PiP (FEAT-SH-CAM-01)
+  const smartHomePipRegistered = globalShortcut.register("Alt+H", () => {
+    if (mainWindow) {
+      mainWindow.webContents.send("ui:toggle-smarthome-pip");
+    }
+  });
+  if (!smartHomePipRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register Smart Home Cameras PiP hotkey Alt+H.` });
   }
 
   // Register Alt+M to toggle Meeting Recorder
