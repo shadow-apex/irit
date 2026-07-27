@@ -1,190 +1,188 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import DraggablePiP from "./DraggablePiP";
-import { Smartphone, Mic, MicOff } from "lucide-react";
-import { companionStream, type AudioResumeState } from "../lib/companionStream";
+import { Smartphone, Monitor, Radio, Copy, Check } from "lucide-react";
 
-// FIX BUG-COMP-WEBRTC-02:
-// Trước đây cửa sổ này (mở bằng Alt+C) chỉ biết vẽ ảnh JPEG rời rạc nhận
-// qua window.iris.onCompanionFrame — đường dành cho app Expo Go cũ. Luồng
-// WebRTC mới (video + audio thời gian thực) chạy ngầm trong
-// CompanionWebRTC.tsx và trước đây bị ẩn hoàn toàn (display:none), khiến
-// PiP bị đen/kẹt ở màn hình chờ ngrok dù điện thoại đã kết nối WebRTC.
+// REFACTOR (2026): Companion Camera (Alt+C) từng vẽ trực tiếp video WebRTC
+// và dự phòng bằng luồng Expo Go/ngrok cũ (tunnelUrl, frameUrl, QR ngrok).
+// App hiện chỉ dùng hệ thống WebRTC thuần trong thư mục PHONE_CAMERA, nên
+// toàn bộ nhánh Expo Go/ngrok đã bị xoá khỏi component này.
 //
-// Sửa: PiP giờ lấy trực tiếp MediaStream từ store dùng chung
-// (companionStream) và gắn vào thẻ <video> của chính nó — không tạo thêm
-// RTCPeerConnection mới, không đụng vào luồng signalling hiện có.
-// onCompanionFrame / QR ngrok vẫn được giữ lại làm phương án dự phòng cho
-// trường hợp máy chưa hỗ trợ WebRTC (ví dụ vẫn dùng app Expo Go cũ).
-export default function CompanionVideo({ onClose }: { onClose: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(() => companionStream.getStream());
-  const [audioState, setAudioState] = useState<AudioResumeState>(() => companionStream.getAudioState());
-  const [micEnabled, setMicEnabled] = useState<boolean>(() => companionStream.getMicEnabled());
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
+// Cửa sổ PiP Alt+C giờ đóng vai trò "Bảng điều khiển kết nối": không hiện
+// video (video thật vẫn chạy ngầm trong CompanionWebRTC.tsx và được các nơi
+// khác — vd. Direct Stream Vision — đọc qua companionStream), mà chỉ hiển
+// thị 3 điểm kết nối cố định của hệ thống PHONE_CAMERA:
+//   1) Link quét cho điện thoại (đọc từ PHONE_CAMERA/.url qua IPC)
+//   2) Link PC Viewer (https://localhost:8443/viewer.html)
+//   3) Link OBS Source (http://localhost:8080/source.html)
+const PC_VIEWER_URL = "https://localhost:8443/viewer.html";
+const OBS_SOURCE_URL = "http://localhost:8080/source.html";
 
-  // Nguồn ưu tiên #1: luồng WebRTC thời gian thực
-  useEffect(() => {
-    const unsubscribe = companionStream.subscribeStream(setWebrtcStream);
-    return unsubscribe;
-  }, []);
+function qrImgFor(data: string) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data)}`;
+}
 
-  useEffect(() => {
-    const unsubscribe = companionStream.subscribeAudioState(setAudioState);
-    return unsubscribe;
-  }, []);
+// Một hàng thông tin kết nối: nhãn + link/text bấm-để-copy.
+function ConnectionRow({
+  icon,
+  label,
+  hint,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  value: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
 
-  // FEAT-COMP-MIC-01: theo dõi trạng thái mic điện thoại để tô sáng/mờ icon
-  // nút bấm cho đúng, kể cả khi bị đổi từ nơi khác (ví dụ reset khi có kết
-  // nối mới trong CompanionWebRTC.tsx).
-  useEffect(() => {
-    const unsubscribe = companionStream.subscribeMicState(setMicEnabled);
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = webrtcStream;
-      if (webrtcStream) {
-        // BUG-COMP-WEBRTC-03 FIX: some Chromium builds don't honor the
-        // `autoPlay` attribute reliably when `srcObject` is (re)assigned
-        // after mount — calling play() explicitly is the documented
-        // workaround. Errors here are expected/harmless (e.g. a stale
-        // AbortError if the stream changes again immediately after).
-        videoRef.current.play().catch(() => {});
-      }
-    }
-  }, [webrtcStream]);
-
-  // Nguồn dự phòng #2: đường Expo Go cũ (chỉ dùng khi chưa có WebRTC stream)
-  useEffect(() => {
-    if (webrtcStream || !window.iris?.onCompanionFrame) return;
-
-    const cleanup = window.iris.onCompanionFrame((base64Jpeg) => {
-      setFrameUrl(`data:image/jpeg;base64,${base64Jpeg}`);
+  const handleCopy = () => {
+    if (!value) return;
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
     });
+  };
 
-    return cleanup;
-  }, [webrtcStream]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, color: "rgb(40, 205, 170)", fontSize: 12, fontWeight: "bold" }}>
+        {icon}
+        {label}
+      </div>
+      <div style={{ color: "#777", fontSize: 10, marginBottom: 2 }}>{hint}</div>
+      <code
+        onClick={handleCopy}
+        title="Bấm để copy"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          background: "#000",
+          padding: "6px 8px",
+          borderRadius: 4,
+          fontSize: 11,
+          color: value ? "#ddd" : "#555",
+          wordBreak: "break-all",
+          cursor: value ? "pointer" : "default",
+        }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{value ?? "..."}</span>
+        {value ? (copied ? <Check size={12} style={{ flexShrink: 0, color: "rgb(40, 205, 170)" }} /> : <Copy size={12} style={{ flexShrink: 0, opacity: 0.5 }} />) : null}
+      </code>
+    </div>
+  );
+}
 
-  // Nguồn dự phòng #3: QR ngrok, chỉ hiện khi không có cả WebRTC lẫn frame Expo Go
+export default function CompanionVideo({ onClose }: { onClose: () => void }) {
+  const [phoneUrl, setPhoneUrl] = useState<string | null>(null);
+
+  // Đọc link quét cho điện thoại từ PHONE_CAMERA/.url (chứa link gốc kèm
+  // ROOM_TOKEN param t=...) qua IPC main process, poll cho tới khi server
+  // PHONE_CAMERA ghi file xong (server có thể khởi động sau app một chút).
   useEffect(() => {
-    let intervalId: number;
-    if (!webrtcStream && !tunnelUrl && !frameUrl) {
-      intervalId = window.setInterval(async () => {
-        try {
-          if (window.iris?.getCompanionTunnel) {
-            const url = await window.iris.getCompanionTunnel();
-            if (url) {
-              setTunnelUrl(url);
-              window.clearInterval(intervalId);
-            }
-          }
-        } catch (e) {}
-      }, 2000);
-    }
-    return () => window.clearInterval(intervalId);
-  }, [webrtcStream, tunnelUrl, frameUrl]);
+    let cancelled = false;
+    let timer: number | undefined;
+    let hasUrlOnce = false;
+
+    // AUDIT-COMP-QR-01 FIX: trước đây poll() dừng hẳn ngay khi lấy được URL
+    // lần đầu. Nhưng PHONE_CAMERA/server.js sinh ROOM_TOKEN MỚI mỗi lần
+    // server đó khởi động lại (bảo mật — token không cố định trừ khi set
+    // env ROOM_TOKEN). Nếu server bị restart trong lúc panel Alt+C đang mở,
+    // QR/link cũ sẽ hết hạn mà UI không hay biết. Nên tiếp tục poll định kỳ
+    // (chậm hơn, 5s) kể cả sau khi đã có URL, để tự cập nhật QR khi
+    // ROOM_TOKEN đổi — không chỉ dừng ở lần đọc thành công đầu tiên.
+    const poll = async () => {
+      if (cancelled || !window.iris?.getPhoneCamUrl) return;
+      try {
+        const url = await window.iris.getPhoneCamUrl();
+        if (!cancelled && url) {
+          setPhoneUrl(url);
+          hasUrlOnce = true;
+        }
+      } catch (e) {
+        // im lặng, thử lại ở vòng poll tiếp theo
+      }
+      if (!cancelled) timer = window.setTimeout(poll, hasUrlOnce ? 5000 : 2000);
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, []);
 
   return (
     <DraggablePiP
       title={
         <>
           <Smartphone size={16} style={{ color: "rgb(40, 205, 170)" }} />
-          Companion Camera
-          {/* FEAT-COMP-MIC-01: bật/tắt mic điện thoại ngay từ cửa sổ PiP —
-              chỉ hiện khi đã có luồng WebRTC thật (không hiện khi đang ở màn
-              hình chờ QR/ngrok vì lúc đó chưa có mic nào để tắt). */}
-          {webrtcStream && (
-            <button
-              className="hover-scale-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                companionStream.requestMicToggle(!micEnabled);
-              }}
-              title={micEnabled ? "Tắt mic điện thoại" : "Bật mic điện thoại"}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 24,
-                height: 24,
-                padding: 0,
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-                background: micEnabled ? "transparent" : "rgba(220, 60, 60, 0.85)",
-                color: micEnabled ? "rgb(40, 205, 170)" : "#fff",
-              }}
-            >
-              {micEnabled ? <Mic size={14} /> : <MicOff size={14} />}
-            </button>
-          )}
+          Companion Camera — Kết nối
         </>
       }
       onClose={onClose}
-      defaultPosition={{ x: window.innerWidth - 340, y: 80 }} // Top right corner default
-      defaultSize={{ width: 320, height: 240 }}
+      defaultPosition={{ x: window.innerWidth - 340, y: 80 }}
+      defaultSize={{ width: 320, height: 400 }}
     >
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#000", position: "relative" }}>
-        {/* Thẻ video luôn được mount để srcObject gắn được ngay khi stream tới,
-            chỉ ẩn đi bằng CSS khi chưa có stream (không unmount, tránh giật). */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "contain",
-            display: webrtcStream ? "block" : "none",
-          }}
-        />
-        {webrtcStream && audioState === "suspended" && (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 14,
+          padding: 14,
+          overflowY: "auto",
+          backgroundColor: "#111",
+          boxSizing: "border-box",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
           <div
-            onClick={() => companionStream.requestResume()}
             style={{
-              position: "absolute",
-              bottom: 8,
-              left: "50%",
-              transform: "translateX(-50%)",
-              padding: "4px 10px",
-              borderRadius: 999,
-              background: "rgba(0,0,0,0.6)",
-              color: "#fff",
-              fontSize: 11,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
+              width: 150,
+              height: 150,
+              backgroundColor: "#fff",
+              borderRadius: 8,
+              padding: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
-            🔇 Click để bật audio
+            {phoneUrl ? (
+              <img src={qrImgFor(phoneUrl)} alt="Phone Link QR" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            ) : (
+              <div style={{ color: "#000", fontSize: 11, textAlign: "center", fontWeight: "bold" }}>Đang chờ server...</div>
+            )}
           </div>
-        )}
-        {webrtcStream ? null : frameUrl ? (
-          <img 
-            src={frameUrl} 
-            alt="Companion Stream" 
-            style={{ width: "100%", height: "100%", objectFit: "contain" }} 
+          <div style={{ color: "#888", fontSize: 11, textAlign: "center" }}>
+            Quét bằng <strong>điện thoại</strong> để kết nối camera (WebRTC)
+          </div>
+        </div>
+
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
+          <ConnectionRow
+            icon={<Smartphone size={13} />}
+            label="Phone Link"
+            hint="Link gốc kèm ROOM_TOKEN — quét QR ở trên hoặc dán trực tiếp"
+            value={phoneUrl}
           />
-        ) : tunnelUrl ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 10 }}>
-            <img 
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(tunnelUrl)}`} 
-              alt="QR Code" 
-              style={{ width: 150, height: 150, backgroundColor: "white", padding: 5, borderRadius: 5 }} 
-            />
-            <div style={{ color: "#666", fontSize: 13, textAlign: "center", marginTop: 10 }}>
-              Scan with Expo Go to connect<br />
-              <span style={{ fontSize: 10, color: "#444" }}>{tunnelUrl}</span>
-            </div>
-          </div>
-        ) : (
-          <div style={{ color: "#666", fontSize: 13, textAlign: "center", padding: 20 }}>
-            Waiting for ngrok tunnel...<br />
-            (Ensure Iris Companion is starting)
-          </div>
-        )}
+          <ConnectionRow
+            icon={<Monitor size={13} />}
+            label="PC Viewer"
+            hint="Mở trên trình duyệt PC để xem trực tiếp luồng camera"
+            value={PC_VIEWER_URL}
+          />
+          <ConnectionRow
+            icon={<Radio size={13} />}
+            label="OBS Source"
+            hint="Dán vào Browser Source trong OBS Studio"
+            value={OBS_SOURCE_URL}
+          />
+        </div>
       </div>
     </DraggablePiP>
   );

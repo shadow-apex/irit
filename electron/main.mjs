@@ -126,6 +126,46 @@ let lastVisionFrameHash = null;
 let isRobotVisionEnabled = false;
 let robotVisionInterval = null;
 
+// FEAT-VIS-DIRECT-01: "Direct Stream Vision" — thay vì chụp toàn màn hình
+// (desktopCapturer, tốn CPU + hay lẫn cả UI của Iris vào ảnh gửi Gemini),
+// chế độ này để Renderer tự vẽ frame từ MediaStream đang xem (Companion
+// WebRTC của điện thoại, hoặc camera robot) lên <canvas>, xuất JPEG/base64
+// rồi đẩy thẳng lên Main qua IPC "vision:camera-stream-frame". Main chỉ việc
+// nhận và bơm vào liveSession — không tự chụp gì cả nên không có
+// desktopCapturer trong luồng này.
+let isCameraStreamVisionEnabled = false;
+// Hash SHA-1 của frame gần nhất nhận qua IPC — cùng ý tưởng AUDIT-VIS-02 ở
+// trên: nếu điện thoại/robot đứng yên (không có gì thay đổi trong khung
+// hình) thì bỏ qua, không gửi lại cho Gemini để tiết kiệm băng thông/token.
+let lastCameraStreamFrameHash = null;
+
+function stopCameraStreamVisionLoop() {
+  isCameraStreamVisionEnabled = false;
+  lastCameraStreamFrameHash = null;
+  if (mainWindow) mainWindow.webContents.send("vision:toggle-camera-stream", false);
+  emitEvent({ type: "camera_stream_vision_state", enabled: false });
+}
+
+function toggleCameraStreamVision() {
+  isCameraStreamVisionEnabled = !isCameraStreamVisionEnabled;
+  if (isCameraStreamVisionEnabled) {
+    // Direct Stream Vision và Screen Vision (desktopCapturer) không nên
+    // chạy song song — cả hai đều gửi ảnh cho cùng 1 liveSession, chạy
+    // chung sẽ vừa tốn token vừa gây nhiễu ("nhìn" hai nguồn cùng lúc).
+    // Ngắt hẳn vòng lặp desktopCapturer trước khi bật luồng trực tiếp.
+    stopVisionLoop();
+    lastCameraStreamFrameHash = null;
+    if (mainWindow) mainWindow.webContents.send("vision:toggle-camera-stream", true);
+    emitEvent({ type: "camera_stream_vision_state", enabled: true });
+    return {
+      status: "enabled",
+      message: "Direct Stream Vision enabled — I'm now watching the camera feed (companion phone / robot) directly instead of the desktop screen.",
+    };
+  }
+  stopCameraStreamVisionLoop();
+  return { status: "disabled", message: "Direct Stream Vision disabled." };
+}
+
 let localchatEnabled = false;
 let privacyCamEnabled = false;
 let privacyWindow = null;
@@ -163,6 +203,9 @@ function stopVisionLoop() {
 function toggleScreenVision() {
   isVisionEnabled = !isVisionEnabled;
   if (isVisionEnabled) {
+    // Ngược lại với toggleCameraStreamVision(): bật Screen Vision (chụp
+    // toàn màn hình) thì tắt Direct Stream Vision, tránh gửi trùng 2 nguồn.
+    if (isCameraStreamVisionEnabled) stopCameraStreamVisionLoop();
     if (!visionInterval) {
       lastVisionFrameHash = null; // luôn gửi frame đầu tiên khi vừa bật lại
       visionInterval = setInterval(async () => {
@@ -1842,6 +1885,8 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
     case "toggle_desk_vision":
       if (mainWindow) mainWindow.webContents.send("vision:toggle-desk");
       return { status: "success", message: "Toggled Desk Vision (Super+Shift+C)" };
+    case "toggle_camera_stream_vision":
+      return toggleCameraStreamVision();
   }
 
   if (!UI_ACTIONS.has(action)) {
@@ -2892,6 +2937,8 @@ async function executeClaudeTool(name, args = {}) {
       return toggleScreenVision();
     case "toggle_robot_vision":
       return toggleRobotVision(args);
+    case "toggle_camera_stream_vision":
+      return toggleCameraStreamVision();
     case "trigger_robot_action":
       return triggerRobotAction(args);
     case "toggle_meeting_recorder":
@@ -3165,6 +3212,11 @@ function buildClaudeTools() {
               robot_id: { type: "string", description: "The ID of the robot to view." }
             }
           },
+        },
+        {
+          name: "toggle_camera_stream_vision",
+          description: "Turn on or off Direct Stream Vision: watch the Companion phone camera (WebRTC) feed directly instead of capturing the entire desktop screen. Invoke this when the user asks you to watch/follow/monitor 'the camera' or the phone/companion camera specifically (e.g. 'hãy theo dõi camera', 'nhìn qua camera điện thoại giúp tôi') rather than the computer screen.",
+          parameters: { type: "object", properties: {} },
         },
         {
           name: "trigger_robot_action",
@@ -3504,7 +3556,7 @@ function buildClaudeTools() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_screen_vision, toggle_desk_vision. Use toggle_* to turn features on/off when requested by the user.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision. Use toggle_* to turn features on/off when requested by the user.",
               },
               target_id: {
                 type: "string",
@@ -3809,6 +3861,7 @@ async function stopLive() {
   // try to send frames on a dead WebSocket.
   stopVisionLoop();
   stopRobotVisionLoop();
+  stopCameraStreamVisionLoop();
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
@@ -4251,6 +4304,25 @@ app.whenReady().then(() => {
     // Remove "data:image/jpeg;base64," prefix
     const base64 = base64DataUrl.split(",")[1];
     if (!base64) return;
+    liveSession.sendRealtimeInput([{
+      mimeType: "image/jpeg",
+      data: base64,
+    }]);
+  });
+
+  // FEAT-VIS-DIRECT-01: nhận frame JPEG/base64 mà Renderer đã tự vẽ từ
+  // <canvas> (drawImage từ MediaStream Companion WebRTC hoặc camera robot)
+  // — KHÔNG dùng desktopCapturer ở đây, Main chỉ chuyển tiếp thẳng vào
+  // Gemini live session, giống hệt cách vision:desk-frame hoạt động.
+  ipcMain.on("vision:camera-stream-frame", (_event, base64DataUrl) => {
+    if (!liveSession || !isCameraStreamVisionEnabled) return;
+    const base64 = base64DataUrl.split(",")[1];
+    if (!base64) return;
+    // AUDIT-VIS-02 style dedupe: bỏ qua frame giống hệt frame trước (camera
+    // đứng yên) để không tốn băng thông/token cho Gemini.
+    const hash = crypto.createHash("sha1").update(base64).digest("hex");
+    if (hash === lastCameraStreamFrameHash) return;
+    lastCameraStreamFrameHash = hash;
     liveSession.sendRealtimeInput([{
       mimeType: "image/jpeg",
       data: base64,

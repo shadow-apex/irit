@@ -1359,6 +1359,82 @@ export default function App() {
     };
   }, [deskVisionContinuous]);
 
+  // FEAT-VIS-DIRECT-01: "Direct Stream Vision" — khi Main báo bật (lệnh
+  // "hãy theo dõi camera" -> tool toggle_camera_stream_vision), thay vì để
+  // Main tự chụp toàn màn hình (desktopCapturer), Renderer vẽ trực tiếp
+  // frame từ MediaStream Companion WebRTC (điện thoại) đang xem trong PiP
+  // lên <canvas>, xuất JPEG/base64 rồi đẩy qua IPC. Dùng chung nguồn sự
+  // thật companionStream (singleton) — không tạo thêm RTCPeerConnection.
+  const [cameraStreamVisionEnabled, setCameraStreamVisionEnabled] = useState(false);
+  const camVisionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const camVisionVideoRef = useRef<HTMLVideoElement | null>(null);
+  const camVisionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const camVisionLastStreamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge || !window.iris.onToggleCameraStreamVision) return;
+    return window.iris.onToggleCameraStreamVision((enabled) => {
+      setCameraStreamVisionEnabled(enabled);
+    });
+  }, [hasBridge]);
+
+  useEffect(() => {
+    if (!cameraStreamVisionEnabled) {
+      if (camVisionIntervalRef.current) {
+        clearInterval(camVisionIntervalRef.current);
+        camVisionIntervalRef.current = null;
+      }
+      if (camVisionVideoRef.current) camVisionVideoRef.current.srcObject = null;
+      camVisionLastStreamRef.current = null;
+      return;
+    }
+
+    if (!camVisionVideoRef.current) {
+      camVisionVideoRef.current = document.createElement("video");
+      camVisionVideoRef.current.autoplay = true;
+      camVisionVideoRef.current.muted = true;
+    }
+    if (!camVisionCanvasRef.current) {
+      camVisionCanvasRef.current = document.createElement("canvas");
+    }
+    const video = camVisionVideoRef.current;
+    const canvas = camVisionCanvasRef.current;
+
+    // Theo dõi companionStream liên tục — điện thoại có thể kết nối lại
+    // (reconnect) sau khi chế độ này đã bật, nên gắn lại srcObject mỗi khi
+    // stream thay đổi thay vì chỉ đọc 1 lần lúc bật.
+    const unsubscribe = companionStream.subscribeStream((stream) => {
+      if (stream === camVisionLastStreamRef.current) return;
+      camVisionLastStreamRef.current = stream;
+      video.srcObject = stream;
+      if (stream) video.play().catch(() => {});
+    });
+
+    // Định kỳ mỗi 3.5s: drawImage từ <video> lên <canvas>, xuất JPEG/base64
+    // và đẩy lên Main qua IPC — Main không tự chụp gì, chỉ chuyển tiếp
+    // (kèm dedupe SHA-1 phía Main, xem vision:camera-stream-frame).
+    camVisionIntervalRef.current = setInterval(() => {
+      if (!video.srcObject || video.videoWidth === 0) return;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/jpeg", 0.6);
+      window.iris.sendCameraStreamFrame(base64);
+    }, 3500);
+
+    return () => {
+      unsubscribe();
+      if (camVisionIntervalRef.current) {
+        clearInterval(camVisionIntervalRef.current);
+        camVisionIntervalRef.current = null;
+      }
+      video.srcObject = null;
+      camVisionLastStreamRef.current = null;
+    };
+  }, [cameraStreamVisionEnabled]);
+
   const caption = useMemo(() => {
     if (!sidecarRunning)
       return {

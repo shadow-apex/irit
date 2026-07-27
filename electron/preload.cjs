@@ -53,6 +53,15 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("vision:toggle-desk-continuous", handler);
     return () => ipcRenderer.removeListener("vision:toggle-desk-continuous", handler);
   },
+  // FEAT-VIS-DIRECT-01: Direct Stream Vision — Renderer tự vẽ frame từ
+  // MediaStream (Companion WebRTC / robot) lên <canvas> và đẩy JPEG/base64
+  // lên đây; Main chỉ chuyển tiếp thẳng vào Gemini, không dùng desktopCapturer.
+  sendCameraStreamFrame: (base64) => ipcRenderer.send("vision:camera-stream-frame", base64),
+  onToggleCameraStreamVision: (callback) => {
+    const handler = (_event, enabled) => callback(enabled);
+    ipcRenderer.on("vision:toggle-camera-stream", handler);
+    return () => ipcRenderer.removeListener("vision:toggle-camera-stream", handler);
+  },
   onWakeRequest: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("iris:wake", handler);
