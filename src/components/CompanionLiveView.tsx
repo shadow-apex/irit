@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mic, MicOff, Smartphone } from "lucide-react";
+import { X, Mic, MicOff, Smartphone, Volume2, VolumeX } from "lucide-react";
 import { companionStream } from "../lib/companionStream";
 
 // FEAT-COMP-LIVE-01: Cửa sổ xem video Companion Camera LỚN, Ở GIỮA màn hình.
@@ -14,6 +14,7 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
   const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
+  const [speakerMuted, setSpeakerMuted] = useState(true);
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeStream((stream) => {
@@ -93,6 +94,25 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
             Companion Camera — Xem trực tiếp
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {/* Speaker toggle */}
+            <button
+              onClick={() => setSpeakerMuted(!speakerMuted)}
+              title={speakerMuted ? "Bật âm thanh phát ra loa PC" : "Tắt âm thanh phát ra loa PC"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                border: "1px solid #333",
+                background: !speakerMuted ? "rgba(40, 205, 170, 0.12)" : "#151515",
+                color: !speakerMuted ? "rgb(40, 205, 170)" : "#888",
+                cursor: "pointer",
+              }}
+            >
+              {speakerMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            </button>
             {/* Mic toggle — tắt mic tại đây hợp lý vì đang xem video trực
                 tiếp; dùng lại đúng API companionStream đã có sẵn. */}
             <button
@@ -150,7 +170,7 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
             ref={videoRef}
             autoPlay
             playsInline
-            muted
+            muted={speakerMuted}
             style={{
               width: "100%",
               height: "100%",

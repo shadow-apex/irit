@@ -102,6 +102,11 @@ export default function CompanionWebRTC() {
             // onCompanionFrame (Expo Go) cũ đã lỗi thời.
             if (e.streams[0]) {
               companionStream.setStream(e.streams[0]);
+              // FIX: Đảm bảo extraction được bắt đầu lại nếu có track mới (đặc biệt là audio track)
+              // đến sau khi connectionState đã báo 'connected', tránh việc audio bị bỏ qua.
+              if (pcRef.current?.connectionState === 'connected') {
+                startExtraction();
+              }
             }
           };
 
