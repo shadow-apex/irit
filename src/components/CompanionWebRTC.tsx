@@ -93,7 +93,9 @@ export default function CompanionWebRTC() {
           pc.ontrack = (e) => {
             console.log('[WebRTC Receiver] Got track:', e.track.kind);
             if (videoRef.current && e.streams[0]) {
-              videoRef.current.srcObject = e.streams[0];
+              if (videoRef.current.srcObject !== e.streams[0]) {
+                videoRef.current.srcObject = e.streams[0];
+              }
             }
             // FIX BUG-COMP-WEBRTC-02: publish stream để CompanionVideo (PiP
             // Alt+C) có thể hiển thị trực tiếp, thay vì dùng đường

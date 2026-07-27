@@ -21,8 +21,10 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
     const unsubscribe = companionStream.subscribeStream((stream) => {
       setHasStream(Boolean(stream));
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        if (stream) videoRef.current.play().catch(() => {});
+        if (videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream;
+          if (stream) videoRef.current.play().catch(() => {});
+        }
       }
     });
     return unsubscribe;
@@ -62,6 +64,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           ref={videoRef}
           autoPlay
           playsInline
+          muted
           style={{
             width: "100%",
             height: "100%",

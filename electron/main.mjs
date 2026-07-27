@@ -4653,7 +4653,12 @@ app.on("before-quit", async () => {
   }
   browserAgent.browserClose().catch(() => {});
   stopLive();
-  stopCompanionServer();
+  // BUGFIX-COMP-NGROK-01 (cont.): stopCompanionServer() is now async and
+  // actually tears down the ngrok agent (ngrok.kill()) instead of just
+  // disconnecting the tunnel. It must be awaited here, or Electron will
+  // exit while that teardown is still in flight — leaving the agent alive
+  // and causing "tunnel already exists" on the next launch.
+  await stopCompanionServer();
   // BUG-SIDECAR-01 FIX: meeting_recorder.py (Alt+M) and live_transcriber.py
   // (Alt+T) were never touched here. Nếu người dùng đóng app trong lúc đang
   // ghi âm/nhắc bài, hai sidecar Python này (và handle mic của chúng) tiếp

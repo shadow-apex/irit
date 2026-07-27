@@ -86,12 +86,24 @@ async function startNgrokTunnel(emitEvent) {
         message: "Companion: IRIS_NGROK_AUTHTOKEN is not set — recent ngrok versions require a free authtoken (https://dashboard.ngrok.com) or the tunnel will fail to start.",
       });
     }
+    // BUGFIX-COMP-NGROK-01: "tunnel already exists" happens when an ngrok
+    // agent from a *previous* run is still alive (e.g. app was force-closed,
+    // or the previous stopCompanionServer() call didn't finish its
+    // disconnect before the process exited — see stopCompanionServer()
+    // below for the matching fix). Before every connect attempt, proactively
+    // kill any local agent this ngrok SDK instance might already be
+    // tracking. This is safe/idempotent — if nothing is running it just
+    // resolves immediately.
+    try {
+      await ngrok.kill();
+    } catch { /* nothing running — fine */ }
+
     console.log("[Companion] Starting ngrok on port 8080...");
     try {
       ngrokWsTunnelUrl = await ngrok.connect({ addr: 8080, proto: 'http' });
     } catch (connectErr) {
       console.warn("[Companion] ngrok.connect threw an error, checking if tunnel actually exists...", connectErr.message);
-      // Fallback: If ngrok retried internally and threw 'already exists', the tunnel is actually there.
+      // Fallback #1: If ngrok retried internally and threw 'already exists', the tunnel is actually there.
       // We can fetch the running tunnels from its local API.
       try {
         const res = await fetch('http://127.0.0.1:4040/api/tunnels');
@@ -104,7 +116,18 @@ async function startNgrokTunnel(emitEvent) {
           throw connectErr;
         }
       } catch (fallbackErr) {
-        throw connectErr;
+        // Fallback #2: the stale agent might be a completely separate
+        // process (different local API port, or one `ngrok.kill()` above
+        // couldn't reach), so the API recovery above found nothing. Force-
+        // kill again and retry the connect once more before giving up.
+        console.warn("[Companion] Could not recover existing tunnel, force-killing and retrying once...");
+        try {
+          await ngrok.kill();
+          await new Promise((r) => setTimeout(r, 1000));
+          ngrokWsTunnelUrl = await ngrok.connect({ addr: 8080, proto: 'http' });
+        } catch (retryErr) {
+          throw retryErr;
+        }
       }
     }
     
@@ -318,7 +341,7 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   // ─────────────────────────────────────────────────────────────────────
 }
 
-export function stopCompanionServer() {
+export async function stopCompanionServer() {
   // ── BUG-COMP-11 FIX: heartbeat interval must be cleared or it keeps
   // running (and keeps a reference to the closed `wss`) forever, leaking
   // a timer every start/stop cycle.
@@ -353,13 +376,22 @@ export function stopCompanionServer() {
   }
   // ─────────────────────────────────────────────────────────────────────
   if (ngrokConnected) {
-    // Best-effort, non-blocking — don't hold up app quit on tunnel teardown.
-    import('ngrok')
-      .then(({ default: ngrok }) => ngrok.disconnect())
-      .catch(() => { /* ngrok not installed or already gone — nothing to clean up */ })
-      .finally(() => {
-        ngrokConnected = false;
-        ngrokWsTunnelUrl = null;
-      });
+    // BUGFIX-COMP-NGROK-01 (cont.): `disconnect()` only closes the tunnel;
+    // the local ngrok agent process kept running. If the app then exited
+    // (Electron doesn't wait for un-awaited promises in before-quit) before
+    // that agent shut down cleanly, ngrok's edge servers could still think
+    // the tunnel was live on the next launch -> "tunnel already exists".
+    // `kill()` fully terminates the local agent (calls disconnect() first
+    // internally), and this is now awaited by the caller instead of being
+    // fire-and-forget, so cleanup actually finishes before quit.
+    try {
+      const { default: ngrok } = await import('ngrok');
+      await ngrok.kill();
+    } catch {
+      /* ngrok not installed or already gone — nothing to clean up */
+    } finally {
+      ngrokConnected = false;
+      ngrokWsTunnelUrl = null;
+    }
   }
 }
