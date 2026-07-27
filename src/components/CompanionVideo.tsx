@@ -1,49 +1,38 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import DraggablePiP from "./DraggablePiP";
-import { Smartphone } from "lucide-react";
+import { Smartphone, Mic, MicOff } from "lucide-react";
+import { companionStream } from "../lib/companionStream";
 
-const OBS_SOURCE_URL = "http://localhost:8080/source.html";
-
-function obsSourceUrlWithToken(token: string | null): string {
-  if (!token) return OBS_SOURCE_URL;
-  return `${OBS_SOURCE_URL}?t=${encodeURIComponent(token)}`;
-}
-
-function extractToken(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).searchParams.get("t");
-  } catch {
-    return null;
-  }
-}
-
+// BUGFIX-COMP-PIP-01: Component này (Alt+C, PiP nhỏ) trước đây hiển thị 1
+// <iframe> trỏ tới OBS_SOURCE_URL (http://localhost:8080/source.html) —
+// một trang hoàn toàn KHÔNG liên quan gì tới luồng WebRTC thật (không video,
+// không audio, không nút mic nào có tác dụng). Trong khi đó comment trong
+// companionStream.ts và App.tsx đều mô tả rằng PiP Alt+C phải hiển thị
+// đúng `companionStream` (nguồn sự thật duy nhất, được nuôi bởi
+// CompanionWebRTC.tsx) — giống hệt cách CompanionLiveView.tsx (modal lớn)
+// đang làm. Sửa lại để dùng đúng companionStream + thêm nút tắt/mở mic
+// điện thoại ngay trên PiP này (không cần mở modal lớn mới tắt được mic).
 export default function CompanionVideo({ onClose }: { onClose: () => void }) {
-  const [phoneUrl, setPhoneUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
+  const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    let hasUrlOnce = false;
-
-    const poll = async () => {
-      if (cancelled || !window.iris?.getPhoneCamUrl) return;
-      try {
-        const url = await window.iris.getPhoneCamUrl();
-        if (!cancelled && url) {
-          setPhoneUrl(url);
-          hasUrlOnce = true;
-        }
-      } catch (e) {
+    const unsubscribe = companionStream.subscribeStream((stream) => {
+      setHasStream(Boolean(stream));
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        if (stream) videoRef.current.play().catch(() => {});
       }
-      if (!cancelled) timer = window.setTimeout(poll, hasUrlOnce ? 5000 : 2000);
-    };
+    });
+    return unsubscribe;
+  }, []);
 
-    poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
+  useEffect(() => {
+    const unsubscribe = companionStream.subscribeMicState((enabled) => {
+      setMicEnabled(enabled);
+    });
+    return unsubscribe;
   }, []);
 
   return (
@@ -62,16 +51,66 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
         style={{
           width: "100%",
           height: "100%",
+          position: "relative",
           display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           backgroundColor: "#000",
         }}
       >
-        <iframe
-          src={obsSourceUrlWithToken(extractToken(phoneUrl))}
-          title="OBS Source Preview"
-          style={{ width: "100%", height: "100%", border: "none" }}
-          allow="autoplay"
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: hasStream ? "block" : "none",
+          }}
         />
+        {!hasStream && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+              color: "rgb(40, 205, 170)",
+              fontSize: 12,
+              textAlign: "center",
+              padding: "0 16px",
+            }}
+          >
+            <Smartphone size={22} style={{ opacity: 0.6 }} />
+            Đang chờ điện thoại kết nối...
+          </div>
+        )}
+
+        {/* Nút tắt/mở mic điện thoại — sửa BUG-COMP-QR-01 kèm theo: giờ
+            người dùng có thể tắt mic ngay tại PiP nhỏ này trên máy tính,
+            không bắt buộc phải mở modal CompanionLiveView lớn. */}
+        <button
+          onClick={() => companionStream.requestMicToggle(!micEnabled)}
+          title={micEnabled ? "Tắt mic điện thoại" : "Bật mic điện thoại"}
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 26,
+            height: 26,
+            borderRadius: 6,
+            border: "1px solid #333",
+            background: micEnabled ? "rgba(40, 205, 170, 0.15)" : "rgba(0,0,0,0.6)",
+            color: micEnabled ? "rgb(40, 205, 170)" : "#888",
+            cursor: "pointer",
+          }}
+        >
+          {micEnabled ? <Mic size={13} /> : <MicOff size={13} />}
+        </button>
       </div>
     </DraggablePiP>
   );
