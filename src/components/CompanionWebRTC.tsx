@@ -22,15 +22,16 @@ import { companionStream } from '../lib/companionStream';
 // bên dưới bằng thông tin của bạn.
 const RTC_CFG = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
     {
       urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:443',
+        'turn:global.relay.metered.ca:80?transport=tcp',
+        'turns:global.relay.metered.ca:443?transport=tcp',
       ],
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      username: '38d8be553dc5cd91666b1d9a',
+      credential: '1lVLwxHcUQGDIm0Z',
     },
   ],
   iceCandidatePoolSize: 4,
@@ -117,6 +118,12 @@ export default function CompanionWebRTC() {
           // tắt từ phiên kết nối trước.
           companionStream.setMicEnabled(true);
 
+          // DEBUG-COMP-ICE-02: tracking candidate type song song với phía
+          // companion.html — khi failed, phân biệt rõ "chưa từng thấy relay
+          // candidate" (TURN không trả credential hợp lệ) với "có relay mà
+          // vẫn fail" (nghi vấn TURN server quá tải/không route được).
+          const seenCandidateTypes = new Set<string>();
+
           pc.onicecandidate = (e) => {
             if (e.candidate) {
               // BUGFIX-COMP-ICE-01: log loại candidate (host/srflx/relay) để
@@ -125,6 +132,7 @@ export default function CompanionWebRTC() {
               // "failed", gần như chắc chắn là do client isolation / NAT
               // hairpin — cần "relay" (TURN) để media thực sự đi qua được.
               const type = e.candidate.type || (e.candidate.candidate || '').match(/typ (\w+)/)?.[1];
+              if (type) seenCandidateTypes.add(type);
               console.log('[WebRTC Receiver] Local ICE candidate:', type, e.candidate.candidate);
               window.iris.sendCompanionWebRTCSignal?.({ type: 'ice', candidate: e.candidate });
             }
@@ -141,11 +149,32 @@ export default function CompanionWebRTC() {
           // extraction sẽ không bao giờ chạy dù stream đã hiện trên PiP.
           // Thêm nhánh nghe iceConnectionState làm lưới an toàn thứ hai.
           pc.oniceconnectionstatechange = () => {
-            console.log('[WebRTC Receiver] ICE state:', pc.iceConnectionState);
+            console.log('[WebRTC Receiver] ICE state:', pc.iceConnectionState, '| candidate types seen:', [...seenCandidateTypes]);
             if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
               startExtraction();
             } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
               stopExtraction();
+              if (pc.iceConnectionState === 'failed') {
+                // DEBUG-COMP-ICE-02: xem giải thích ở khai báo seenCandidateTypes
+                // phía trên. Log này là thứ cần xem đầu tiên khi PiP đen màn hình.
+                if (!seenCandidateTypes.has('relay')) {
+                  console.error(
+                    '[WebRTC Receiver] ICE FAILED — PC không gather được relay candidate nào. ' +
+                    'Nhiều khả năng TURN server (openrelay.metered.ca) đang không khả dụng/credential ' +
+                    'tĩnh "openrelayproject" đã ngừng hoạt động — cân nhắc tự host coturn hoặc dùng ' +
+                    'tài khoản Metered.ca có API key riêng.'
+                  );
+                } else {
+                  console.error(
+                    '[WebRTC Receiver] ICE FAILED — PC CÓ relay candidate nhưng vẫn không kết nối được. ' +
+                    'Kiểm tra xem điện thoại (log trên trang companion.html) có gather được relay candidate ' +
+                    'tương ứng không — nếu chỉ 1 bên có relay, 2 máy vẫn không nói chuyện được với nhau.'
+                  );
+                }
+                // Không cần tự renegotiate ở đây: PC chỉ đóng vai trò answerer,
+                // companion.html (phone) là bên tự động gửi lại offer mới sau
+                // khi phát hiện failed (xem DEBUG-COMP-ICE-02 trong companion.html).
+              }
             }
           };
 

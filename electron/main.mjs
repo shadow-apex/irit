@@ -39,7 +39,7 @@ import {
 } from "./action-lane.mjs";
 import * as browserAgent from "./browser-agent.mjs";
 import * as smarthomeRules from "./smarthome-rules.mjs";
-import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, sendSignalToPhone } from "./companion-server.mjs";
+import { startCompanionServer, stopCompanionServer, getCompanionWsTunnel, getCompanionWsToken, sendSignalToPhone, setCompanionMainWindow } from "./companion-server.mjs";
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4092,6 +4092,12 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
+  // FIX-COMP-STALE-WINDOW: đăng ký cửa sổ MỚI này với companion-server ngay
+  // lập tức, để relay SDP/ICE Offer-Answer từ điện thoại luôn được forward
+  // tới đúng cửa sổ đang hiển thị — không bị "đóng băng" vào cửa sổ cũ nếu
+  // app từng đóng/mở lại cửa sổ trước đó (xem giải thích chi tiết trong
+  // companion-server.mjs).
+  setCompanionMainWindow(mainWindow);
   const devUrl = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
   if (process.env.IRIS_DEBUG_CONSOLE === "1") {
@@ -4109,6 +4115,7 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
     uiMode = "deck";
+    setCompanionMainWindow(null);
   });
 
   // Iron Man HUD Stats interval — chỉ tạo một lần duy nhất.
@@ -4538,6 +4545,19 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // FIX-COMP-AUTOSTART: trước đây companion server (WebRTC camera/mic điện
+  // thoại, cổng 8080/8444 + ngrok) CHỈ được startCompanionServer() bên trong
+  // startLive() — tức là chỉ chạy sau khi người dùng bấm "Start Live
+  // Session". Hệ quả: quét QR / mở link trước khi bấm Start -> chưa có
+  // token -> không kết nối được gì, dù giao diện trông như "đang chờ".
+  // Companion server không phụ thuộc vào Gemini Live (sendAudioChunk và
+  // sendFrameToGemini đã tự kiểm tra `if (!liveSession) return;`), nên có
+  // thể khởi động độc lập ngay từ đầu. startCompanionServer() tự early-return
+  // nếu đã chạy rồi (`if (wss) return;`), nên lệnh gọi lại bên trong
+  // startLive() vẫn giữ nguyên, vô hại — chỉ là gọi 2 lần cho chắc.
+  startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini);
+
   createTray();
   const registered = globalShortcut.register(hudHotkey(), () => {
     toggleHud();

@@ -40,15 +40,16 @@ const log = (t) => { $('status').textContent = 'Status: ' + t; console.log('[pho
 // như trước khi thêm TURN.
 const RTC_CFG = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
     {
       urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:443',
+        'turn:global.relay.metered.ca:80?transport=tcp',
+        'turns:global.relay.metered.ca:443?transport=tcp',
       ],
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      username: '38d8be553dc5cd91666b1d9a',
+      credential: '1lVLwxHcUQGDIm0Z',
     },
   ],
   iceCandidatePoolSize: 4,
@@ -121,20 +122,43 @@ function newPC() {
   pc = new RTCPeerConnection(RTC_CFG);
   localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
   preferH264();
+  // DEBUG-COMP-ICE-02: theo dõi loại candidate đã gather được (host/srflx/
+  // relay) để khi ICE failed, biết ngay là do THIẾU relay candidate (TURN
+  // không trả về candidate nào — sai username/credential, hoặc dịch vụ
+  // openrelay.metered.ca hiện không khả dụng) hay là CÓ relay candidate mà
+  // vẫn fail (thường do phía kia — PC — cũng không gather được relay tương ứng).
+  const seenCandidateTypes = new Set();
   pc.onicecandidate = (e) => {
     if (e.candidate) {
-      // BUGFIX-COMP-ICE-01: log loại candidate (host/srflx/relay) trong
-      // Safari/Chrome remote debug để chẩn đoán nhanh nếu vẫn không lên hình.
       const type = e.candidate.type || (e.candidate.candidate || '').match(/typ (\w+)/)?.[1];
+      if (type) seenCandidateTypes.add(type);
       log('ICE candidate: ' + type);
       ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate }));
     }
   };
   pc.onconnectionstatechange = () => log('WebRTC: ' + pc.connectionState);
+  let iceRestartTimer = null;
   pc.oniceconnectionstatechange = () => {
-    console.log('[phone] ICE state:', pc.iceConnectionState);
+    console.log('[phone] ICE state:', pc.iceConnectionState, '| candidate types seen:', [...seenCandidateTypes]);
     if (pc.iceConnectionState === 'failed') {
-      log('WebRTC: ICE FAILED (kiểm tra mạng / TURN)');
+      if (!seenCandidateTypes.has('relay')) {
+        log('WebRTC: ICE FAILED — KHÔNG có relay candidate nào (TURN server không phản hồi/sai credential). Kiểm tra RTC_CFG hoặc thử coturn riêng.');
+      } else {
+        log('WebRTC: ICE FAILED — có relay candidate nhưng vẫn không kết nối được (nhiều khả năng phía PC cũng thiếu relay tương ứng, hoặc TURN đang quá tải).');
+      }
+      // DEBUG-COMP-ICE-02 (cont.): thay vì treo mãi ở 'failed' chờ người
+      // dùng tự đóng app/tải lại trang, tự động renegotiate lại từ đầu (PC
+      // đã sẵn sàng nhận offer mới bất cứ lúc nào — xem 'offer' handler
+      // trong CompanionWebRTC.tsx, nó luôn close() PC cũ + tạo PC mới).
+      // Debounce bằng 1 timer để tránh gọi makeOffer() chồng chéo nếu state
+      // đổi qua lại nhanh.
+      if (iceRestartTimer) clearTimeout(iceRestartTimer);
+      iceRestartTimer = setTimeout(() => {
+        if (started && pc && pc.iceConnectionState === 'failed') {
+          log('WebRTC: đang thử kết nối lại từ đầu...');
+          makeOffer();
+        }
+      }, 2000);
     }
   };
 }

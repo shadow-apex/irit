@@ -40,11 +40,14 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
         ]);
         if (cancelled) return;
         if (!token) {
-          // Token chỉ được tạo sau khi companion-server khởi động, tức là
-          // sau khi bấm bắt đầu phiên Iris (startLive/sidecar:start) — chưa
-          // bật Iris thì chưa có gì để quét cả.
+          // FIX-COMP-AUTOSTART: companion server giờ tự khởi động ngay khi
+          // app mở (main.mjs gọi startCompanionServer() ngay sau
+          // createWindow(), không còn đợi startLive() nữa) — nên token này
+          // thường chỉ null trong vài trăm ms đầu lúc app khởi động, hoặc
+          // nếu port 8080/8444 bị chiếm khiến server không lên được (xem log
+          // terminal `npm run dev` để biết chi tiết).
           setVoiceUrl(null);
-          setVoiceError("Chưa có token — hãy bật Iris (Start) trước, companion server sẽ tự khởi động cùng lúc.");
+          setVoiceError("Companion server đang khởi động, vui lòng đợi vài giây rồi thử lại...");
         } else if (ip && ip !== "localhost") {
           setVoiceUrl(`https://${ip}:8444/companion.html?token=${encodeURIComponent(token)}`);
           setVoiceError(null);
@@ -152,7 +155,7 @@ export default function CompanionQR({ onClose }: { onClose: () => void }) {
                 {mode === "voice" ? (
                   <>Chưa có mã để quét!<br/><br/>
                     <span style={{ fontSize: 12, fontWeight: "normal", color: "#000" }}>
-                      {voiceError || "Hãy bấm Start để bật Iris trước — companion server chỉ khởi động cùng phiên live."}
+                      {voiceError || "Đang chờ companion server khởi động..."}
                     </span>
                   </>
                 ) : (

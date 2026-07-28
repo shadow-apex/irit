@@ -25,6 +25,26 @@ let httpsServer = null;
 let activeConnection = null;
 let heartbeatInterval = null;
 
+// FIX-COMP-STALE-WINDOW: `mainWindow` trước đây chỉ được truyền vào MỘT LẦN
+// làm tham số của startCompanionServer() và bị "đóng băng" trong closure của
+// wss.on('connection', ...). Nhưng mainWindow trong main.mjs có thể bị đóng
+// và TẠO LẠI hoàn toàn (BrowserWindow mới) — ví dụ: người dùng bấm nút đóng
+// cửa sổ (sự kiện 'closed' set mainWindow = null), rồi mở lại qua Tray "Show
+// Deck", click icon Dock (macOS), hoặc app.on('activate'). Vì
+// startCompanionServer() chỉ chạy đúng 1 lần (guard `if (wss) return;` ở
+// trên), companion-server.mjs không bao giờ biết cửa sổ mới này tồn tại —
+// nó vẫn giữ tham chiếu tới cửa sổ CŨ đã bị destroy. Kết quả: sau lần đóng/mở
+// lại cửa sổ đầu tiên, `mainWindow.isDestroyed()` luôn trả về true, relay
+// SDP/ICE từ điện thoại bị rớt vĩnh viễn dù server, WebSocket, ICE đều OK.
+// Sửa bằng cách tách `mainWindow` ra khỏi tham số hàm, lưu ở biến module-level
+// có thể cập nhật bất cứ lúc nào qua setCompanionMainWindow() — main.mjs gọi
+// hàm này mỗi khi tạo/hủy mainWindow.
+let currentMainWindow = null;
+
+export function setCompanionMainWindow(win) {
+  currentMainWindow = win;
+}
+
 // BUG-COMP-08 FIX: `expo start --tunnel` only tunnels port 8081 (the Metro
 // bundler that serves the JS to Expo Go). It never touches port 8080, which
 // is THIS server — the raw WebSocket carrying the actual camera/audio
@@ -162,7 +182,14 @@ function stripWavHeader(buffer) {
 }
 
 export function sendSignalToPhone(data) {
-  if (activeConnection && activeConnection.readyState === 1) {
+  // DEBUG-COMP-RELAY-01 (cont.): log chiều PC -> phone (answer, ice, mic-toggle...)
+  // để biết message có thực sự gửi đi được hay bị rớt vì activeConnection null/closed
+  // (ví dụ phone đã disconnect nhưng PC chưa kịp nhận 'peer-left').
+  const canSend = !!(activeConnection && activeConnection.readyState === 1);
+  console.log(
+    `[Companion][Relay] -> phone: type=${data?.type} | connection=${canSend ? 'OPEN, sent' : `NOT OPEN (readyState=${activeConnection?.readyState ?? 'null'}) -> DROPPED!`}`
+  );
+  if (canSend) {
     activeConnection.send(JSON.stringify(data));
   }
 }
@@ -177,6 +204,11 @@ export function sendSignalToPhone(data) {
  */
 export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini) {
   if (wss) return;
+
+  // Khởi tạo tham chiếu ban đầu — các lần cửa sổ bị đóng/tạo lại sau đó
+  // main.mjs sẽ gọi setCompanionMainWindow() để cập nhật currentMainWindow,
+  // xem giải thích FIX-COMP-STALE-WINDOW ở khai báo biến phía trên.
+  currentMainWindow = mainWindow;
 
   // AUDIT-COMP-01 FIX: Math.random() KHÔNG phải CSPRNG — nó dùng thuật toán
   // xorshift/PRNG thường có thể dự đoán được nếu biết vài output trước đó
@@ -330,8 +362,26 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
           
           // Relay WebRTC signaling from Phone to Desktop Renderer
           if (["peer-ready", "offer", "answer", "ice", "control", "peer-left"].includes(parsed.type)) {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send("companion:webrtc-signal", parsed);
+            // DEBUG-COMP-RELAY-01: trước đây relay này hoàn toàn im lặng —
+            // nếu mainWindow bị null/destroyed (ví dụ Vite HMR reload cửa sổ
+            // trong `npm run dev`, hoặc user đóng cửa sổ chính) thì message
+            // bị "nuốt" mà không có bất kỳ dấu vết nào trong log. Log rõ mỗi
+            // message + kết quả relay (OK / DROPPED) để xác định ngay server
+            // <-> renderer có thông hay không, tách biệt khỏi vấn đề ICE/TURN.
+            const canRelay = !!(currentMainWindow && !currentMainWindow.isDestroyed());
+            console.log(
+              `[Companion][Relay] <- phone: type=${parsed.type}` +
+              (parsed.type === 'ice' ? ` candidate=${(parsed.candidate?.candidate || '').match(/typ (\w+)/)?.[1] || 'n/a'}` : '') +
+              ` | mainWindow=${canRelay ? 'OK, forwarding to renderer' : 'MISSING/DESTROYED -> DROPPED!'}`
+            );
+            if (canRelay) {
+              currentMainWindow.webContents.send("companion:webrtc-signal", parsed);
+            } else {
+              emitEvent({
+                type: "log",
+                level: "error",
+                message: `Companion: nhận được '${parsed.type}' từ điện thoại nhưng KHÔNG relay được vì mainWindow không tồn tại/đã bị destroy — mở lại cửa sổ Iris và thử kết nối lại.`,
+              });
             }
           }
         }
