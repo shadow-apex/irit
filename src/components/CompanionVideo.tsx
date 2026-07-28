@@ -15,6 +15,13 @@ import { companionStream } from "../lib/companionStream";
 export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
+  // BUGFIX-COMP-ICE-01: `hasStream` chỉ nói lên việc đã CÓ một đối tượng
+  // MediaStream (tức SDP negotiation xong, pc.ontrack đã fire) — KHÔNG đảm
+  // bảo media thực sự đang chảy (ICE có thể vẫn đang "checking"/"failed" do
+  // client isolation / NAT hairpin, xem CompanionWebRTC.tsx). Thêm cờ riêng
+  // để phân biệt 2 trạng thái này trên UI, tránh gây hiểu lầm "connected"
+  // trong khi thực chất vẫn đang chờ (hoặc sẽ không bao giờ) có hình.
+  const [hasFrame, setHasFrame] = useState(false);
   const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
   const [speakerMuted, setSpeakerMuted] = useState(true);
   // BUGFIX-COMP-PIP-02: Đã bỏ hẳn chế độ "obs" (nút MonitorPlay + <iframe
@@ -31,6 +38,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const unsubscribe = companionStream.subscribeStream((stream) => {
       setHasStream(Boolean(stream));
+      setHasFrame(false);
       if (videoRef.current) {
         if (videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject = stream;
@@ -39,6 +47,25 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
       }
     });
     return unsubscribe;
+  }, []);
+
+  // BUGFIX-COMP-ICE-01: đợi frame video THẬT SỰ decode được (loadedmetadata /
+  // canplay) trước khi coi là "đã có hình" — đây là tín hiệu đáng tin cậy hơn
+  // nhiều so với chỉ dựa vào việc srcObject đã được gán. Nếu sự kiện này
+  // không bao giờ bắn ra dù hasStream=true, đó chính là bằng chứng ICE chưa
+  // thông (relay/TURN chưa hoạt động) chứ không phải lỗi ở component này.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onFrame = () => setHasFrame(true);
+    video.addEventListener('loadedmetadata', onFrame);
+    video.addEventListener('canplay', onFrame);
+    video.addEventListener('playing', onFrame);
+    return () => {
+      video.removeEventListener('loadedmetadata', onFrame);
+      video.removeEventListener('canplay', onFrame);
+      video.removeEventListener('playing', onFrame);
+    };
   }, []);
 
   useEffect(() => {
@@ -80,7 +107,7 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            display: hasStream ? "block" : "none",
+            display: hasFrame ? "block" : "none",
           }}
         />
         {!hasStream && (
@@ -98,6 +125,28 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
           >
             <Smartphone size={22} style={{ opacity: 0.6 }} />
             Đang chờ điện thoại kết nối...
+          </div>
+        )}
+        {hasStream && !hasFrame && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+              color: "rgb(230, 180, 60)",
+              fontSize: 12,
+              textAlign: "center",
+              padding: "0 16px",
+            }}
+          >
+            <Smartphone size={22} style={{ opacity: 0.6 }} />
+            Đã bắt tay xong, đang thiết lập kết nối media...
+            <span style={{ opacity: 0.7, fontSize: 11 }}>
+              Nếu treo ở đây quá 10-15s: điện thoại và PC có thể không
+              &quot;thấy&quot; nhau trên mạng (kiểm tra Client Isolation trên
+              router, hoặc dùng TURN).
+            </span>
           </div>
         )}
 

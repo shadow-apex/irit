@@ -1,7 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 import { companionStream } from '../lib/companionStream';
 
-const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// BUGFIX-COMP-ICE-01: Chỉ dùng STUN là nguyên nhân phổ biến nhất khiến PiP
+// hiện lên, nút bấm phản hồi (vì đó chỉ là local/optimistic state), SDP
+// signaling hoàn tất (nên pc.ontrack VẪN fire, publish stream -> PiP hết
+// "Đang chờ điện thoại..." và hiện <video>) NHƯNG video/audio KHÔNG BAO GIỜ
+// thực sự chảy: nhiều router WiFi gia đình/công ty bật "AP/Client Isolation"
+// (điện thoại + PC tuy cùng WiFi nhưng không thấy nhau ở lớp 2) hoặc không hỗ
+// trợ NAT hairpin/loopback (khi 2 máy cùng NAT ra 1 IP public, candidate
+// server-reflexive từ STUN trỏ về chính IP đó và nhiều router từ chối route
+// nó quay lại LAN). Cả hai trường hợp: ICE gathering + SDP offer/answer vẫn
+// xong xuôi, nhưng ICE connection state kẹt ở "checking" rồi "failed" —
+// đúng triệu chứng "PiP hiện, nút mic phản hồi, nhưng màn hình đen + im
+// lặng hoàn toàn". Thêm TURN (relay) server làm phương án dự phòng: khi mọi
+// candidate trực tiếp (host/srflx) đều thất bại, ICE sẽ tự chuyển sang dùng
+// relay qua TURN, media đi vòng qua server thay vì P2P.
+// LƯU Ý: đây là TURN server công khai/miễn phí của openrelay.metered.ca,
+// dùng để TEST — có giới hạn băng thông/độ ổn định. Cho môi trường dùng lâu
+// dài, nên tự chạy coturn (https://github.com/coturn/coturn) hoặc dùng dịch
+// vụ TURN trả phí (Twilio, Metered, Cloudflare Calls...) rồi thay iceServers
+// bên dưới bằng thông tin của bạn.
+const RTC_CFG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+  iceCandidatePoolSize: 4,
+};
 const MAX_BUFFERED_BYTES = 1_000_000;
 
 // FIX BUG-AUDIO-AUTOPLAY-01: Chromium chặn AudioContext ở trạng thái
@@ -86,7 +119,33 @@ export default function CompanionWebRTC() {
 
           pc.onicecandidate = (e) => {
             if (e.candidate) {
+              // BUGFIX-COMP-ICE-01: log loại candidate (host/srflx/relay) để
+              // chẩn đoán nhanh trong DevTools (Ctrl+Shift+I) khi video/audio
+              // không lên: nếu chỉ thấy "host"/"srflx" và ICE state rơi vào
+              // "failed", gần như chắc chắn là do client isolation / NAT
+              // hairpin — cần "relay" (TURN) để media thực sự đi qua được.
+              const type = e.candidate.type || (e.candidate.candidate || '').match(/typ (\w+)/)?.[1];
+              console.log('[WebRTC Receiver] Local ICE candidate:', type, e.candidate.candidate);
               window.iris.sendCompanionWebRTCSignal?.({ type: 'ice', candidate: e.candidate });
+            }
+          };
+
+          // BUGFIX-COMP-ICE-01: `connectionState` là trạng thái TỔNG HỢP
+          // (ICE + DTLS) và trên một số bản Chromium/Electron có thể chuyển
+          // chậm hơn hoặc bỏ lỡ so với `iceConnectionState` (trạng thái ICE
+          // thuần). Trước đây startExtraction() CHỈ được gọi dựa vào
+          // connectionState (trong onconnectionstatechange bên dưới, và
+          // trong nhánh ontrack khi connectionState đã là 'connected') — nếu
+          // vì lý do gì đó connectionState không bao giờ báo 'connected' dù
+          // ICE thực sự đã thông (relay/hairpin xử lý xong), audio/video
+          // extraction sẽ không bao giờ chạy dù stream đã hiện trên PiP.
+          // Thêm nhánh nghe iceConnectionState làm lưới an toàn thứ hai.
+          pc.oniceconnectionstatechange = () => {
+            console.log('[WebRTC Receiver] ICE state:', pc.iceConnectionState);
+            if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+              startExtraction();
+            } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+              stopExtraction();
             }
           };
 
@@ -103,8 +162,11 @@ export default function CompanionWebRTC() {
             if (e.streams[0]) {
               companionStream.setStream(e.streams[0]);
               // FIX: Đảm bảo extraction được bắt đầu lại nếu có track mới (đặc biệt là audio track)
-              // đến sau khi connectionState đã báo 'connected', tránh việc audio bị bỏ qua.
-              if (pcRef.current?.connectionState === 'connected') {
+              // đến sau khi kết nối đã thực sự thông, tránh việc audio bị bỏ qua.
+              // BUGFIX-COMP-ICE-01: kiểm tra cả iceConnectionState (không chỉ
+              // connectionState) — xem comment ở oniceconnectionstatechange.
+              const ice = pcRef.current?.iceConnectionState;
+              if (pcRef.current?.connectionState === 'connected' || ice === 'connected' || ice === 'completed') {
                 startExtraction();
               }
             }

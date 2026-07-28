@@ -32,7 +32,27 @@
 const $  = (id) => document.getElementById(id);
 const log = (t) => { $('status').textContent = 'Status: ' + t; console.log('[phone]', t); };
 
-const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// BUGFIX-COMP-ICE-01: xem comment tương ứng trong CompanionWebRTC.tsx (phía
+// desktop) — phải khai báo CÙNG một danh sách iceServers (bao gồm TURN) ở cả
+// hai đầu, vì mỗi bên tự gather candidate của chính nó. Nếu chỉ desktop có
+// TURN mà điện thoại không có, điện thoại sẽ không bao giờ tạo ra được
+// "relay candidate" của riêng nó để gửi sang, và kết nối vẫn thất bại y hệt
+// như trước khi thêm TURN.
+const RTC_CFG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+  iceCandidatePoolSize: 4,
+};
 
 let pc, ws, localStream;
 let facing = 'user';
@@ -101,8 +121,22 @@ function newPC() {
   pc = new RTCPeerConnection(RTC_CFG);
   localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
   preferH264();
-  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      // BUGFIX-COMP-ICE-01: log loại candidate (host/srflx/relay) trong
+      // Safari/Chrome remote debug để chẩn đoán nhanh nếu vẫn không lên hình.
+      const type = e.candidate.type || (e.candidate.candidate || '').match(/typ (\w+)/)?.[1];
+      log('ICE candidate: ' + type);
+      ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate }));
+    }
+  };
   pc.onconnectionstatechange = () => log('WebRTC: ' + pc.connectionState);
+  pc.oniceconnectionstatechange = () => {
+    console.log('[phone] ICE state:', pc.iceConnectionState);
+    if (pc.iceConnectionState === 'failed') {
+      log('WebRTC: ICE FAILED (kiểm tra mạng / TURN)');
+    }
+  };
 }
 
 async function makeOffer() {
