@@ -1,0 +1,7 @@
+{
+  "entries": [
+    { "path": "resources/skills/claude-skills" },
+    { "path": ".agents/skills/myiris" },
+    { "path": ".agents/skills/setup-mkcert" }
+  ]
+}

@@ -1,0 +1,85 @@
+# setupsmarthome/myiris_smarthome_camera.yaml
+#
+# ESPHome config cho CAMERA NHÀ THÔNG MINH (khác với setuprobot/esp32_cam_iris,
+# vốn là 1 sketch Arduino thuần dùng cho ROBOT — có motor + servo turret).
+# File này dùng đúng thành phần gốc của ESPHome (esp32_camera +
+# esp32_camera_web_server) thay vì code C++ tự viết, để:
+#   1) Không phải tự vá app_httpd.cpp mỗi lần ESPHome nâng cấp.
+#   2) Ra đúng 2 endpoint HTTP tương thích thẳng với kiến trúc camera_url đã
+#      có (xem robots.json / smarthome_cameras.json + isStreamUrl() trong
+#      RobotCameras.tsx & SmartHomeCameras.tsx): 1 cổng cho MJPEG stream, 1
+#      cổng cho JPEG snapshot tĩnh — không cần thêm code chuyển đổi nào.
+#
+# Board mẫu: AI-Thinker ESP32-CAM (rẻ, phổ biến nhất). Đổi `board:` +
+# `camera_pins` bên dưới nếu bạn dùng board khác (M5Camera, ESP-EYE, v.v).
+
+esphome:
+  name: myiris-smarthome-camera
+  friendly_name: "MyIris Smart Home Camera"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  # AUDIT-CAM-ESP-01: level mặc định DEBUG của logger dùng chung UART với
+  # camera trên board AI-Thinker → dễ xung đột/treo. Board camera nên tắt hẳn
+  # UART logger, chỉ log qua mạng (baud_rate: 0 = tắt UART logging).
+  baud_rate: 0
+
+wifi:
+  ssid: "TEN_WIFI_CUA_BAN"
+  password: "MAT_KHAU_WIFI"
+
+captive_portal:
+
+# -------------------------------------------------------------
+# CẤU HÌNH CAMERA (AI-Thinker ESP32-CAM pinout — trùng với
+# setuprobot/esp32_cam_iris/esp32_cam_iris.ino để dễ đối chiếu nếu bạn có
+# board robot cũ muốn dùng lại cho nhà thông minh).
+# -------------------------------------------------------------
+esp32_camera:
+  name: "Camera Nha Thong Minh"
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: [GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35]
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+  # QVGA đủ dùng cho vision AI (giống resolution robot camera đang gửi cho
+  # Gemini) và nhẹ cho ESP32-CAM giữ ổn định nhiều kết nối HTTP đồng thời.
+  resolution: 640x480
+  jpeg_quality: 12
+
+# -------------------------------------------------------------
+# WEB SERVER CỦA CAMERA — đây là phần "liên kết với ESPHome" chính: ESPHome
+# tự phục vụ HTTP, không cần viết app_httpd.cpp tay như bên robot.
+#   - port 8080 (mode: stream)   -> MJPEG multipart, dùng cho camera_url dạng
+#     "http://<ip>:8080/" (khớp isStreamUrl() vì có dạng .../stream hoặc
+#     port :81-style; xem ghi chú trong smarthome_cameras.json).
+#   - port 8081 (mode: snapshot) -> 1 ảnh JPEG tĩnh mỗi request, dùng cho
+#     camera không cần xem liên tục / tiết kiệm băng thông.
+# -------------------------------------------------------------
+esp32_camera_web_server:
+  - port: 8080
+    mode: stream
+  - port: 8081
+    mode: snapshot
+
+# -------------------------------------------------------------
+# (Tuỳ chọn) Thêm relay cho camera này nếu board của bạn còn dư GPIO và bạn
+# muốn vừa xem camera vừa bật/tắt đèn hồng ngoại/đèn LED gắn kèm — tái dùng
+# đúng include đã có ở myiris_smarthome.yaml, KHÔNG bắt buộc.
+# includes:
+#   - smarthome_control.h
+# switch:
+#   - platform: gpio
+#     pin: GPIO4
+#     name: "Đèn Camera"
+#     id: cam_light
