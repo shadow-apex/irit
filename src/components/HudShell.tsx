@@ -201,8 +201,48 @@ export default function HudShell({
   // Comms is glanceable, not essential — collapsed by default (the caption
   // pill by the orb already shows the latest line). Tasks are the core of the
   // HUD, so they start open but can be tucked away the same way.
-  const [commsOpen, setCommsOpen] = useState(false);
-  const [workOpen, setWorkOpen] = useState(true);
+    const [commsOpen, setCommsOpen] = useState(false);
+
+  // Tự động đóng tab Comms khi click ra ngoài (click vào tab khác)
+  const commsWrapperRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!commsOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (commsWrapperRef.current && !commsWrapperRef.current.contains(e.target as Node)) {
+        setCommsOpen(false);
+      }
+    }
+    function handleBlur() {
+      setCommsOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [commsOpen]);
+    const [workOpen, setWorkOpen] = useState(true);
+
+  // Tự động đóng tab Tasks sau 3 giây nếu có task bị lỗi
+  const failedTasksRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let hasNewFailure = false;
+    visibleTasks.forEach(t => {
+      if ((t.status === "failed" || t.status === "error") && !failedTasksRef.current.has(t.id)) {
+        failedTasksRef.current.add(t.id);
+        hasNewFailure = true;
+      }
+    });
+
+    if (hasNewFailure) {
+      setWorkOpen(true);
+      setTimeout(() => {
+        setWorkOpen(false);
+      }, 3000);
+    }
+  }, [visibleTasks]);
 
   // Dropdown chọn ngôn ngữ cho nút Dịch — nhỏ gọn để không che khung transcript.
   const [langPickerOpen, setLangPickerOpen] = useState(false);
@@ -542,7 +582,7 @@ export default function HudShell({
       ) : null}
 
       {/* Left column, bottom-left: collapsible comms on top, camera at the corner */}
-      <div className="hud-left">
+      <div className="hud-left" ref={commsWrapperRef}>
         {recentTranscript.length > 0 ? (
           <>
             <button

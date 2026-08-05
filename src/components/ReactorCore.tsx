@@ -373,5 +373,5 @@ export default function ReactorCore({
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="reactor-canvas" />;
+  return <canvas ref={canvasRef} className="reactor-canvas" style={{width:"100%", height:"100%"}} />;
 }

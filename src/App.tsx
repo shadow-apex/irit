@@ -35,6 +35,7 @@ import ReviewBanner from "./components/ReviewBanner";
 import NoteReader from "./components/NoteReader";
 import type { GalaxyNode } from "./components/VaultGalaxy";
 import { companionStream } from "./lib/companionStream";
+import SciFiScanReveal from "./components/SciFiScanReveal";
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -57,6 +58,7 @@ function loadCameraDeviceId(): string {
 }
 
 export default function App() {
+  const [hasPlayedIntro, setHasPlayedIntro] = useState(false);
   const [sidecarRunning, setSidecarRunning] = useState(false);
   // Drives the WebGL backdrop/orb render loops: paused (0 GPU) whenever the
   // window is unfocused, independent of awake/asleep.
@@ -995,7 +997,6 @@ export default function App() {
     setSidecarRunning(status.running);
     setSidecarPid(status.pid);
     await audio.start();
-    setHandControl(true);
   }
 
   async function stop() {
@@ -1686,6 +1687,17 @@ export default function App() {
         : audioState === "idle"
           ? "warn"
           : "on";
+
+  if (!hasPlayedIntro) {
+    return (
+      <SciFiScanReveal 
+        onComplete={() => {
+          setHasPlayedIntro(true);
+          if (!sidecarRunning) start();
+        }} 
+      />
+    );
+  }
 
   return (
     <>
