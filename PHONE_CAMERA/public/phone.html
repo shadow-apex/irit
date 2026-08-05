@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phone → PC stream</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0d12; color: #e8ecf3;
+    font: 15px/1.4 -apple-system, system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  video { width: 100%; flex: 1; min-height: 0; object-fit: cover; background: #000; }
+  #status { padding: 8px 14px; font-size: 13px; color: #8b95a7; min-height: 18px; }
+  #bar { display: flex; gap: 10px; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  button { flex: 1; padding: 15px; font-size: 16px; border: 0; border-radius: 12px;
+    background: #2b6cff; color: #fff; font-weight: 600; }
+  button.alt { background: #1b2230; color: #cbd5e1; }
+  button:disabled { opacity: .5; }
+  #cmdBar { display: flex; gap: 8px; padding: 0 12px 12px; }
+  #cmdInput { flex: 1; padding: 12px 14px; font-size: 15px; border-radius: 10px;
+    border: 1px solid #2a3242; background: #131722; color: #e8ecf3; }
+  #cmdSend { flex: none; width: 52px; padding: 0; background: #2b6cff; }
+  #cmdMic { flex: none; width: 52px; padding: 0; background: #1b2230; color: #cbd5e1; }
+  #cmdMic.listening { background: #d9384a; color: #fff; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <video id="preview" autoplay muted playsinline></video>
+  <div id="status">tap "Start streaming" to share this camera with the PC</div>
+  <div id="bar">
+    <button id="start">Start streaming</button>
+    <button id="flip" class="alt">Flip camera</button>
+  </div>
+  <!-- FEAT-COMP-CONTROL-01: gõ hoặc nói lệnh để điều khiển Iris từ xa —
+       gửi qua cùng kênh WebSocket signaling, không cần WebRTC data channel
+       riêng. Hoạt động ngay cả khi chưa bấm "Start streaming" (chỉ cần đã
+       kết nối WS), vì đây không phụ thuộc gì vào camera. -->
+  <div id="cmdBar">
+    <input id="cmdInput" type="text" placeholder="Nhắn lệnh cho Iris…" autocomplete="off">
+    <button id="cmdMic" class="alt" style="display:none">🎤</button>
+    <button id="cmdSend">Gửi</button>
+  </div>
+</div>
+<script>
+const $  = (id) => document.getElementById(id);
+const log = (t) => { $('status').textContent = t; console.log('[phone]', t); };
+
+const LAN_ONLY = false;   // true -> drop STUN, host-only candidates (max-direct path)
+const RTC_CFG = LAN_ONLY ? { iceServers: [] } : { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+let pc, ws, localStream;
+let facing = 'environment';
+let started = false;
+
+function vtrack() { return localStream && localStream.getVideoTracks()[0]; }
+
+async function getCam(constraints) {
+  if (localStream) localStream.getTracks().forEach((t) => t.stop());
+  localStream = await navigator.mediaDevices.getUserMedia(constraints || {
+    video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } },
+    audio: true,
+  });
+  const vt = vtrack();
+  if (vt) vt.contentHint = 'motion';
+  $('preview').srcObject = localStream;
+}
+
+// --- report this camera's real capabilities + lens list to the PC, so it shows only working controls
+async function reportCaps() {
+  if (!ws || ws.readyState !== ws.OPEN) return;
+  const vt = vtrack();
+  const c = (vt && vt.getCapabilities) ? vt.getCapabilities() : {};
+  let devices = [];
+  try {
+    devices = (await navigator.mediaDevices.enumerateDevices())
+      .filter((d) => d.kind === 'videoinput')
+      .map((d, i) => ({ deviceId: d.deviceId, label: d.label || ('camera ' + (i + 1)) }));
+  } catch (e) {}
+  ws.send(JSON.stringify({
+    type: 'caps',
+    caps: { zoom: c.zoom || null, torch: !!c.torch, focusMode: c.focusMode || null },
+    devices,
+  }));
+}
+
+// --- apply a control command coming from the PC viewer
+async function applyControl(m) {
+  const vt = vtrack();
+  try {
+    if (m.action === 'quality' && vt) {
+      await vt.applyConstraints({ width: { ideal: m.w }, height: { ideal: m.h }, frameRate: { ideal: m.fps } });
+      log('quality -> ' + m.h + 'p' + m.fps);
+    } else if (m.action === 'bitrate' && pc) {
+      const s = pc.getSenders().find((x) => x.track && x.track.kind === 'video');
+      if (s) { const p = s.getParameters(); if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        p.encodings[0].maxBitrate = m.bps; await s.setParameters(p); log('bitrate -> ' + Math.round(m.bps / 1e6) + ' Mbps'); }
+    } else if (m.action === 'zoom' && vt) {
+      await vt.applyConstraints({ advanced: [{ zoom: m.value }] });
+    } else if (m.action === 'torch' && vt) {
+      await vt.applyConstraints({ advanced: [{ torch: !!m.value }] });
+    } else if (m.action === 'focusMode' && vt) {
+      await vt.applyConstraints({ advanced: [{ focusMode: m.value }] });
+    } else if (m.action === 'device') {
+      await getCam({ video: { deviceId: { exact: m.deviceId }, frameRate: { ideal: 30, max: 60 } }, audio: true });
+      await swapTracks();
+      await reportCaps();
+    }
+  } catch (e) { log('control "' + m.action + '" failed: ' + e.message); }
+}
+
+async function swapTracks() {
+  if (!pc) return;
+  const vt = vtrack(), vs = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (vs && vt) await vs.replaceTrack(vt);
+  const at = localStream.getAudioTracks()[0], as = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+  if (as && at) await as.replaceTrack(at);
+}
+
+function preferH264() {
+  const tr = pc.getTransceivers().find((t) => t.sender && t.sender.track && t.sender.track.kind === 'video');
+  if (!tr || !tr.setCodecPreferences || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) return;
+  try {
+    const caps = RTCRtpSender.getCapabilities('video'); if (!caps) return;
+    const h = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+    const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+    if (h.length) tr.setCodecPreferences([...h, ...rest]);
+  } catch (e) {}
+}
+
+async function tuneSender() {
+  const s = pc.getSenders().find((x) => x.track && x.track.kind === 'video');
+  if (!s) return;
+  try {
+    const p = s.getParameters(); if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    p.encodings[0].maxBitrate = 6_000_000; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
+    p.degradationPreference = 'maintain-framerate';
+    await s.setParameters(p);
+  } catch (e) {}
+}
+
+function newPC() {
+  if (pc) { try { pc.close(); } catch (e) {} }
+  pc = new RTCPeerConnection(RTC_CFG);
+  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  preferH264();
+  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+  pc.onconnectionstatechange = () => log('peer: ' + pc.connectionState);
+}
+
+async function makeOffer() {
+  if (!localStream) return;
+  newPC();
+  await tuneSender();
+  await pc.setLocalDescription(await pc.createOffer());
+  ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+  log('offer sent — connecting to PC…');
+  reportCaps();
+}
+
+function connectWS() {
+  ws = new WebSocket('wss://' + location.host);
+  const roomToken = new URLSearchParams(location.search).get('t') || '';
+  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'phone', token: roomToken })); log('connected — waiting for the PC viewer…'); };
+  ws.onclose = (ev) => log(ev.code === 4001 ? 'sai token — mở lại link/QR do server in ra' : 'signaling closed');
+  ws.onerror = () => log('signaling error — is the CA trusted on this iPhone?');
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'peer-ready')       await makeOffer();
+    else if (msg.type === 'answer')      await pc.setRemoteDescription(msg.sdp);
+    else if (msg.type === 'ice' && msg.candidate) { try { await pc.addIceCandidate(msg.candidate); } catch (e) {} }
+    else if (msg.type === 'control')     await applyControl(msg);
+    else if (msg.type === 'peer-left')   log('PC viewer disconnected');
+  };
+}
+
+$('start').onclick = async () => {
+  if (started) return;
+  try { await getCam(); connectWS(); started = true; $('start').textContent = 'Streaming'; $('start').disabled = true; }
+  catch (e) { log('camera error: ' + e.message); }
+};
+
+$('flip').onclick = async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  try { await getCam(); await swapTracks(); await reportCaps(); log('camera: ' + (facing === 'environment' ? 'back' : 'front')); }
+  catch (e) { log('flip error: ' + e.message); }
+};
+
+// FEAT-COMP-CONTROL-01: gõ/nói lệnh điều khiển Iris. Dùng chung `ws` với
+// luồng camera phía trên — nghĩa là cần đã bấm "Start streaming" ít nhất 1
+// lần (mở kết nối WS) trước khi gửi được lệnh; không mở kết nối riêng để
+// tránh phá vỡ luồng bắt tay WebRTC hiện có (peer-ready/offer) vốn đang
+// được sửa ở phần camera.
+function sendIrisCommand(text) {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log('chưa kết nối — bấm "Start streaming" trước khi gửi lệnh');
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'iris-command', text: clean }));
+  log('đã gửi lệnh cho Iris: "' + clean + '"');
+  $('cmdInput').value = '';
+}
+
+$('cmdSend').onclick = () => sendIrisCommand($('cmdInput').value);
+$('cmdInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendIrisCommand($('cmdInput').value); });
+
+// Thoại -> văn bản ngay trên điện thoại (Web Speech API). Android Chrome hỗ
+// trợ tốt; iOS Safari KHÔNG hỗ trợ SpeechRecognition, nên nút mic tự ẩn ở
+// đó — gõ tay vẫn dùng bình thường trên mọi máy.
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRec) {
+  const micBtn = $('cmdMic');
+  micBtn.style.display = '';
+  const rec = new SpeechRec();
+  rec.lang = 'vi-VN';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  let listening = false;
+  rec.onresult = (e) => {
+    const said = e.results[0][0].transcript;
+    $('cmdInput').value = said;
+    sendIrisCommand(said);
+  };
+  rec.onerror = (e) => log('lỗi nhận diện giọng nói: ' + e.error);
+  rec.onend = () => { listening = false; micBtn.classList.remove('listening'); };
+  micBtn.onclick = () => {
+    if (listening) { rec.stop(); return; }
+    try { rec.start(); listening = true; micBtn.classList.add('listening'); log('đang nghe…'); }
+    catch (e) { log('không khởi động được mic: ' + e.message); }
+  };
+}
+</script>
+</body>
+</html>
