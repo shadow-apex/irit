@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld("iris", {
   getTeleprompterState: () => ipcRenderer.invoke("teleprompter:get-state"),
   toggleTranslate: (targetLang) => ipcRenderer.invoke("teleprompter:toggle-translate", targetLang),
   toggleInterviewCopilot: () => ipcRenderer.invoke("teleprompter:toggle-copilot"),
+  askTeleprompter: (question) => ipcRenderer.invoke("teleprompter:ask", question),
   sendDeskVisionFrame: (base64) => ipcRenderer.send("vision:desk-frame", base64),
   onSnapDeskVision: (callback) => {
     const handler = () => callback();

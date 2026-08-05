@@ -102,6 +102,7 @@ import {
   copilotHistory,
   copilotStatus,
   liveTranscriber,
+  askTeleprompter,
 } from "./main/teleprompter.mjs";
 import { setUiContext } from "./main/computer-use-tools.mjs";
 import { notifyIris } from "./main/notify-iris.mjs";
@@ -324,6 +325,7 @@ app.whenReady().then(() => {
   }));
   ipcMain.handle("teleprompter:toggle-translate", (_event, targetLang) => toggleTranslateMode(targetLang));
   ipcMain.handle("teleprompter:toggle-copilot", () => toggleCopilotMode());
+  ipcMain.handle("teleprompter:ask", (_event, question) => askTeleprompter(question));
   ipcMain.on("win:control", (_event, action) => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();

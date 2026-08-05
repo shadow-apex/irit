@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal } from "lucide-react";
+import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal, Search } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
@@ -247,6 +247,7 @@ export default function HudShell({
   // Dropdown chọn ngôn ngữ cho nút Dịch — nhỏ gọn để không che khung transcript.
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const TRANSLATE_LANGS = [
+    "Tiếng Việt (Vietnamese)",
     "Tiếng Anh (English)",
     "Tiếng Trung (Chinese)",
     "Tiếng Nhật (Japanese)",
@@ -254,27 +255,37 @@ export default function HudShell({
     "Tiếng Pháp (French)",
   ];
 
-  // Bảng lịch sử câu hỏi/gợi ý của "Nhắc bài" — ô tìm kiếm lọc theo cả câu
-  // hỏi lẫn gợi ý, và tự cuộn xuống mục mới nhất TRỪ KHI người dùng đang
-  // chủ động cuộn lên xem/tìm lại các mục cũ (giữ đúng vị trí đang xem thay
-  // vì giật xuống mỗi lần có gợi ý mới).
-  const [copilotSearch, setCopilotSearch] = useState("");
+  // Hỏi AI trực tiếp từ HUD (Icon kính lúp)
+  const [showAiQuery, setShowAiQuery] = useState(false);
+  const [aiQueryText, setAiQueryText] = useState("");
+  const aiQueryWrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showAiQuery) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (aiQueryWrapRef.current && !aiQueryWrapRef.current.contains(e.target as Node)) {
+        setShowAiQuery(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showAiQuery]);
+
+  // Bảng lịch sử câu hỏi/gợi ý của "Nhắc bài" — tự cuộn xuống mục mới nhất TRỪ KHI 
+  // người dùng đang chủ động cuộn lên xem/tìm lại các mục cũ.
   const copilotScrollRef = useRef<HTMLDivElement | null>(null);
   const copilotStickToBottomRef = useRef(true);
   const copilotHistory = hudMessage?.copilotHistory ?? [];
-  const filteredCopilotHistory = copilotSearch.trim()
-    ? copilotHistory.filter((entry) =>
-        `${entry.question} ${entry.answer}`.toLowerCase().includes(copilotSearch.trim().toLowerCase())
-      )
-    : copilotHistory;
+  const filteredCopilotHistory = copilotHistory;
 
   useEffect(() => {
-    if (copilotSearch.trim()) return; // đang tìm kiếm — không tự cuộn, giữ nguyên kết quả lọc
     const el = copilotScrollRef.current;
     if (el && copilotStickToBottomRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
-  }, [copilotHistory.length, copilotSearch]);
+  }, [copilotHistory.length]);
 
   // Drag state for HUD Message
   const [msgPos, setMsgPos] = useState({ x: 0, y: 0 });
@@ -467,7 +478,7 @@ export default function HudShell({
               {onToggleInterviewCopilot ? (
                 <button
                   onClick={onToggleInterviewCopilot}
-                  title="Gợi ý trả lời khi người đối diện hỏi — hiện thành bảng câu hỏi/gợi ý cuộn được, có tìm kiếm"
+                  title="Gợi ý trả lời khi người đối diện hỏi — hiện thành bảng câu hỏi/gợi ý cuộn được"
                   style={{
                     fontSize: 11,
                     padding: "4px 8px",
@@ -481,6 +492,53 @@ export default function HudShell({
                   💡 Nhắc bài{teleprompterState?.copilotEnabled ? " (ON)" : ""}
                 </button>
               ) : null}
+
+              {/* Ai Query Kính Lúp */}
+              <div ref={aiQueryWrapRef} style={{ display: "flex", alignItems: "center", position: "relative" }}>
+                <button
+                  onClick={() => setShowAiQuery(!showAiQuery)}
+                  title="Hỏi AI về cuộc trò chuyện"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    padding: "4px", borderRadius: 6, border: "1px solid #333",
+                    background: showAiQuery ? "rgba(168,85,247,0.18)" : "#151515",
+                    color: showAiQuery ? "#a855f7" : "#ccc", cursor: "pointer",
+                  }}
+                >
+                  <Search size={14} />
+                </button>
+                {showAiQuery && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const text = aiQueryText.trim();
+                      if (text) {
+                        setAiQueryText("");
+                        setShowAiQuery(false);
+                        if (window.iris.askTeleprompter) {
+                          window.iris.askTeleprompter(text);
+                        } else if (onSendSupplement) {
+                          onSendSupplement(text);
+                        }
+                      }
+                    }}
+                    style={{ position: "absolute", left: "100%", marginLeft: 6, display: "flex", width: 220 }}
+                  >
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Hỏi AI điều gì đó..."
+                      value={aiQueryText}
+                      onChange={(e) => setAiQueryText(e.target.value)}
+                      style={{
+                        width: "100%", padding: "4px 8px", borderRadius: 6,
+                        border: "1px solid #444", background: "#111", color: "#fff",
+                        fontSize: 11, outline: "none"
+                      }}
+                    />
+                  </form>
+                )}
+              </div>
             </div>
           ) : null}
           <div className="hud-message-body" style={{ marginTop: hudMessage.title === "Live Teleprompter" ? 34 : 15, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -498,20 +556,6 @@ export default function HudShell({
 
             {hudMessage.title === "Live Teleprompter" && teleprompterState?.copilotEnabled ? (
               <div className="copilot-panel hud-hit">
-                <div className="copilot-panel-header">
-                  <input
-                    type="text"
-                    className="copilot-search-input"
-                    placeholder="🔎 Tìm trong câu hỏi/gợi ý đã có..."
-                    value={copilotSearch}
-                    onChange={(e) => setCopilotSearch(e.target.value)}
-                  />
-                  {copilotSearch ? (
-                    <button className="copilot-search-clear" onClick={() => setCopilotSearch("")} title="Xoá tìm kiếm">
-                      ✕
-                    </button>
-                  ) : null}
-                </div>
                 <div
                   className="copilot-history-scroll"
                   ref={copilotScrollRef}
@@ -525,9 +569,7 @@ export default function HudShell({
                 >
                   {filteredCopilotHistory.length === 0 ? (
                     <div className="copilot-history-empty">
-                      {copilotHistory.length === 0
-                        ? "💡 Nhắc bài đã bật — câu hỏi và gợi ý trả lời sẽ hiện ở đây, không bị mất khi có câu hỏi mới."
-                        : "Không tìm thấy câu hỏi/gợi ý nào khớp."}
+                      💡 Nhắc bài đã bật — câu hỏi và gợi ý trả lời sẽ hiện ở đây, không bị mất khi có câu hỏi mới.
                     </div>
                   ) : (
                     filteredCopilotHistory.map((entry) => (

@@ -39,6 +39,7 @@ export let liveLogStream = null;
 export let translateEnabled = false;
 export let translateTargetLang = "";
 export let liveTranslations = []; // song song với liveTranscripts, tối đa 3 dòng gần nhất
+export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
 
 export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 400 } = {}) {
   const apiKey = (process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
@@ -73,8 +74,14 @@ export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTok
 export function updateTeleprompterHud() {
   if (!mainWindow) return;
   let content = liveTranscripts.join("\n");
-  if (translateEnabled && liveTranslations.length) {
-    content += "\n\n" + liveTranslations.join("\n");
+  if (translateEnabled) {
+    let t = [...liveTranslations];
+    if (currentStreamingTranslation) {
+      t.push(`[Đang dịch]: ${currentStreamingTranslation}`);
+    }
+    if (t.length) {
+      content += "\n\n" + t.join("\n");
+    }
   }
   // Nhắc bài không còn ghi đè vào `content` dạng text (dòng đơn, dễ mất) —
   // gửi copilotHistory/copilotStatus như dữ liệu có cấu trúc riêng,
@@ -93,6 +100,7 @@ export async function toggleTranslateMode(targetLang) {
   if (translateEnabled) {
     translateTargetLang = (targetLang || "English").trim();
     liveTranslations = [];
+    currentStreamingTranslation = "";
     // Dịch và Nhắc bài loại trừ nhau (xem comment ở khai báo translateEnabled
     // phía trên) — tắt Nhắc bài nếu đang bật, đối xứng với việc
     // toggleCopilotMode() đã tắt Dịch khi bật Nhắc bài. Bản trước chỉ tắt
@@ -217,22 +225,50 @@ export async function toggleLiveTranscriber() {
                    const userText = priorLines.length
                      ? `Ngữ cảnh gần đây (CHỈ để tham khảo, KHÔNG dịch lại):\n${priorLines.join("\n")}\n\nCâu MỚI cần dịch:\n${text}`
                      : text;
-                   const translated = await callClaudeForTeleprompter(
-                     `Bạn là công cụ dịch song song thời gian thực. Dịch CÂU MỚI (đánh dấu rõ trong tin nhắn, nếu có) sang ngôn ngữ "${translateTargetLang}", dựa vào ngữ cảnh phía trên (nếu có) để dịch đúng đại từ/ý được nhắc ở câu trước. ` +
-                       `CHỈ trả về bản dịch của CÂU MỚI — không dịch lại phần ngữ cảnh, không giải thích, không thêm gì khác. Giữ nguyên các tiền tố [Bạn]/[Đối tác]/[Chung] ở đầu câu MỚI nếu có, chỉ dịch phần nội dung sau tiền tố.`,
-                     userText,
-                     { maxTokens: 200 }
-                   );
-                   if (translated) {
-                     liveTranslations.push(translated);
-                     if (liveTranslations.length > 3) liveTranslations.shift();
-                     if (liveLogStream) {
-                       const latencyMs = Date.now() - finalizedAt;
-                       liveLogStream.write(`[Dịch -> ${translateTargetLang}] (⏱ ${latencyMs}ms): ${translated}\n`);
+                   const sysPrompt = `Bạn là công cụ dịch song song thời gian thực. Dịch CÂU MỚI (đánh dấu rõ trong tin nhắn, nếu có) sang ngôn ngữ "${translateTargetLang}", dựa vào ngữ cảnh phía trên (nếu có) để dịch đúng đại từ/ý được nhắc ở câu trước. ` +
+                       `CHỈ trả về bản dịch của CÂU MỚI — không dịch lại phần ngữ cảnh, không giải thích, không thêm gì khác. Giữ nguyên các tiền tố [Bạn]/[Đối tác]/[Chung] ở đầu câu MỚI nếu có, chỉ dịch phần nội dung sau tiền tố.`;
+
+                   if (ai) {
+                     currentStreamingTranslation = "⏳...";
+                     updateLiveHud();
+                     const responseStream = await ai.models.generateContentStream({
+                       model: "gemini-1.5-flash",
+                       contents: sysPrompt + "\n\n" + userText,
+                     });
+                     
+                     let fullText = "";
+                     for await (const chunk of responseStream) {
+                        if (chunk.text) {
+                          fullText += chunk.text;
+                          currentStreamingTranslation = fullText.trim();
+                          updateLiveHud();
+                        }
+                     }
+                     
+                     currentStreamingTranslation = "";
+                     if (fullText.trim()) {
+                       liveTranslations.push(fullText.trim());
+                       if (liveTranslations.length > 3) liveTranslations.shift();
+                       if (liveLogStream) {
+                         const latencyMs = Date.now() - finalizedAt;
+                         liveLogStream.write(`[Dịch Flash -> ${translateTargetLang}] (⏱ ${latencyMs}ms): ${fullText.trim()}\n`);
+                       }
                      }
                      updateLiveHud();
+                   } else {
+                     const translated = await callClaudeForTeleprompter(sysPrompt, userText, { maxTokens: 200 });
+                     if (translated) {
+                       liveTranslations.push(translated);
+                       if (liveTranslations.length > 3) liveTranslations.shift();
+                       if (liveLogStream) {
+                         const latencyMs = Date.now() - finalizedAt;
+                         liveLogStream.write(`[Dịch Claude -> ${translateTargetLang}] (⏱ ${latencyMs}ms): ${translated}\n`);
+                       }
+                       updateLiveHud();
+                     }
                    }
                  } catch (e) {
+                   currentStreamingTranslation = "";
                    liveTranslations.push(`⚠️ Lỗi dịch: ${e.message}`);
                    if (liveTranslations.length > 3) liveTranslations.shift();
                    updateLiveHud();
@@ -270,10 +306,11 @@ export async function toggleLiveTranscriber() {
                updateLiveHud();
 
                const systemPrompt =
-                 "Bạn là trợ lý hỗ trợ tôi trả lời nhanh trong một cuộc trò chuyện/họp trực tiếp. " +
-                 "Bạn sẽ nhận đoạn transcript gần nhất (giọng của tôi đánh dấu [Bạn], giọng người đối diện đánh dấu [Đối tác]). " +
-                 "Nếu người đối diện vừa hỏi hoặc cần tôi phản hồi, đưa ra 1-2 câu trả lời ĐỀ XUẤT ngắn gọn, tự nhiên, đúng trọng tâm, dựa trên thông tin có trong ngữ cảnh. " +
-                 "Nếu không có gì đáng trả lời (tôi đang tự nói, hoặc chỉ là câu chuyện phiếm chưa cần phản hồi), trả về đúng 1 chữ 'NONE'.";
+                 "Bạn là trợ lý chiến lược (Meeting Copilot) hỗ trợ tôi trong các cuộc họp hoặc đàm phán quan trọng. " +
+                 "Bạn sẽ nhận đoạn transcript gần nhất (giọng của tôi: [Bạn], giọng đối tác: [Đối tác]). " +
+                 "Nếu đối tác vừa hỏi hoặc đưa ra vấn đề cần phản hồi, hãy cung cấp ngay các luận điểm trả lời SẮC BÉN, thông minh và thuyết phục nhất. " +
+                 "Trình bày dưới dạng 1-3 gạch đầu dòng (bullet points) siêu ngắn gọn để tôi có thể liếc kính HUD và nói lại được ngay lập tức. " +
+                 "Nếu chưa có gì đáng trả lời (tôi đang tự nói hoặc chuyện phiếm), trả về đúng 1 chữ 'NONE'.";
 
                let suggestion = "";
                let engineUsed = "Claude";
@@ -366,6 +403,7 @@ export async function toggleLiveTranscriber() {
   copilotStatus = "";
   if (copilotTimer) clearTimeout(copilotTimer);
   liveTranslations = [];
+  currentStreamingTranslation = "";
   translateEnabled = false;
   translateTargetLang = "";
   // Tắt cả Alt+T thì Nhắc bài cũng coi như tắt theo. Không còn gửi
@@ -373,4 +411,56 @@ export async function toggleLiveTranscriber() {
   copilotEnabled = false;
 
   return { status: "success", message: "Đã tắt Nhắc Tuồng." };
+}
+
+export async function askTeleprompter(question) {
+  if (!liveTranscriber || liveTranscriber.state === "dead") {
+    return { status: "error", error: "Vui lòng bật Live Teleprompter (Alt+T) trước." };
+  }
+  
+  if (!copilotEnabled) {
+    toggleCopilotMode();
+  }
+  
+  const contextText = copilotBuffer.join("\n");
+  const systemPrompt = "Bạn là trợ lý đắc lực trong cuộc họp. Dựa vào transcript cuộc họp sau đây, hãy trả lời câu hỏi của tôi thật ngắn gọn và chính xác.\n\nTranscript:\n" + contextText;
+  
+  copilotStatus = "🔎 Đang tra cứu AI...";
+  updateTeleprompterHud();
+
+  let answer = "";
+  let engineUsed = "Claude";
+  try {
+    answer = await callClaudeForTeleprompter(systemPrompt, question, { maxTokens: 400 });
+  } catch (err) {
+    if (!ai) {
+       copilotStatus = ""; updateTeleprompterHud(); return { status: "error", error: "Cả Claude và Gemini API đều chưa được cấu hình." };
+    }
+    // fallback gemini
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-flash-latest",
+        contents: systemPrompt + "\n\nCâu hỏi: " + question,
+      });
+      answer = (response.text || "").trim();
+      engineUsed = "Gemini";
+    } catch (gErr) {
+       copilotStatus = ""; updateTeleprompterHud(); return { status: "error", error: "Lỗi gọi API: " + gErr.message };
+    }
+  }
+
+  if (answer) {
+    copilotHistory.push({
+      id: `${Date.now()}-qna`,
+      question: `🔎 (Hỏi trực tiếp): ${question}`,
+      answer: answer,
+      ts: Date.now(),
+      engine: engineUsed,
+    });
+    if (copilotHistory.length > COPILOT_HISTORY_MAX) copilotHistory.shift();
+  }
+  
+  copilotStatus = "";
+  updateTeleprompterHud();
+  return { status: "success" };
 }

@@ -278,6 +278,7 @@ type IrisApi = {
   }>;
   toggleTranslate: (targetLang: string) => Promise<{ status: string; message: string }>;
   toggleInterviewCopilot: () => Promise<{ status: string; message: string }>;
+  askTeleprompter: (question: string) => Promise<{ status: string; error?: string }>;
   onSnapDeskVision: (callback: () => void) => () => void;
   sendDeskVisionFrame: (data: string) => void;
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;
