@@ -1,4 +1,5 @@
 import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone } from "lucide-react";
+import AppLauncher from "./AppLauncher";
 
 function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
   return (
@@ -59,6 +60,7 @@ export default function TopBar({
         <span className="brand-mark">I.R.I.S</span>
       </div>
       <div className="deck-top-right">
+        <AppLauncher />
         <button
           className="theme-toggle"
           onClick={() => window.iris?.toggleHud()}

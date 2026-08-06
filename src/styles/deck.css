@@ -156,6 +156,46 @@
   animation: pulse-dot 2.6s ease-in-out infinite;
 }
 
+/* ===== App Launcher Menu ===== */
+.launcher-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  backdrop-filter: blur(20px);
+  padding: 4px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.launcher-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.launcher-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cyan-bright);
+}
+
 /* ===== Status cluster ===== */
 .deck-status {
   display: flex;
@@ -223,11 +263,57 @@
 
 /* ===== Body grid ===== */
 .deck-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(280px, 336px) minmax(0, 1fr) minmax(300px, 356px);
+  grid-template-columns: var(--col-left, minmax(280px, 336px)) minmax(0, 1fr) var(--col-right, minmax(300px, 356px));
   gap: 12px;
+  transition: grid-template-columns 0.3s ease;
+}
+
+.deck-body.left-collapsed {
+  --col-left: 0px;
+}
+
+.deck-body.right-collapsed {
+  --col-right: 0px;
+}
+
+.panel-edge-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 28, 40, 0.85);
+  border: 1px solid var(--hairline-strong);
+  color: var(--muted);
+  z-index: 50;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.panel-edge-toggle:hover {
+  background: rgba(30, 42, 60, 0.95);
+  color: var(--cyan-bright);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--cyan-rgb), 0.3);
+}
+
+.panel-edge-toggle.left {
+  left: 0;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+
+.panel-edge-toggle.right {
+  right: 0;
+  border-right: none;
+  border-radius: 6px 0 0 6px;
 }
 
 /* ===== Left column: You ===== */
@@ -236,6 +322,25 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  overflow: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.deck-body.left-collapsed .deck-left {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-20px);
+}
+
+.deck-right {
+  overflow: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.deck-body.right-collapsed .deck-right {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(20px);
 }
 
 .comms {
@@ -494,6 +599,8 @@
 .orb-stage {
   width: min(44vh, 400px);
   height: min(44vh, 400px);
+  aspect-ratio: 1;
+  flex-shrink: 0;
   position: relative;
   transition: filter 0.9s ease, opacity 0.9s ease;
 }
@@ -520,11 +627,7 @@
 
 .orb-ring {
   inset: -3%;
-  background: repeating-conic-gradient(
-    from 0deg,
-    rgba(var(--orb-accent, 63, 208, 176), 0.32) 0deg 0.7deg,
-    transparent 0.7deg 6deg
-  );
+  background: rgba(var(--orb-accent, 63, 208, 176), 0.32);
   -webkit-mask: radial-gradient(circle, transparent 72%, #000 73%, #000 77%, transparent 78%);
   mask: radial-gradient(circle, transparent 72%, #000 73%, #000 77%, transparent 78%);
   animation: orb-spin-rev 44s linear infinite;
@@ -532,12 +635,7 @@
 
 .orb-radar {
   inset: 1%;
-  background: conic-gradient(
-    from 0deg,
-    rgba(var(--orb-accent, 63, 208, 176), 0) 0deg,
-    rgba(var(--orb-accent, 63, 208, 176), 0.22) 38deg,
-    rgba(var(--orb-accent, 63, 208, 176), 0) 80deg
-  );
+  background: rgba(var(--orb-accent, 63, 208, 176), 0.22);
   -webkit-mask: radial-gradient(circle, transparent 58%, #000 59%, #000 71%, transparent 72%);
   mask: radial-gradient(circle, transparent 58%, #000 59%, #000 71%, transparent 72%);
   animation: orb-spin 7s linear infinite;

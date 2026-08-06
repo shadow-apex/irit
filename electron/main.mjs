@@ -18,7 +18,7 @@
  * used before this split.
  */
 import electron from "electron";
-const { app, BrowserWindow, ipcMain, globalShortcut } = electron;
+const { app, BrowserWindow, ipcMain, globalShortcut, shell } = electron;
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -166,10 +166,43 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
+  ipcMain.handle("app:open", async (_event, target) => {
+    try {
+      if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("vscode://")) {
+        await shell.openExternal(target);
+      } else {
+        const errorMsg = await shell.openPath(target);
+        if (errorMsg) {
+          return { success: false, error: errorMsg };
+        }
+      }
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("robots:get", () => getRobotsConfig());
   ipcMain.handle("smarthome-cameras:get-config", () => getSmartHomeCamerasConfig());
   ipcMain.handle("robots:action", (_event, args) => triggerRobotAction(args));
+
+  ipcMain.handle("desktop:apps", async () => {
+    try {
+      const desktopPath = app.getPath("desktop");
+      const files = await fs.promises.readdir(desktopPath);
+      const apps = files
+        .filter(f => f.endsWith(".lnk") || f.endsWith(".url") || f.endsWith(".exe"))
+        .map(f => ({
+          name: f.replace(/\.(lnk|url|exe)$/i, ""),
+          target: path.join(desktopPath, f)
+        }));
+      // Sort alphabetically
+      return apps.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      console.error("Failed to read desktop apps:", e);
+      return [];
+    }
+  });
 
   ipcMain.handle("network:get-ip", () => {
     const interfaces = os.networkInterfaces();

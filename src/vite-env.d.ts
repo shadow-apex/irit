@@ -311,6 +311,8 @@ type IrisApi = {
     action: string;
     params?: Record<string, unknown>;
   }) => Promise<{ status: string; message?: string; error?: string }>;
+  openApp?: (target: string) => Promise<{ success: boolean; error?: string }>;
+  getDesktopApps?: () => Promise<Array<{ name: string; target: string }>>;
 };
 interface Window {
   iris: IrisApi;

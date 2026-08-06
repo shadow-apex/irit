@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { LogLine, TaskCard, TaskStep, TranscriptLine } from "./types";
 import { TERMINAL, eventTime, findTaskMatches, readString, readStatusObject, taskKeyFor } from "./lib/tasks";
 import { AGENT_LABELS, PIPELINE, isAgentRole, modelLabel } from "./lib/agents";
@@ -97,6 +98,8 @@ export default function App() {
   const [fullConfig, setFullConfig] = useState<IrisConfig | null>(null);
   const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsSnapshot | null>(null);
@@ -1785,7 +1788,14 @@ export default function App() {
           onOpenCompanionQR={() => setShowCompanionQR(true)}
         />
 
-        <div className="deck-body">
+        <div className={`deck-body ${!leftPanelOpen ? "left-collapsed" : ""} ${!rightPanelOpen ? "right-collapsed" : ""}`}>
+          <button className="panel-edge-toggle left" onClick={() => setLeftPanelOpen(p => !p)} title="Toggle left panel">
+            {leftPanelOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
+          <button className="panel-edge-toggle right" onClick={() => setRightPanelOpen(p => !p)} title="Toggle right panel">
+            {rightPanelOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+
           {/* LEFT — You */}
           <div className="deck-left">
             <CommsPanel
@@ -1794,6 +1804,7 @@ export default function App() {
               awake={sidecarRunning}
               silentOutput={audio.silentOutput}
               onSendSupplement={sendContextSupplement}
+              onToggleSilent={() => audio.setSilentOutput(!audio.silentOutput)}
             />
             <CameraDock
               handControl={handControl}

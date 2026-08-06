@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("iris", {
   // FEAT-SH-CAM-01: Smart Home Camera Vision — đọc smarthome_cameras.json,
   // song song với getRobots()/robots.json nhưng tách domain riêng.
   getSmartHomeCamerasConfig: () => ipcRenderer.invoke("smarthome-cameras:get-config"),
+  openApp: (target) => ipcRenderer.invoke("app:open", target),
+  getDesktopApps: () => ipcRenderer.invoke("desktop:apps"),
   getLocalIp: () => ipcRenderer.invoke("network:get-ip"),
   startCompanionExpo: () => ipcRenderer.invoke("companion:start-expo"),
   getCompanionTunnel: () => ipcRenderer.invoke("companion:get-tunnel"),
@@ -201,4 +203,5 @@ contextBridge.exposeInMainWorld("iris", {
   sendCompanionWebRTCSignal: (signal) => ipcRenderer.send("companion:webrtc-signal-to-phone", signal),
   sendCompanionWebRTCFrame: (base64) => ipcRenderer.send("companion:webrtc-frame", base64),
   sendCompanionWebRTCAudio: (pcm) => ipcRenderer.send("companion:webrtc-audio", pcm),
+  openApp: (target) => ipcRenderer.invoke("app:open", target),
 });

@@ -9,12 +9,14 @@ export default function CommsPanel({
   awake,
   silentOutput,
   onSendSupplement,
+  onToggleSilent,
 }: {
   transcript: TranscriptLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
   awake: boolean;
   silentOutput?: boolean;
   onSendSupplement: (text: string) => void;
+  onToggleSilent?: () => void;
 }) {
   return (
     <section className="deck-panel comms">
@@ -25,6 +27,8 @@ export default function CommsPanel({
           className={`silent-badge${silentOutput ? "" : " is-hidden"}`}
           title="Silent Mode (No voice)"
           aria-hidden={!silentOutput}
+          onClick={onToggleSilent}
+          style={onToggleSilent ? { cursor: "pointer" } : undefined}
         >
           <VolumeX size={12} /> Im lặng
         </span>
