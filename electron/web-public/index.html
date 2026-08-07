@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iris - Web Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --panel-bg: #1e293b;
+            --border-color: #334155;
+            --user-msg: #3b82f6;
+            --bot-msg: #475569;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* --- Auth Overlay --- */
+        #auth-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 23, 42, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .auth-box {
+            background: var(--panel-bg);
+            padding: 2rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        .auth-box h2 { margin-top: 0; color: var(--accent-color); }
+        .auth-box input {
+            padding: 10px;
+            width: 80%;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: white;
+        }
+        .auth-box button {
+            padding: 10px 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        /* --- Main Layout --- */
+        header {
+            background: var(--panel-bg);
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: var(--accent-color);
+        }
+        #status-badge {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            background: #22c55e;
+            border-radius: 12px;
+            color: #000;
+            font-weight: bold;
+        }
+
+        /* --- Quick Actions --- */
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            padding: 15px;
+            overflow-x: auto;
+            background: var(--bg-color);
+        }
+        .quick-actions button {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: 0.2s;
+        }
+        .quick-actions button:hover {
+            background: var(--border-color);
+        }
+
+        /* --- Chat Area --- */
+        #chat-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        .msg-user {
+            background: var(--user-msg);
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
+        }
+        .msg-bot {
+            background: var(--bot-msg);
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+            white-space: pre-wrap;
+        }
+        .msg-gemini {
+            background: #8b5cf6; /* Tím nhẹ cho Gemini */
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+            white-space: pre-wrap;
+        }
+
+        /* --- Input Area --- */
+        .input-area {
+            display: flex;
+            padding: 15px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            gap: 10px;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: white;
+            font-size: 1rem;
+        }
+        .input-area button {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 0 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .input-area button:hover {
+            background: var(--accent-hover);
+        }
+        .btn-gemini {
+            background: #8b5cf6 !important;
+        }
+        .btn-gemini:hover {
+            background: #7c3aed !important;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Auth Overlay -->
+    <div id="auth-overlay">
+        <div class="auth-box">
+            <h2>Iris Remote</h2>
+            <p>Nhập mật khẩu để kết nối (Mặc định: iris123)</p>
+            <input type="password" id="pwd-input" placeholder="Password...">
+            <br>
+            <button onclick="login()">Kết Nối</button>
+        </div>
+    </div>
+
+    <!-- Main UI -->
+    <header>
+        <h1>🤖 Iris Dashboard</h1>
+        <div id="status-badge">Online</div>
+    </header>
+
+    <div class="quick-actions">
+        <button onclick="sendTask('/routine morning')">🌅 Chào buổi sáng</button>
+        <button onclick="sendTask('Mở trình duyệt Youtube')">🎵 Mở Youtube</button>
+        <button onclick="sendTask('Báo cáo thời tiết hôm nay')">⛅ Thời tiết</button>
+        <button onclick="sendTask('Mở camera robot thám hiểm')">🤖 Mở Camera Robot</button>
+    </div>
+
+    <div id="chat-container">
+        <div class="message msg-bot">Xin chào! Hệ thống đã sẵn sàng nhận lệnh từ xa.</div>
+    </div>
+
+    <div class="input-area">
+        <input type="text" id="task-input" placeholder="Nhập lệnh cho máy tính..." onkeypress="handleEnter(event)">
+        <button onclick="submitTask()">Gửi Claude</button>
+        <button class="btn-gemini" onclick="submitGemini()">Gửi Gemini 🎙️</button>
+    </div>
+
+    <script>
+        let password = '';
+        let eventSource = null;
+
+        function login() {
+            const pwd = document.getElementById('pwd-input').value;
+            if (!pwd) return alert("Vui lòng nhập mật khẩu!");
+            password = pwd;
+            
+            // Connect SSE
+            if(eventSource) eventSource.close();
+            eventSource = new EventSource(`/api/stream?password=${encodeURIComponent(password)}`);
+            
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.text.startsWith('[Gemini🎙️]')) {
+                    addMessage(data.text, 'gemini');
+                } else {
+                    addMessage(data.text, 'bot');
+                }
+            };
+
+            eventSource.onerror = (err) => {
+                console.error("SSE Error:", err);
+                document.getElementById('status-badge').style.background = '#ef4444';
+                document.getElementById('status-badge').innerText = 'Lỗi kết nối';
+                // If unauthorized, it might fail here, but EventSource doesn't give clean HTTP status.
+                // We assume connection failed.
+            };
+
+            eventSource.onopen = () => {
+                document.getElementById('auth-overlay').style.display = 'none';
+                document.getElementById('status-badge').style.background = '#22c55e';
+                document.getElementById('status-badge').innerText = 'Đã kết nối';
+            };
+        }
+
+        async function sendTask(taskText) {
+            addMessage(taskText, 'user');
+            
+            try {
+                const res = await fetch('/api/task', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-password': password
+                    },
+                    body: JSON.stringify({ task: taskText, agent: 'dev' })
+                });
+                
+                if (!res.ok) {
+                    if (res.status === 401) {
+                        alert("Sai mật khẩu!");
+                        document.getElementById('auth-overlay').style.display = 'flex';
+                    } else {
+                        addMessage("❌ Lỗi gửi lệnh: " + res.statusText, 'bot');
+                    }
+                }
+            } catch (err) {
+                addMessage("❌ Lỗi mạng: " + err.message, 'bot');
+            }
+        }
+
+        function submitTask() {
+            const input = document.getElementById('task-input');
+            const val = input.value.trim();
+            if (!val) return;
+            
+            sendTask(val);
+            input.value = '';
+        }
+
+        async function submitGemini() {
+            const input = document.getElementById('task-input');
+            const val = input.value.trim();
+            if (!val) return;
+            
+            addMessage("[Bạn🗣️]: " + val, 'user');
+            
+            try {
+                const res = await fetch('/api/gemini', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-password': password
+                    },
+                    body: JSON.stringify({ text: val })
+                });
+                
+                if (!res.ok) {
+                    if (res.status === 401) {
+                        alert("Sai mật khẩu!");
+                        document.getElementById('auth-overlay').style.display = 'flex';
+                    } else {
+                        addMessage("❌ Lỗi gửi lệnh: " + res.statusText, 'bot');
+                    }
+                }
+            } catch (err) {
+                addMessage("❌ Lỗi mạng: " + err.message, 'bot');
+            }
+            
+            input.value = '';
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') submitTask();
+        }
+
+        function addMessage(text, sender) {
+            const container = document.getElementById('chat-container');
+            const div = document.createElement('div');
+            div.className = `message msg-${sender}`;
+            div.textContent = text;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+    </script>
+</body>
+</html>

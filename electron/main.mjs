@@ -175,9 +175,18 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("app:close", async (_event, target) => {
     try {
-      const procName = target.endsWith(".exe") ? target : `${target}.exe`;
-      const command = `taskkill /IM "${procName}"`;
-      const { exec } = require("child_process");
+      let procName = target;
+      if (target.includes("/") || target.includes("\\")) {
+        procName = path.basename(target);
+      }
+      if (procName.toLowerCase().endsWith(".lnk") || procName.toLowerCase().endsWith(".url")) {
+        procName = procName.replace(/\.(lnk|url)$/i, ".exe");
+      } else if (!procName.toLowerCase().endsWith(".exe")) {
+        procName = `${procName}.exe`;
+      }
+      
+      const command = `taskkill /F /IM "${procName}"`;
+      const { exec } = await import("node:child_process");
       await new Promise((resolve, reject) => {
         exec(command, (error, stdout, stderr) => {
           if (error) {
@@ -198,9 +207,17 @@ app.whenReady().then(() => {
       if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("vscode://")) {
         await shell.openExternal(target);
       } else {
+        if (!target.includes("/") && !target.includes("\\") && target.endsWith(".exe")) {
+          const { spawn } = await import("node:child_process");
+          spawn(target, [], { detached: true, stdio: 'ignore', shell: true }).unref();
+          return { success: true };
+        }
+        
         const errorMsg = await shell.openPath(target);
         if (errorMsg) {
-          return { success: false, error: errorMsg };
+          // Fallback cho trường hợp shell.openPath thất bại (có thể do lỗi quyền hoặc đường dẫn)
+          const { spawn } = await import("node:child_process");
+          spawn(`"${target}"`, [], { detached: true, stdio: 'ignore', shell: true }).unref();
         }
       }
       return { success: true };

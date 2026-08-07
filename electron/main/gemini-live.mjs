@@ -18,7 +18,7 @@ import { userDisplayName, workspaceContextLine } from "./session-store.mjs";
 import { MODEL_CHOICES } from "./agent-roster.mjs";
 import { checkClaudeStatus } from "./claude-cli.mjs";
 import { updateTrayMenu } from "./window-manager.mjs";
-import { submitClaudeTask } from "./claude-runner.mjs";
+import { submitClaudeTask, sendWebMessage } from "./claude-runner.mjs";
 import { getRobotsConfig } from "./device-config.mjs";
 import {
   stopVisionLoop,
@@ -63,9 +63,11 @@ export const GreetGate = {
 export function flushTranscripts() {
   if (userTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
+    // sendWebMessage(`[Bạn🗣️]: ${userTranscriptBuffer.trim()}`);
   }
   if (modelTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
+    sendWebMessage(`[Gemini🎙️]: ${modelTranscriptBuffer.trim()}`);
   }
   userTranscriptBuffer = "";
   modelTranscriptBuffer = "";

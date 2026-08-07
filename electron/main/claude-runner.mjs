@@ -12,6 +12,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "../run-queue.mjs";
 import { initTelegramBot } from "../telegram-bot.mjs";
+import { initWebServer } from "../web-server.mjs";
+import { sendCommand } from "./gemini-live.mjs";
 import {
   getOrCreatePoSession,
   deliverPoTurn,
@@ -63,19 +65,32 @@ export const runQueue = createRunQueue({
       if (!hasReportedMissingClaudeKey) {
         hasReportedMissingClaudeKey = true;
         sendTelegramMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}\n\n(I will stop reporting this specific Claude API/CLI error to avoid spamming you).`);
+        sendWebMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}\n\n(I will stop reporting this specific Claude API/CLI error to avoid spamming you).`);
       }
     } else {
       sendTelegramMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}`);
+      sendWebMessage(`Task ${run.status}:\n${run.task}\n\nOutput:\n${outputString.slice(0, 1500)}`);
     }
   }
 });
 
 export let sendTelegramMessage = () => { };
+export let sendWebMessage = () => { };
 
 // Initialize Telegram bot after environment variables are loaded
 setTimeout(() => {
   sendTelegramMessage = initTelegramBot({
     submitTask: (args) => submitClaudeTask(args),
+    getStatus: () => {
+      const r = runQueue.get(runQueue.active);
+      return r ? `${r.status} (Task: ${r.task})` : "Idle";
+    },
+    log: (level, msg) => emitEvent({ type: "log", level, message: msg })
+  });
+
+  sendWebMessage = initWebServer({
+    submitTask: (args) => submitClaudeTask(args),
+    sendToGemini: (text) => sendCommand({ type: "text", text }),
     getStatus: () => {
       const r = runQueue.get(runQueue.active);
       return r ? `${r.status} (Task: ${r.task})` : "Idle";
