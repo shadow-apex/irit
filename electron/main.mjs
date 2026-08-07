@@ -166,6 +166,26 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
+  ipcMain.handle("app:close", async (_event, target) => {
+    try {
+      const procName = target.endsWith(".exe") ? target : `${target}.exe`;
+      const command = `taskkill /IM "${procName}"`;
+      const { exec } = require("child_process");
+      await new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(stdout);
+          }
+        });
+      });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle("app:open", async (_event, target) => {
     try {
       if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("vscode://")) {

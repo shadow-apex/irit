@@ -72,12 +72,24 @@ export default function AppLauncher() {
 
       {open && (
         <div className="launcher-menu">
-          {apps.map((app) => (
-            <button key={app.target} className="launcher-item" onClick={() => handleLaunch(app.target)}>
-              <AppWindow size={16} />
-              <span>{app.name}</span>
-            </button>
-          ))}
+            {apps.map((app) => (
+              <div key={app.target} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button className="launcher-item" onClick={() => handleLaunch(app.target)}>
+                  <AppWindow size={16} />
+                  <span>{app.name}</span>
+                </button>
+                <button className="launcher-item" title="Close" onClick={async () => {
+                  if (window.iris?.closeApp) {
+                    const res = await window.iris.closeApp(app.target);
+                    if (!res.success) alert('Không tắt được: ' + res.error);
+                  } else {
+                    alert('Chưa có khả năng tắt app từ UI');
+                  }
+                }} style={{ background: 'transparent', border: 'none', color: 'var(--muted)' }}>
+                  ✖
+                </button>
+              </div>
+            ))}
           {apps.length === 0 && (
             <div style={{ padding: "8px", fontSize: "12px", color: "var(--muted)" }}>
               Trống (không có app nào)

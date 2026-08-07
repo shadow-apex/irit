@@ -52,6 +52,10 @@ import {
   browserExtractTextTool,
   browserScreenshotTool,
   browserCloseTool,
+  closeAppTool,
+  minimizeAppTool,
+  restoreAppTool,
+  writeNoteTool,
 } from "./computer-use-tools.mjs";
 import {
   createSmarthomeRuleTool,
@@ -168,6 +172,14 @@ export async function executeClaudeTool(name, args = {}) {
       };
     case "open_url_or_app":
       return await openUrlOrApp(args);
+    case "close_app":
+      return await closeAppTool(args);
+    case "minimize_app":
+      return await minimizeAppTool(args);
+    case "restore_app":
+      return await restoreAppTool(args);
+    case "write_note":
+      return await writeNoteTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

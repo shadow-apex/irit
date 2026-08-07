@@ -70,6 +70,51 @@ export function buildClaudeTools() {
           }
         },
         {
+          name: "close_app",
+          description: "Close an open local application on Windows. Invoke this when the user asks you to close an app. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The executable name to close (e.g. 'Discord.exe')." }
+            },
+            required: ["target"]
+          }
+        },
+        {
+          name: "minimize_app",
+          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to hide or minimize an app without closing it. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The executable name to minimize (e.g. 'Discord.exe')." }
+            },
+            required: ["target"]
+          }
+        },
+        {
+          name: "restore_app",
+          description: "Restore or maximize a minimized local application on Windows, bringing it back to the screen. Invoke this when the user asks you to open, restore, or maximize an app that is currently hidden or minimized. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The executable name to restore (e.g. 'Discord.exe')." }
+            },
+            required: ["target"]
+          }
+        },
+        {
+          name: "write_note",
+          description: "Write text into a temporary Notepad file and open it for the user to see. Invoke this when the user asks you to take a note, write something down, or display text in Notepad. By default, it appends to the existing note. Set is_new to true if the user asks to start a fresh/new note.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The content to write into the note." },
+              is_new: { type: "boolean", description: "If true, clears the previous note and starts a new one. If false, appends to the existing note." }
+            },
+            required: ["text"]
+          }
+        },
+        {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
           parameters: { type: "object", properties: {} },

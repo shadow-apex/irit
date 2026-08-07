@@ -7,6 +7,7 @@
  * the browser-automation tool set.
  */
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import electron from "electron";
 const { shell } = electron;
 import { runComputerSession } from "../computer-session.mjs";
@@ -340,6 +341,89 @@ export async function openUrlOrApp(args) {
     return { status: "success", message: `Started application: ${basename}` };
   } catch (err) {
     return { status: "error", error: `Failed to start app: ${err.message}` };
+  }
+}
+
+export async function closeAppTool(args) {
+  const { target } = args;
+  if (!target) return { status: "error", error: "Missing 'target' executable name." };
+  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
+  
+  try {
+    const pyPath = join(process.cwd(), "tools", "system_actions.py");
+    const child = spawn("python", [pyPath, "close", basename], {
+      shell: false,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return { status: "success", message: `Requested to close application: ${basename} using Python` };
+  } catch (err) {
+    return { status: "error", error: `Failed to close app: ${err.message}` };
+  }
+}
+
+export async function minimizeAppTool(args) {
+  const { target } = args;
+  if (!target) return { status: "error", error: "Missing 'target' executable name." };
+  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
+  
+  try {
+    const pyPath = join(process.cwd(), "tools", "system_actions.py");
+    const child = spawn("python", [pyPath, "minimize", basename], {
+      shell: false,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return { status: "success", message: `Requested to minimize application: ${basename} using Python` };
+  } catch (err) {
+    return { status: "error", error: `Failed to minimize app: ${err.message}` };
+  }
+}
+
+export async function restoreAppTool(args) {
+  const { target } = args;
+  if (!target) return { status: "error", error: "Missing 'target' executable name." };
+  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
+  
+  try {
+    const pyPath = join(process.cwd(), "tools", "system_actions.py");
+    const child = spawn("python", [pyPath, "restore", basename], {
+      shell: false,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return { status: "success", message: `Requested to restore/maximize application: ${basename} using Python` };
+  } catch (err) {
+    return { status: "error", error: `Failed to restore app: ${err.message}` };
+  }
+}
+
+export async function writeNoteTool(args) {
+  const { text, is_new } = args;
+  if (!text) return { status: "error", error: "Missing 'text' argument." };
+  
+  try {
+    const pyPath = join(process.cwd(), "tools", "system_actions.py");
+    const cmdArgs = [pyPath, "note", text];
+    if (is_new) cmdArgs.push("--new");
+    
+    // Do not use windowsHide: true here because we want Notepad to be visible to the user
+    const child = spawn("python", cmdArgs, {
+      shell: false,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+    return { status: "success", message: `Requested to write note in Notepad with text starting: ${text.substring(0, 50)}` };
+  } catch (err) {
+    return { status: "error", error: `Failed to write note: ${err.message}` };
   }
 }
 
