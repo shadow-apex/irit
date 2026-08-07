@@ -217,6 +217,39 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
     return () => clearInterval(id);
   }, []);
 
+  // Lắng nghe sự kiện phóng to robot qua phím tắt
+  useEffect(() => {
+    const handleExpand = (e: any) => {
+      let indexStr = null;
+      
+      // Xử lý sự kiện tùy chỉnh từ App.tsx (Ctrl+Alt+1..9)
+      if (e.type === 'robot-cameras:expand') {
+        indexStr = e.detail;
+      }
+      
+      // Xử lý sự kiện bấm phím khi PiP đang mở (Option 3: 1..9)
+      if (e.type === 'keydown' && e.key >= '1' && e.key <= '9') {
+        indexStr = e.key;
+      }
+
+      if (indexStr) {
+        const idx = parseInt(indexStr, 10);
+        const robotIds = Object.keys(robots);
+        if (idx >= 1 && idx <= robotIds.length) {
+          setExpandedId(robotIds[idx - 1]);
+        }
+      }
+    };
+
+    window.addEventListener('robot-cameras:expand', handleExpand);
+    window.addEventListener('keydown', handleExpand);
+    return () => {
+      window.removeEventListener('robot-cameras:expand', handleExpand);
+      window.removeEventListener('keydown', handleExpand);
+    };
+  }, [robots]);
+
+
   // Keyboard Control (WASD)
   //
   // FIX-CAM-01: Arduino/ESP32 phía firmware giờ có failsafe watchdog — nếu

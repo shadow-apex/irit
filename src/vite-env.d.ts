@@ -149,6 +149,7 @@ type IrisConfig = {
   loadTestData: boolean;
   wakeWord: boolean;
   promptReviewMode: boolean;
+  claudeEnabled?: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
@@ -220,6 +221,7 @@ type IrisApi = {
   toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;
   windowControl: (action: "close" | "minimize") => void;
+  closeApp?: (id: string) => Promise<{ success: boolean; error?: string }>;
   onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
   getConfig: () => Promise<IrisConfig>;
@@ -293,6 +295,7 @@ type IrisApi = {
   onCompanionStatus?: (callback: (payload: any) => void) => () => void;
   // PiP Global Hotkey Listeners
   onToggleRobotPip?: (callback: () => void) => () => void;
+  onExpandRobotPip?: (callback: (index: number | string) => void) => () => void;
   onToggleCompanionPip?: (callback: () => void) => () => void;
   // FEAT-SH-CAM-01: Alt+H hotkey listener for the Smart Home Cameras PiP.
   onToggleSmartHomePip?: (callback: () => void) => () => void;

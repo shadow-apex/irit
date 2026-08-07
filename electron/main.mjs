@@ -42,6 +42,7 @@ import {
   startCompanionServer,
 } from "./companion-server.mjs";
 import { installRendererSecurity } from "./renderer-security.mjs";
+import { relaunchElevatedIfNeeded } from "./main/win-elevation.mjs";
 
 import { emitEvent, emitToRenderer } from "./main/events.mjs";
 import {
@@ -135,6 +136,12 @@ app.setName("Iris");
 let localchatEnabled = false;
 
 app.whenReady().then(() => {
+  // Windows: some computer-use tools (minimize/restore/close) act on other
+  // processes' windows and get silently blocked by UIPI if Iris isn't
+  // elevated and the target window is. Ask for the standard UAC prompt and
+  // hand off to the elevated relaunch before creating any windows.
+  if (relaunchElevatedIfNeeded()) return;
+
   if (appIcon && process.platform === "darwin" && app.dock) {
     app.dock.setIcon(appIcon);
   }
@@ -557,6 +564,14 @@ app.whenReady().then(() => {
   });
   if (!robotPipRegistered) {
     emitEvent({ type: "log", level: "error", message: `Could not register Robot PiP hotkey Alt+R.` });
+  }
+
+  for (let i = 1; i <= 9; i++) {
+    globalShortcut.register(`CommandOrControl+Alt+${i}`, () => {
+      if (mainWindow) {
+        mainWindow.webContents.send("ui:expand-robot-pip", i);
+      }
+    });
   }
 
   // Register Alt+C to toggle Companion Camera PiP

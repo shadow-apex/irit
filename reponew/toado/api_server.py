@@ -125,10 +125,18 @@ async def type_keyboard(req: TypeRequest):
         return JSONResponse({"success": False, "error": "pyautogui not available on this server"}, status_code=500)
     try:
         if req.text:
-            pyautogui.write(req.text, interval=0.01)
+            import pyperclip
+            original_clipboard = pyperclip.paste()
+            pyperclip.copy(req.text)
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(0.05)
+            pyperclip.copy(original_clipboard)
         if req.key:
-            pyautogui.press(req.key)
-        return JSONResponse({"success": True}, status_code=200)
+            if '+' in req.key:
+                pyautogui.hotkey(*req.key.split('+'))
+            else:
+                pyautogui.press(req.key)
+        return {"success": True}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 

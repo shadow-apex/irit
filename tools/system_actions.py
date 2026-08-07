@@ -25,32 +25,67 @@ def write_note(text, mode="a"):
     with open(temp_path, mode, encoding="utf-8") as f:
         f.write("- " + text + "\n")
     
-    # Tat cua so Notepad cu (neu dang mo file nay) de tranh mo nhieu cua so
+    # Tim cua so Notepad dang mo file nay (neu co)
     EnumWindows = ctypes.windll.user32.EnumWindows
     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
     GetWindowText = ctypes.windll.user32.GetWindowTextW
     GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
     PostMessage = ctypes.windll.user32.PostMessageW
-    
-    found_old_note = [False]
-    
-    def close_old_note(hwnd, lParam):
+    FindWindowExW = ctypes.windll.user32.FindWindowExW
+    SendMessageW = ctypes.windll.user32.SendMessageW
+    SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
+    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
+
+    FindWindowExW.restype = ctypes.c_void_p
+    SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_wchar_p]
+    SendMessageW.restype = ctypes.c_void_p
+
+    WM_SETTEXT = 0x000C
+    EM_SETSEL = 0x00B1
+    EM_SCROLLCARET = 0x00B7
+    SW_RESTORE = 9
+
+    existing_hwnd = [None]
+
+    def find_old_note(hwnd, lParam):
         length = GetWindowTextLength(hwnd)
         buff = ctypes.create_unicode_buffer(length + 1)
         GetWindowText(hwnd, buff, length + 1)
-        title = buff.value.lower()
-        if "iris_quick_note" in title:
-            PostMessage(hwnd, 0x0010, 0, 0) # Gui lenh tat cua so (WM_CLOSE)
-            found_old_note[0] = True
+        if "iris_quick_note" in buff.value.lower():
+            existing_hwnd[0] = hwnd
+            return False  # da tim thay, dung enum som cho nhanh
         return True
 
-    EnumWindows(EnumWindowsProc(close_old_note), 0)
-    
-    # Doi mot chut de cua so cu kip dong lai hoan toan (tranh xung dot)
-    if found_old_note[0]:
+    EnumWindows(EnumWindowsProc(find_old_note), 0)
+
+    if existing_hwnd[0]:
+        hwnd = existing_hwnd[0]
+        # Cua so dang mo san: cap nhat truc tiep vao control chua text thay vi
+        # dong roi mo lai (cach cu gay chop/giat man hinh moi lan ghi chu).
+        # Notepad co dien (Win10 tro xuong) dung class "Edit"; Notepad moi cua
+        # Win11 dung "RichEditD2DPT" — thu ca hai.
+        hEdit = FindWindowExW(hwnd, None, "Edit", None)
+        if not hEdit:
+            hEdit = FindWindowExW(hwnd, None, "RichEditD2DPT", None)
+
+        if hEdit:
+            with open(temp_path, "r", encoding="utf-8") as f:
+                full_text = f.read()
+            SendMessageW(hEdit, WM_SETTEXT, 0, full_text)
+            # Dua con tro ve cuoi de dong moi nhat luon hien ra, khong can cuon tay
+            SendMessageW(hEdit, EM_SETSEL, len(full_text), len(full_text))
+            SendMessageW(hEdit, EM_SCROLLCARET, 0, 0)
+            ShowWindowAsync(hwnd, SW_RESTORE)
+            SetForegroundWindow(hwnd)
+            print("Success (updated existing Notepad window)")
+            sys.exit(0)
+
+        # Khong nhan dien duoc control text (phien ban Notepad la) -> fallback
+        # ve cach cu: dong cua so roi mo lai.
+        PostMessage(hwnd, 0x0010, 0, 0)  # WM_CLOSE
         time.sleep(0.5)
-        
-    # Mo cua so Notepad moi (se hien thi ca noi dung cu va moi)
+
+    # Chua co cua so nao dang mo -> mo Notepad moi
     subprocess.Popen(["notepad.exe", temp_path])
     print("Success")
     sys.exit(0)

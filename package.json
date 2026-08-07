@@ -110,7 +110,8 @@
     "win": {
       "target": [
         "dir"
-      ]
+      ],
+      "requestedExecutionLevel": "requireAdministrator"
     }
   }
 }

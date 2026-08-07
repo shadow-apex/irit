@@ -70,6 +70,8 @@ export const ALLOWED_CONFIG_KEYS = new Set([
   // parks the brief for the user's Approve/Edit/Cancel instead of dispatching
   // immediately — zero Claude tokens spent until approved.
   "IRIS_PROMPT_REVIEW_MODE",
+  // Claude Brain toggle: when off, Gemini handles everything without Claude.
+  "IRIS_CLAUDE_ENABLED",
 ]);
 
 // Repo .env in dev, ~/.iris/.env in a packaged build — the same location
@@ -94,6 +96,7 @@ export function getFullConfig() {
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
     wakeWord: envFlag("IRIS_WAKE_WORD", true),
     promptReviewMode: getPromptReviewMode(),
+    claudeEnabled: envFlag("IRIS_CLAUDE_ENABLED", true),
     configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),

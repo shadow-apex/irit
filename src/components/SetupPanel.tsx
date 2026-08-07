@@ -25,6 +25,8 @@ type Draft = {
   IRIS_WAKE_WORD: string;
   // Ported from myiris (prompt-review-gate).
   IRIS_PROMPT_REVIEW_MODE: string;
+  // Claude Brain toggle.
+  IRIS_CLAUDE_ENABLED: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
@@ -117,6 +119,7 @@ export default function SetupPanel({
     IRIS_LOAD_TEST_DATA: config.loadTestData ? "true" : "false",
     IRIS_WAKE_WORD: config.wakeWord ? "true" : "false",
     IRIS_PROMPT_REVIEW_MODE: config.promptReviewMode ? "true" : "false",
+    IRIS_CLAUDE_ENABLED: config.claudeEnabled ? "true" : "false",
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
@@ -288,6 +291,21 @@ export default function SetupPanel({
 
   const claudeSection = (
     <Section title="Claude" hint="Claude is Iris's worker brain — the PO/DEV pipeline runs on the Claude Code CLI.">
+      <label className="setup-field">
+        <span>Claude Brain</span>
+        <ThemedSelect
+          ariaLabel="Claude Brain"
+          value={draft.IRIS_CLAUDE_ENABLED}
+          options={[
+            { value: "true", label: "On" },
+            { value: "false", label: "Off" },
+          ]}
+          onChange={(value) => set("IRIS_CLAUDE_ENABLED", value)}
+        />
+        <small className="setup-note">
+          When off, Gemini handles everything locally without needing a Claude API key. If a task requires Claude, Iris will apologize and remind you to enable it here.
+        </small>
+      </label>
       <div className="setup-actions">
         <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
           {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}

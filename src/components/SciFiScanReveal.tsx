@@ -369,6 +369,27 @@ export default function SciFiScanReveal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        if (!started) {
+          beginTimeline();
+        } else if (phaseRef.current !== "done") {
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          }
+          phaseRef.current = "done";
+          setPhase("done");
+          if (onComplete) onComplete();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [started, beginTimeline, onComplete]);
+
   // main animation loop
   useEffect(() => {
     if (!started) return;

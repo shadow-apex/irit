@@ -222,6 +222,7 @@ export default function App() {
     if (!hasBridge) return;
     
     let cleanupRobot = () => {};
+    let cleanupRobotExpand = () => {};
     let cleanupCompanion = () => {};
     let cleanupSmartHome = () => {};
     let cleanupCompanionLiveOpen = () => {};
@@ -229,6 +230,16 @@ export default function App() {
     if (window.iris.onToggleRobotPip) {
       cleanupRobot = window.iris.onToggleRobotPip(() => {
         setShowRobotCameras(prev => !prev);
+      });
+    }
+
+    if (window.iris.onExpandRobotPip) {
+      cleanupRobotExpand = window.iris.onExpandRobotPip((index) => {
+        setShowRobotCameras(true);
+        // Delay to ensure the RobotCameras component mounts before dispatching
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('robot-cameras:expand', { detail: index }));
+        }, 100);
       });
     }
 
@@ -256,6 +267,7 @@ export default function App() {
 
     return () => {
       cleanupRobot();
+      cleanupRobotExpand();
       cleanupCompanion();
       cleanupSmartHome();
       cleanupCompanionLiveOpen();

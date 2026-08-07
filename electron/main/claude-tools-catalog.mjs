@@ -52,7 +52,7 @@ export function buildClaudeTools() {
               },
               key: {
                 type: "string",
-                description: "The name of a specific key to press (e.g. 'enter', 'esc', 'tab', 'backspace')."
+                description: "The name of a specific key or hotkey to press (e.g. 'enter', 'esc', 'tab', 'backspace', 'ctrl+a', 'ctrl+c')."
               }
             }
           }

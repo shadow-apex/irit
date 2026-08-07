@@ -137,6 +137,12 @@ export async function executeClaudeTool(name, args = {}) {
     case "check_claude_status":
       return checkClaudeStatus();
     case "submit_claude_task":
+      if (process.env.IRIS_CLAUDE_ENABLED === "false") {
+        return {
+          status: "error",
+          error: "Claude is disabled in Settings. Apologize to the user and kindly ask them to enable Claude in the Settings if they want to do this task.",
+        };
+      }
       return submitClaudeTask(args);
     case "get_claude_task_status":
       return getClaudeTaskStatus(args);
