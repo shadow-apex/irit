@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
+<<<<<<< HEAD
+import type { ReactorState } from "../types";
+=======
 
 type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 type Palette = {
   primary: string;
@@ -9,6 +13,44 @@ type Palette = {
   glow: string;
 };
 
+<<<<<<< HEAD
+/**
+ * State palettes, tuned to the same family as the UI tokens so the orb and the
+ * room around it read as one object. The mapping is semantic, matching the
+ * status-dot language the app already speaks:
+ *   cyan   = Iris herself (online, hearing you)
+ *   amber  = Iris's voice going out (the one warm state, so "she is talking"
+ *            is unmistakable against the cool resting states)
+ *   violet = Hermes is working — the same violet as the Hermes status dot
+ *   slate  = dormant
+ */
+const PALETTES: Record<ReactorState, Palette> = {
+  idle: { primary: "130, 158, 180", secondary: "150, 175, 195", accent: "215, 228, 240", glow: "150, 180, 205" },
+  online: { primary: "34, 190, 205", secondary: "80, 216, 226", accent: "230, 253, 255", glow: "60, 200, 215" },
+  listening: { primary: "56, 214, 236", secondary: "34, 190, 205", accent: "236, 253, 255", glow: "80, 220, 240" },
+  speaking: { primary: "245, 160, 92", secondary: "255, 200, 120", accent: "255, 248, 232", glow: "252, 176, 104" },
+  working: { primary: "150, 130, 245", secondary: "186, 160, 255", accent: "244, 240, 255", glow: "160, 140, 250" },
+};
+
+/**
+ * The room's light color per state. Published as `--orb-accent` on the deck /
+ * HUD root so the ambient glow, glass edge-light and hairlines are all tinted
+ * by whatever Iris is doing. Single source of truth — the orb chrome, the deck
+ * and the HUD all read from here.
+ */
+export const ORB_ACCENT: Record<ReactorState, string> = {
+  idle: PALETTES.idle.primary,
+  online: PALETTES.online.primary,
+  listening: PALETTES.listening.primary,
+  speaking: PALETTES.speaking.primary,
+  working: PALETTES.working.primary,
+};
+
+/** Energy of an idle/asleep reactor. Anything soft and glowing must be keyed
+ *  off the distance above this, so a dark orb throws no light at all. */
+const REST_ENERGY = 0.18;
+
+=======
 const PALETTES: Record<ReactorState, Palette> = {
   idle: { primary: "120, 170, 150", secondary: "150, 185, 165", accent: "210, 225, 218", glow: "150, 205, 180" },
   online: { primary: "18, 163, 148", secondary: "70, 200, 175", accent: "230, 255, 248", glow: "60, 195, 170" },
@@ -17,6 +59,7 @@ const PALETTES: Record<ReactorState, Palette> = {
   working: { primary: "120, 180, 120", secondary: "40, 200, 170", accent: "252, 255, 230", glow: "130, 195, 150" },
 };
 
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 function drawArc(
   c: CanvasRenderingContext2D,
   x: number,
@@ -130,7 +173,11 @@ export default function ReactorCore({
       if (s === "working") return 0.88;
       if (s === "listening") return 0.72;
       if (s === "online") return 0.45;
+<<<<<<< HEAD
+      return REST_ENERGY;
+=======
       return 0.18;
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
     }
 
     function draw(time: number) {
@@ -160,6 +207,26 @@ export default function ReactorCore({
 
       c.clearRect(0, 0, width, height);
 
+<<<<<<< HEAD
+      // Soft reactor halo — light thrown by a running reactor, so it must not
+      // exist when the reactor is off. It used to carry a fixed alpha floor,
+      // which left a wide glow disc (bigger than the drawn ring) sitting behind
+      // a sleeping orb; desaturated by the asleep filter it read as a grey
+      // shadow blob rather than as light. The gate reaches full strength by the
+      // time Iris is merely online, so the awake look is unchanged.
+      const bloom = Math.min(1, Math.max(0, (energy - REST_ENERGY) / 0.27));
+      if (bloom > 0.01) {
+        const haloR = base * 0.95;
+        const halo = c.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+        halo.addColorStop(0, `rgba(${palette.glow}, ${bloom * (0.34 + energy * 0.22)})`);
+        halo.addColorStop(0.34, `rgba(${palette.glow}, ${bloom * (0.12 + energy * 0.08)})`);
+        halo.addColorStop(1, "rgba(0,0,0,0)");
+        c.fillStyle = halo;
+        c.beginPath();
+        c.arc(cx, cy, haloR, 0, Math.PI * 2);
+        c.fill();
+      }
+=======
       // Soft reactor halo
       const halo = c.createRadialGradient(cx, cy, 0, cx, cy, base * 0.95);
       halo.addColorStop(0, `rgba(${palette.glow}, ${0.32 + energy * 0.24})`);
@@ -169,11 +236,17 @@ export default function ReactorCore({
       c.beginPath();
       c.arc(cx, cy, base * 0.95, 0, Math.PI * 2);
       c.fill();
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
       // Outer micro ticks (futuristic HUD radial scale)
       const tickCount = 144;
       for (let i = 0; i < tickCount; i++) {
+<<<<<<< HEAD
+        // Quay chậm lại theo ý user
+        const a = (i / tickCount) * Math.PI * 2 + t * 0.15;
+=======
         const a = (i / tickCount) * Math.PI * 2;
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
         const major = i % 12 === 0;
         const medium = i % 6 === 0;
         const outer = unit * 0.93;
@@ -191,6 +264,10 @@ export default function ReactorCore({
       const segments = 28;
       const segR = unit * 0.78;
       for (let i = 0; i < segments; i++) {
+<<<<<<< HEAD
+        // Trả lại tốc độ gốc cho vòng đứt đoạn
+=======
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
         const a = (i / segments) * Math.PI * 2 + t * 0.08;
         const len = Math.PI * 2 / segments * 0.56;
         const active = (i + Math.floor(t * 2)) % 7 === 0;

@@ -37,6 +37,10 @@ import NoteReader from "./components/NoteReader";
 import type { GalaxyNode } from "./components/VaultGalaxy";
 import { companionStream } from "./lib/companionStream";
 import SciFiScanReveal from "./components/SciFiScanReveal";
+<<<<<<< HEAD
+import { MusicWidget } from "./components/MusicWidget";
+=======
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
@@ -1974,6 +1978,10 @@ export default function App() {
         <HandReticles hand={hand} dwelling={Boolean(dwellRef.current && !dwellRef.current.fired)} />
       ) : null}
       <CompanionWebRTC />
+<<<<<<< HEAD
+      <MusicWidget />
+=======
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
     </>
   );
 }

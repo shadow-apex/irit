@@ -1,3 +1,18 @@
+<<<<<<< HEAD
+# --- Runtime server deps for api_server.py (được import trực tiếp nhưng
+# thiếu trong list cũ, khiến `python api_server.py` báo ModuleNotFoundError
+# ngay khi khởi động, trước cả khi kịp nhận request đầu tiên) ---
+fastapi
+uvicorn[standard]
+python-dotenv
+google-generativeai
+python-multipart
+pillow
+requests
+pyperclip
+
+=======
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 torch
 easyocr
 torchvision

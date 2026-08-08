@@ -208,5 +208,19 @@ contextBridge.exposeInMainWorld("iris", {
   sendCompanionWebRTCSignal: (signal) => ipcRenderer.send("companion:webrtc-signal-to-phone", signal),
   sendCompanionWebRTCFrame: (base64) => ipcRenderer.send("companion:webrtc-frame", base64),
   sendCompanionWebRTCAudio: (pcm) => ipcRenderer.send("companion:webrtc-audio", pcm),
+<<<<<<< HEAD
+  sendMusicControl: (action) => ipcRenderer.send("music:control", action),
+  onMusicUpdate: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("music:update", handler);
+    return () => ipcRenderer.removeListener("music:update", handler);
+  },
+  onMusicToggle: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("music:toggle-widget", handler);
+    return () => ipcRenderer.removeListener("music:toggle-widget", handler);
+  }
+=======
 // duplicate openApp removed – already defined earlier
+>>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 });
