@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Iris Companion</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0d12; color: #e8ecf3;
+    font: 15px/1.4 -apple-system, system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  video { width: 100%; flex: 1; min-height: 0; object-fit: cover; background: #000; transform: scaleX(-1); }
+  #status { padding: 8px 14px; font-size: 13px; color: #8b95a7; min-height: 18px; text-align: center; }
+  #bar { display: flex; gap: 10px; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  button { flex: 1; padding: 15px; font-size: 16px; border: 0; border-radius: 12px;
+    background: #28cdaa; color: #fff; font-weight: 600; cursor: pointer; }
+  button.alt { background: #152a1e; color: #28cdaa; border: 1px solid #28cdaa; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #cmdBar { display: flex; gap: 8px; padding: 0 12px 12px; }
+  #cmdInput { flex: 1; padding: 12px 14px; font-size: 15px; border-radius: 10px;
+    border: 1px solid #223028; background: #10161a; color: #e8ecf3; }
+  #cmdSend { flex: none; width: 52px; padding: 0; }
+  #cmdMic { flex: none; width: 52px; padding: 0; }
+  #cmdMic.listening { background: #ff6b6b; color: #fff; border-color: #ff6b6b; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <video id="preview" autoplay muted playsinline></video>
+  <div id="status">Status: STANDBY (Ready to connect)</div>
+  <div id="mic-status" style="display:none; text-align:center; font-size:13px; padding-bottom:4px; color:#ff6b6b;">🔇 Mic đã bị tắt từ Iris (PC)</div>
+  <div id="bar">
+    <button id="start">CONNECT TO IRIS</button>
+    <button id="flip" class="alt">Flip Camera</button>
+  </div>
+  <!-- FEAT-COMP-CONTROL-01: gõ/nói lệnh điều khiển Iris từ điện thoại, đi
+       chung kênh WebSocket signaling (loại message 'iris-command', được
+       companion-server.mjs relay sang renderer -> notifyIris -> liveSession).
+       Cần đã bấm CONNECT TO IRIS trước (mở kết nối WS) mới gửi được. -->
+  <div id="cmdBar">
+    <input id="cmdInput" type="text" placeholder="Nhắn lệnh cho Iris…" autocomplete="off">
+    <button id="cmdMic" class="alt" style="display:none">🎤</button>
+    <button id="cmdSend">Gửi</button>
+  </div>
+</div>
+<script>
+const $  = (id) => document.getElementById(id);
+const log = (t) => { $('status').textContent = 'Status: ' + t; console.log('[phone]', t); };
+
+// BUGFIX-COMP-ICE-01: xem comment tương ứng trong CompanionWebRTC.tsx (phía
+// desktop) — phải khai báo CÙNG một danh sách iceServers (bao gồm TURN) ở cả
+// hai đầu, vì mỗi bên tự gather candidate của chính nó. Nếu chỉ desktop có
+// TURN mà điện thoại không có, điện thoại sẽ không bao giờ tạo ra được
+// "relay candidate" của riêng nó để gửi sang, và kết nối vẫn thất bại y hệt
+// như trước khi thêm TURN.
+const RTC_CFG = {
+  iceServers: [
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    {
+      urls: [
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:443',
+        'turn:global.relay.metered.ca:80?transport=tcp',
+        'turns:global.relay.metered.ca:443?transport=tcp',
+      ],
+      username: '38d8be553dc5cd91666b1d9a',
+      credential: '1lVLwxHcUQGDIm0Z',
+    },
+  ],
+  iceCandidatePoolSize: 4,
+};
+
+let pc, ws, localStream;
+let facing = 'user';
+let started = false;
+// FEAT-COMP-MIC-01: PC gửi tín hiệu 'mic-toggle' qua kênh signalling WebRTC
+// đã có sẵn (companionStream.requestMicToggle -> sendCompanionWebRTCSignal
+// -> companion:webrtc-signal-to-phone -> companion-server.mjs -> WS này) để
+// tắt/bật mic điện thoại từ xa mà không cần renegotiate WebRTC. Nhớ trạng
+// thái mong muốn ở đây để áp dụng lại mỗi khi có localStream mới (ví dụ khi
+// Flip Camera gọi lại getCam(), track audio cũ bị stop() và thay track mới
+// — track mới phải giữ đúng trạng thái mute hiện tại thay vì tự bật lại).
+let micWanted = true;
+
+function vtrack() { return localStream && localStream.getVideoTracks()[0]; }
+function atrack() { return localStream && localStream.getAudioTracks()[0]; }
+
+function applyMicWanted() {
+  const at = atrack();
+  if (at) at.enabled = micWanted;
+  $('mic-status').style.display = micWanted ? 'none' : 'block';
+}
+
+async function getCam(constraints) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("LỖI BẢO MẬT: Trình duyệt chặn quyền Camera/Mic vì link này không an toàn (HTTP). Bạn vui lòng dùng link HTTPS (ngrok tunnel) hoặc dùng Safari trên kết nối HTTPS.");
+    throw new Error("HTTP connection blocked camera");
+  }
+
+  if (localStream) localStream.getTracks().forEach((t) => t.stop());
+  localStream = await navigator.mediaDevices.getUserMedia(constraints || {
+    video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+    audio: { echoCancellation: true, noiseSuppression: true }
+  });
+  const vt = vtrack();
+  if (vt) vt.contentHint = 'motion';
+  $('preview').srcObject = localStream;
+  $('preview').style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+  // FEAT-COMP-MIC-01: getUserMedia() luôn tạo audio track MỚI ở trạng thái
+  // enabled=true mặc định — nếu người dùng đã tắt mic từ PC trước đó rồi
+  // sau đó bấm "Flip Camera" (gọi lại getCam()), track mới phải bị tắt lại
+  // ngay để không vô tình "bật mic trở lại" ngoài ý muốn của PC.
+  applyMicWanted();
+}
+
+async function swapTracks() {
+  if (!pc) return;
+  const vt = vtrack(), vs = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (vs && vt) await vs.replaceTrack(vt);
+  const at = localStream.getAudioTracks()[0], as = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+  if (as && at) await as.replaceTrack(at);
+}
+
+function preferH264() {
+  const tr = pc.getTransceivers().find((t) => t.sender && t.sender.track && t.sender.track.kind === 'video');
+  if (!tr || !tr.setCodecPreferences || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) return;
+  try {
+    const caps = RTCRtpSender.getCapabilities('video'); if (!caps) return;
+    const h = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+    const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+    if (h.length) tr.setCodecPreferences([...h, ...rest]);
+  } catch (e) {}
+}
+
+function newPC() {
+  if (pc) { try { pc.close(); } catch (e) {} }
+  pc = new RTCPeerConnection(RTC_CFG);
+  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  preferH264();
+  // DEBUG-COMP-ICE-02: theo dõi loại candidate đã gather được (host/srflx/
+  // relay) để khi ICE failed, biết ngay là do THIẾU relay candidate (TURN
+  // không trả về candidate nào — sai username/credential, hoặc dịch vụ
+  // openrelay.metered.ca hiện không khả dụng) hay là CÓ relay candidate mà
+  // vẫn fail (thường do phía kia — PC — cũng không gather được relay tương ứng).
+  const seenCandidateTypes = new Set();
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      const type = e.candidate.type || (e.candidate.candidate || '').match(/typ (\w+)/)?.[1];
+      if (type) seenCandidateTypes.add(type);
+      log('ICE candidate: ' + type);
+      ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate }));
+    }
+  };
+  pc.onconnectionstatechange = () => log('WebRTC: ' + pc.connectionState);
+  let iceRestartTimer = null;
+  pc.oniceconnectionstatechange = () => {
+    console.log('[phone] ICE state:', pc.iceConnectionState, '| candidate types seen:', [...seenCandidateTypes]);
+    if (pc.iceConnectionState === 'failed') {
+      if (!seenCandidateTypes.has('relay')) {
+        log('WebRTC: ICE FAILED — KHÔNG có relay candidate nào (TURN server không phản hồi/sai credential). Kiểm tra RTC_CFG hoặc thử coturn riêng.');
+      } else {
+        log('WebRTC: ICE FAILED — có relay candidate nhưng vẫn không kết nối được (nhiều khả năng phía PC cũng thiếu relay tương ứng, hoặc TURN đang quá tải).');
+      }
+      // DEBUG-COMP-ICE-02 (cont.): thay vì treo mãi ở 'failed' chờ người
+      // dùng tự đóng app/tải lại trang, tự động renegotiate lại từ đầu (PC
+      // đã sẵn sàng nhận offer mới bất cứ lúc nào — xem 'offer' handler
+      // trong CompanionWebRTC.tsx, nó luôn close() PC cũ + tạo PC mới).
+      // Debounce bằng 1 timer để tránh gọi makeOffer() chồng chéo nếu state
+      // đổi qua lại nhanh.
+      if (iceRestartTimer) clearTimeout(iceRestartTimer);
+      iceRestartTimer = setTimeout(() => {
+        if (started && pc && pc.iceConnectionState === 'failed') {
+          log('WebRTC: đang thử kết nối lại từ đầu...');
+          makeOffer();
+        }
+      }, 2000);
+    }
+  };
+}
+
+async function makeOffer() {
+  if (!localStream) return;
+  newPC();
+  await pc.setLocalDescription(await pc.createOffer());
+  ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+  log('Offer sent, connecting...');
+}
+
+function connectWS() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  let wsUrl = `${protocol}//${window.location.host}`;
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (token) wsUrl += `?token=${token}`;
+
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => { 
+    log('WebSocket connected. Notifying desktop...');
+    ws.send(JSON.stringify({ type: 'peer-ready' })); 
+  };
+  ws.onclose = () => {
+    log('Signaling closed.');
+    if (started) setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => log('Signaling error');
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'peer-ready') {
+      await makeOffer();
+    }
+    else if (msg.type === 'answer') {
+      await pc.setRemoteDescription(msg.sdp);
+      log('Connected (LIVE)');
+    }
+    else if (msg.type === 'ice' && msg.candidate) { 
+      try { await pc.addIceCandidate(msg.candidate); } catch (e) {} 
+    }
+    else if (msg.type === 'peer-left') {
+      log('Desktop disconnected.');
+    }
+    else if (msg.type === 'mic-toggle') {
+      // { type: 'mic-toggle', enabled: boolean } gửi từ nút mic trong PiP
+      // "Companion Camera" (Alt+C) trên PC. Dùng track.enabled thay vì
+      // stop()/replaceTrack để có thể bật lại tức thì, không cần renegotiate
+      // SDP và không cần xin lại quyền mic.
+      micWanted = !!msg.enabled;
+      applyMicWanted();
+      log(micWanted ? 'Mic: ON' : 'Mic: MUTED (từ Iris PC)');
+    }
+  };
+}
+
+$('start').onclick = async () => {
+  if (started) {
+    if (pc) pc.close();
+    if (ws) ws.close();
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    started = false;
+    $('start').textContent = 'CONNECT TO IRIS';
+    $('start').className = '';
+    log('STANDBY');
+    return;
+  }
+  try {
+    // FEAT-COMP-MIC-01: mỗi lần bấm CONNECT thủ công là một phiên mới —
+    // đồng bộ với reset phía PC (companionStream.setMicEnabled(true) khi
+    // nhận offer mới), tránh trường hợp lần trước bị tắt mic rồi quên bật
+    // lại khiến phiên kết nối mới im lặng ngay từ đầu.
+    micWanted = true;
+    $('mic-status').style.display = 'none';
+    await getCam(); 
+    connectWS(); 
+    started = true; 
+    $('start').textContent = 'DISCONNECT'; 
+    $('start').className = 'alt';
+  }
+  catch (e) { log('Camera error: ' + e.message); }
+};
+
+$('flip').onclick = async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  try { 
+    await getCam(); 
+    if (started) {
+      await swapTracks();
+    }
+  }
+  catch (e) { log('Flip error: ' + e.message); }
+};
+
+// FEAT-COMP-CONTROL-01: gõ/nói lệnh điều khiển Iris. Dùng chung `ws` với
+// luồng camera phía trên (đã bấm CONNECT TO IRIS trước) — không mở kết nối
+// riêng để tránh phá vỡ luồng bắt tay WebRTC (peer-ready/offer) hiện có.
+function sendIrisCommand(text) {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log('Chưa kết nối — bấm "CONNECT TO IRIS" trước khi gửi lệnh');
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'iris-command', text: clean }));
+  log('Đã gửi lệnh cho Iris: "' + clean + '"');
+  $('cmdInput').value = '';
+}
+
+$('cmdSend').onclick = () => sendIrisCommand($('cmdInput').value);
+$('cmdInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendIrisCommand($('cmdInput').value); });
+
+// Thoại -> văn bản ngay trên điện thoại (Web Speech API). Android Chrome hỗ
+// trợ tốt; iOS Safari KHÔNG hỗ trợ SpeechRecognition nên nút mic tự ẩn ở
+// đó — gõ tay vẫn hoạt động bình thường trên mọi máy.
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRec) {
+  const micBtn = $('cmdMic');
+  micBtn.style.display = '';
+  const rec = new SpeechRec();
+  rec.lang = 'vi-VN';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  let listening = false;
+  rec.onresult = (e) => {
+    const said = e.results[0][0].transcript;
+    $('cmdInput').value = said;
+    sendIrisCommand(said);
+  };
+  rec.onerror = (e) => log('Lỗi nhận diện giọng nói: ' + e.error);
+  rec.onend = () => { listening = false; micBtn.classList.remove('listening'); };
+  micBtn.onclick = () => {
+    if (listening) { rec.stop(); return; }
+    try { rec.start(); listening = true; micBtn.classList.add('listening'); log('Đang nghe lệnh…'); }
+    catch (e) { log('Không khởi động được mic nhận lệnh: ' + e.message); }
+  };
+}
+</script>
+</body>
+</html>

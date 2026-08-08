@@ -1,0 +1,33 @@
+google-genai
+opencv-python
+pyaudio
+pillow
+mss
+soundcard
+scipy
+faster-whisper
+
+# Streaming STT cho Dịch (Alt+T) / Nhắc bài (Alt+A) — "Phương án A": Deepgram
+# Nova-3 streaming thay cho batch 4s + Whisper cũ (xem sidecar/live_transcriber.py).
+# faster-whisper ở trên vẫn được GIỮ LẠI vì được dùng làm chế độ dự phòng cục
+# bộ khi thiếu DEEPGRAM_API_KEY hoặc Deepgram lỗi kết nối liên tục.
+deepgram-sdk>=7.3.0
+
+# --- Các thư viện mới thêm cho OmniParser và Điều khiển chuột ---
+fastapi
+uvicorn
+python-multipart
+google-generativeai
+pyautogui
+torch
+torchvision
+easyocr
+paddlepaddle
+paddleocr
+supervision==0.18.0
+ultralytics==8.3.70
+transformers
+huggingface_hub
+accelerate
+numpy==1.26.4
+

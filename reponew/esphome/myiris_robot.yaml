@@ -1,0 +1,150 @@
+esphome:
+  name: myiris-robot
+  friendly_name: MyIris ESP32-CAM Robot
+  includes:
+    - myiris_control.h
+
+esp32:
+  board: esp32cam
+  framework:
+    type: arduino
+
+# Bật tính năng nhận thông tin báo lỗi để dễ debug
+logger:
+  level: DEBUG
+
+# Khai báo kết nối WiFi (Thay bằng WiFi nhà bạn)
+wifi:
+  ssid: "TEN_WIFI_CUA_BAN"
+  password: "MAT_KHAU_WIFI"
+  ap:
+    ssid: "Myiris-Robot-AP"
+    password: "password123"
+
+captive_portal:
+
+# Cấu hình Web Server mặc định của ESPHome
+web_server:
+  port: 80
+
+# Cung cấp Native API (Home Assistant nếu cần)
+api:
+
+# -------------------------------------------------------------
+# CAMERA ESP32-CAM
+# (MJPEG stream sẽ chạy ở cổng 81: http://<IP>:81/stream)
+# -------------------------------------------------------------
+esp32_camera:
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: [GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35]
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+  name: "MyIris Camera"
+  resolution: VGA # Có thể đổi thành QVGA nếu mạng yếu
+  jpeg_quality: 10
+  max_framerate: 15 fps
+  idle_framerate: 5 fps
+
+# Khai báo đèn Flash (Tùy chọn)
+output:
+  - platform: gpio
+    pin: GPIO4
+    id: flash_led
+light:
+  - platform: binary
+    output: flash_led
+    name: "Camera Flash"
+
+# -------------------------------------------------------------
+# ĐỘNG CƠ BÁNH XE (VD: dùng module L298N)
+# CẢNH BÁO: Chân GPIO12 là Strapping Pin (quyết định flash voltage).
+# NẾU MẠCH L298N KÉO CHÂN 12 LÊN HIGH (3.3V) KHI VỪA CẤP NGUỒN, 
+# ESP32-CAM SẼ BỊ LỖI KHÔNG KHỞI ĐỘNG ĐƯỢC. 
+# Hãy rút dây cắm vào chân 12 khi cấp nguồn, hoặc đổi sang chân khác (như GPIO2).
+# Dưới đây dùng chân 12, 13, 14, 15 (Chân thẻ nhớ SD, KHÔNG cắm thẻ SD).
+# -------------------------------------------------------------
+switch:
+  - platform: gpio
+    pin: GPIO12
+    id: motor_left_fwd
+    name: "Left Motor Forward"
+  - platform: gpio
+    pin: GPIO13
+    id: motor_left_rev
+    name: "Left Motor Reverse"
+  - platform: gpio
+    pin: GPIO14
+    id: motor_right_fwd
+    name: "Right Motor Forward"
+  - platform: gpio
+    pin: GPIO15
+    id: motor_right_rev
+    name: "Right Motor Reverse"
+
+# -------------------------------------------------------------
+# CÁNH TAY ROBOT (Arm) - Khai báo Servo (Tùy chọn)
+# Sử dụng PWM (ledc) để điều khiển Servo xoay ngang (Base)
+# -------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO2  # Chân điều khiển Servo Base
+    id: pwm_base
+    frequency: 50Hz
+servo:
+  - id: servo_base
+    output: pwm_base
+    min_level: 2.5%
+    max_level: 12.5%
+
+# -------------------------------------------------------------
+# SCRIPT ĐIỀU KHIỂN (Được gọi từ myiris_control.h)
+# Thay đổi logic đi thẳng, rẽ trái, rẽ phải tại đây.
+# -------------------------------------------------------------
+script:
+  - id: script_forward
+    then:
+      - switch.turn_on: motor_left_fwd
+      - switch.turn_off: motor_left_rev
+      - switch.turn_on: motor_right_fwd
+      - switch.turn_off: motor_right_rev
+
+  - id: script_backward
+    then:
+      - switch.turn_off: motor_left_fwd
+      - switch.turn_on: motor_left_rev
+      - switch.turn_off: motor_right_fwd
+      - switch.turn_on: motor_right_rev
+
+  - id: script_left
+    then:
+      - switch.turn_off: motor_left_fwd
+      - switch.turn_on: motor_left_rev
+      - switch.turn_on: motor_right_fwd
+      - switch.turn_off: motor_right_rev
+
+  - id: script_right
+    then:
+      - switch.turn_on: motor_left_fwd
+      - switch.turn_off: motor_left_rev
+      - switch.turn_off: motor_right_fwd
+      - switch.turn_on: motor_right_rev
+
+  - id: script_stop
+    then:
+      - switch.turn_off: motor_left_fwd
+      - switch.turn_off: motor_left_rev
+      - switch.turn_off: motor_right_fwd
+      - switch.turn_off: motor_right_rev
+
+# Nhúng Custom Component C++ vào hệ thống
+custom_component:
+  - lambda: |-
+      auto myiris_control = new MyIrisControl();
+      return {myiris_control};

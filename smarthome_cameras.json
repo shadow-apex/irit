@@ -1,0 +1,24 @@
+{
+  "cameras": {
+    "esphome_cam_phong_khach": {
+      "name": "Camera Phòng Khách (ESPHome)",
+      "camera_url": "http://192.168.1.60:8080/",
+      "protocol": "http",
+      "stream": true,
+      "_note": "FEAT-SH-CAM-ESPHOME-01: sinh ra từ setupsmarthome/myiris_smarthome_camera.yaml (esp32_camera_web_server, port 8080 mode: stream). Đổi 192.168.1.60 thành IP thật của board sau khi flash — xem log ESPHome lúc boot hoặc Serial Monitor. 'stream: true' đặt tường minh vì URL này KHÔNG khớp quy ước đoán tự động (':81' hay '/stream') mà RobotCameras.tsx dùng cho robots.json — cổng stream của ESPHome phục vụ MJPEG ngay ở path gốc '/'."
+    },
+    "esphome_cam_cua_truoc_snapshot": {
+      "name": "Camera Cửa Trước (ESPHome, snapshot)",
+      "camera_url": "http://192.168.1.61:8081/",
+      "protocol": "http",
+      "stream": false,
+      "_note": "Cùng file YAML esphome ở trên nhưng dùng cổng snapshot (mode: snapshot, port 8081) thay vì stream liên tục — nhẹ hơn nếu chỉ cần xem định kỳ, không cần mượt. 'stream: false' tường minh để UI remount + phá cache mỗi 3s như 1 snapshot bình thường."
+    },
+    "cam_esp32_generic": {
+      "name": "Camera IP giá rẻ (ESP32-CAM chuẩn / non-ESPHome)",
+      "camera_url": "http://192.168.1.50:81/stream",
+      "protocol": "http",
+      "_note": "Ví dụ tương thích ngược cho ai KHÔNG dùng ESPHome (VD sketch Arduino thuần như setuprobot/esp32_cam_iris) — không cần field 'stream', UI tự đoán qua URL (':81/stream') giống hệt robots.json."
+    }
+  }
+}
