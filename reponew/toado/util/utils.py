@@ -316,11 +316,7 @@ def remove_overlap_new(boxes, iou_threshold, ocr_bbox=None):
                     else:
                         filtered_boxes.append({'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': None, 'source':'box_yolo_content_yolo'})
             else:
-<<<<<<< HEAD
                 filtered_boxes.append(box1_elem)
-=======
-                filtered_boxes.append(box1)
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
     return filtered_boxes # torch.tensor(filtered_boxes)
 
 

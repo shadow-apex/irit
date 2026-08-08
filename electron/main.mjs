@@ -112,10 +112,7 @@ import {
   sendContextSupplement,
   sendPhoneCommand,
 } from "./main/po-questions.mjs";
-<<<<<<< HEAD
 import { initMusicWidget, stopMusicWidget } from "./main/music-widget.mjs";
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -642,11 +639,8 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-<<<<<<< HEAD
 
   initMusicWidget();
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
@@ -662,10 +656,7 @@ app.on("before-quit", async () => {
   // exit while that teardown is still in flight — leaving the agent alive
   // and causing "tunnel already exists" on the next launch.
   await stopCompanionServer();
-<<<<<<< HEAD
   stopMusicWidget();
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
   // BUG-SIDECAR-01 FIX: meeting_recorder.py (Alt+M) and live_transcriber.py
   // (Alt+T) were never touched here. Nếu người dùng đóng app trong lúc đang
   // ghi âm/nhắc bài, hai sidecar Python này (và handle mic của chúng) tiếp

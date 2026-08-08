@@ -10,13 +10,10 @@ const electronCli = path.join(root, "node_modules", "electron", "cli.js");
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 
-<<<<<<< HEAD
 // Skip elevation in dev mode so the UAC prompt doesn't cause Electron to exit 
 // and accidentally kill the Vite and Omni servers via `concurrently -k`.
 env.IRIS_SKIP_ELEVATE = "1";
 
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 if (process.argv.includes("--prod")) {
   env.IRIS_START_PROD = "1";
 }

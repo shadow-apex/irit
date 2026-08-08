@@ -1,10 +1,5 @@
 import { useEffect, useRef } from "react";
-<<<<<<< HEAD
 import type { ReactorState } from "../types";
-=======
-
-type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 type Palette = {
   primary: string;
@@ -13,7 +8,6 @@ type Palette = {
   glow: string;
 };
 
-<<<<<<< HEAD
 /**
  * State palettes, tuned to the same family as the UI tokens so the orb and the
  * room around it read as one object. The mapping is semantic, matching the
@@ -50,16 +44,6 @@ export const ORB_ACCENT: Record<ReactorState, string> = {
  *  off the distance above this, so a dark orb throws no light at all. */
 const REST_ENERGY = 0.18;
 
-=======
-const PALETTES: Record<ReactorState, Palette> = {
-  idle: { primary: "120, 170, 150", secondary: "150, 185, 165", accent: "210, 225, 218", glow: "150, 205, 180" },
-  online: { primary: "18, 163, 148", secondary: "70, 200, 175", accent: "230, 255, 248", glow: "60, 195, 170" },
-  listening: { primary: "40, 205, 170", secondary: "18, 163, 148", accent: "236, 255, 250", glow: "70, 214, 185" },
-  speaking: { primary: "238, 122, 92", secondary: "255, 188, 108", accent: "255, 250, 230", glow: "255, 154, 104" },
-  working: { primary: "120, 180, 120", secondary: "40, 200, 170", accent: "252, 255, 230", glow: "130, 195, 150" },
-};
-
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 function drawArc(
   c: CanvasRenderingContext2D,
   x: number,
@@ -173,11 +157,7 @@ export default function ReactorCore({
       if (s === "working") return 0.88;
       if (s === "listening") return 0.72;
       if (s === "online") return 0.45;
-<<<<<<< HEAD
       return REST_ENERGY;
-=======
-      return 0.18;
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
     }
 
     function draw(time: number) {
@@ -207,7 +187,6 @@ export default function ReactorCore({
 
       c.clearRect(0, 0, width, height);
 
-<<<<<<< HEAD
       // Soft reactor halo — light thrown by a running reactor, so it must not
       // exist when the reactor is off. It used to carry a fixed alpha floor,
       // which left a wide glow disc (bigger than the drawn ring) sitting behind
@@ -226,27 +205,12 @@ export default function ReactorCore({
         c.arc(cx, cy, haloR, 0, Math.PI * 2);
         c.fill();
       }
-=======
-      // Soft reactor halo
-      const halo = c.createRadialGradient(cx, cy, 0, cx, cy, base * 0.95);
-      halo.addColorStop(0, `rgba(${palette.glow}, ${0.32 + energy * 0.24})`);
-      halo.addColorStop(0.34, `rgba(${palette.glow}, ${0.12 + energy * 0.08})`);
-      halo.addColorStop(1, "rgba(0,0,0,0)");
-      c.fillStyle = halo;
-      c.beginPath();
-      c.arc(cx, cy, base * 0.95, 0, Math.PI * 2);
-      c.fill();
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
       // Outer micro ticks (futuristic HUD radial scale)
       const tickCount = 144;
       for (let i = 0; i < tickCount; i++) {
-<<<<<<< HEAD
         // Quay chậm lại theo ý user
         const a = (i / tickCount) * Math.PI * 2 + t * 0.15;
-=======
-        const a = (i / tickCount) * Math.PI * 2;
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
         const major = i % 12 === 0;
         const medium = i % 6 === 0;
         const outer = unit * 0.93;
@@ -264,10 +228,7 @@ export default function ReactorCore({
       const segments = 28;
       const segR = unit * 0.78;
       for (let i = 0; i < segments; i++) {
-<<<<<<< HEAD
         // Trả lại tốc độ gốc cho vòng đứt đoạn
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
         const a = (i / segments) * Math.PI * 2 + t * 0.08;
         const len = Math.PI * 2 / segments * 0.56;
         const active = (i + Math.floor(t * 2)) % 7 === 0;

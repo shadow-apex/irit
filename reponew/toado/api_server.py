@@ -7,13 +7,8 @@ import base64
 from typing import Optional
 from dotenv import load_dotenv
 
-<<<<<<< HEAD
 # Tự động nạp biến môi trường từ file .env ở thư mục gốc (irit)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
-=======
-# Tự động nạp biến môi trường từ file .env ở thư mục gốc myiris
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
@@ -22,10 +17,7 @@ import uvicorn
 from PIL import Image
 import torch
 import google.generativeai as genai
-<<<<<<< HEAD
 import anthropic
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
 from util.utils import check_ocr_box, get_yolo_model, get_som_labeled_img
 
@@ -39,7 +31,6 @@ print("YOLO Model Loaded!")
 # Use a currently-supported, cost-efficient Flash model instead. Check
 # https://ai.google.dev/gemini-api/docs/deprecations for the latest status if
 # this ever starts failing again.
-<<<<<<< HEAD
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 GEMINI_REQUEST_TIMEOUT_S = 15
 
@@ -89,11 +80,6 @@ if _GEMINI_KEY_FALLBACK_USED:
         "tính năng không tranh nhau rate limit."
     )
 
-=======
-GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-flash-lite")
-GEMINI_REQUEST_TIMEOUT_S = 15
-
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 try:
     import pyautogui
     pyautogui.FAILSAFE = True
@@ -201,7 +187,6 @@ async def type_keyboard(req: TypeRequest):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-<<<<<<< HEAD
 def _build_vision_prompt(prompt: str) -> str:
     return f"""
     You are an AI assistant helping to control a computer.
@@ -250,8 +235,6 @@ def _ask_gemini_for_target(labeled_pil: Image.Image, vision_prompt_text: str) ->
     return (response.text or "").strip()
 
 
-=======
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 @app.post("/parse")
 async def parse_image(file: UploadFile = File(...), prompt: str = Form(None)):
     # Everything below is wrapped in one try/except so any failure (OCR, YOLO,
@@ -307,18 +290,12 @@ async def parse_image(file: UploadFile = File(...), prompt: str = Form(None)):
             imgsz=imgsz,
         )
 
-<<<<<<< HEAD
         if not prompt or not prompt.strip() or (anthropic_client is None and not GEMINI_VISION_API_KEY):
-=======
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not prompt or not prompt.strip() or not api_key:
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
             return JSONResponse({
                 "labeled_image_base64": dino_labled_img,
                 "coordinates": label_coordinates,
             })
 
-<<<<<<< HEAD
         # 3. If prompt is provided, ask an AI model which box to click.
         # ƯU TIÊN CLAUDE trước — chỉ dùng Gemini khi không có Claude, hoặc
         # khi Claude vừa gọi bị lỗi (rate limit/timeout/...).
@@ -398,77 +375,6 @@ async def parse_image(file: UploadFile = File(...), prompt: str = Form(None)):
             "error": "Target ID not found in coordinates",
             "coordinates": label_coordinates,
         })
-=======
-        # 3. If prompt is provided, ask Gemini which box to click
-        try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-
-            labeled_pil = Image.open(io.BytesIO(base64.b64decode(dino_labled_img)))
-
-            gemini_prompt = f"""
-            You are an AI assistant helping to control a computer.
-            Here is a screenshot of the user's screen with numbered bounding boxes.
-            The user's request is: "{prompt}"
-
-            Based on the image, which box number (ID) should be clicked to fulfill this request?
-            Return ONLY the box ID (a number) and nothing else. If you cannot find it, return -1.
-            """
-
-            response = model.generate_content(
-                [gemini_prompt, labeled_pil],
-                request_options={"timeout": GEMINI_REQUEST_TIMEOUT_S},
-            )
-            target_id_raw = (response.text or "").strip()
-
-            # Gemini can still ignore the "return only the number" instruction
-            # (e.g. "Box 5", "5.", "ID: 5") — extract the first integer robustly
-            # instead of doing a brittle exact dict lookup on the raw string.
-            match = re.search(r'-?\d+', target_id_raw)
-            if not match:
-                return JSONResponse({
-                    "error": f"Gemini did not return a valid box ID (got: {target_id_raw!r})",
-                    "coordinates": label_coordinates,
-                })
-            clean_id = match.group(0)
-
-            if clean_id == "-1":
-                return JSONResponse({
-                    "target_id": clean_id,
-                    "error": "Gemini could not find a matching element for this request",
-                    "coordinates": label_coordinates,
-                })
-
-            # label_coordinates keys may be stored as either str or int
-            # depending on how get_som_labeled_img built the dict — try both
-            # rather than silently failing on a type mismatch.
-            target_coords = label_coordinates.get(clean_id)
-            if target_coords is None:
-                target_coords = label_coordinates.get(int(clean_id))
-
-            if target_coords:
-                # target_coords is [xmin_ratio, ymin_ratio, w_ratio, h_ratio] (xywh)
-                x, y, w, h = target_coords
-                center_x = x + (w / 2)
-                center_y = y + (h / 2)
-
-                return JSONResponse({
-                    "target_id": clean_id,
-                    "target_center": [center_x, center_y],
-                    "coordinates": label_coordinates,
-                })
-
-            return JSONResponse({
-                "target_id": clean_id,
-                "error": "Target ID not found in coordinates",
-                "coordinates": label_coordinates,
-            })
-        except Exception as e:
-            return JSONResponse({
-                "error": f"Gemini request failed: {e}",
-                "coordinates": label_coordinates,
-            })
->>>>>>> c2102e8c6ceadd879791aa1f668f45800624ca68
 
     except Exception as e:
         # Catches OCR/YOLO/image-decoding/etc. failures that aren't already

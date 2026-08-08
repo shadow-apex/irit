@@ -63,6 +63,15 @@ import {
   deleteSmarthomeRuleTool,
   setSmarthomeRuleEnabledTool,
 } from "./smarthome-tools.mjs";
+import {
+  takeAiScreenshotTool,
+  readClipboardTool,
+  writeClipboardTool,
+  moveWindowMagicTool,
+  sendDesktopNotificationTool,
+  systemControlTool,
+  systemMonitorTool,
+} from "./local-tools.mjs";
 
 export async function executeClaudeTool(name, args = {}) {
   switch (name) {
@@ -186,6 +195,20 @@ export async function executeClaudeTool(name, args = {}) {
       return await restoreAppTool(args);
     case "write_note":
       return await writeNoteTool(args);
+    case "take_ai_screenshot":
+      return await takeAiScreenshotTool();
+    case "read_clipboard":
+      return await readClipboardTool();
+    case "write_clipboard":
+      return await writeClipboardTool(args);
+    case "move_window_magic":
+      return await moveWindowMagicTool(args);
+    case "send_desktop_notification":
+      return await sendDesktopNotificationTool(args);
+    case "system_control":
+      return await systemControlTool(args);
+    case "system_monitor":
+      return await systemMonitorTool();
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

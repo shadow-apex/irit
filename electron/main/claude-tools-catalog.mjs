@@ -114,6 +114,81 @@ export function buildClaudeTools() {
             required: ["text"]
           }
         },
+        // ---------------------------------------------------------------
+        // Local "/tools" scripts — ported from the Claude-Code skills under
+        // .agents/skills/ (ai-vision, clipboard, window-magic, notify,
+        // sys-control, sys-monitor) so Iris herself can run them directly
+        // over WebRTC, without waiting for a submit_claude_task round-trip.
+        // ---------------------------------------------------------------
+        {
+          name: "take_ai_screenshot",
+          description: "Instantly capture a single screenshot of the user's screen (via tools/ai_vision.py) and look at it right now. Use this for one-off questions like 'what am I looking at?', 'what error is this?', 'look at my screen'. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "read_clipboard",
+          description: "Read whatever text is currently on the user's clipboard (via tools/clipboard_manager.py). Use when the user asks 'what did I just copy?' or 'read my clipboard'.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "write_clipboard",
+          description: "Copy text onto the user's clipboard so they can paste it elsewhere (via tools/clipboard_manager.py). Use when the user asks you to copy a password, code snippet, or any text for them.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The exact text to copy to the clipboard." },
+            },
+            required: ["text"],
+          },
+        },
+        {
+          name: "move_window_magic",
+          description: "Move (or 'magic move') a window on the user's screen using tools/magic_move.py. Use when the user asks you to move, animate, or 'do window magic' with a window.",
+          parameters: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string",
+                description: "'active' — the user will click the window themselves within 5 seconds (use when no window name is given); 'name' — move the window whose title contains the given name; 'demo' — play a short demo animation (optionally on the named window, otherwise File Explorer).",
+              },
+              name: { type: "string", description: "Window title (or part of it) to target. Required for mode 'name'; optional for 'demo'." },
+              x: { type: "integer", description: "Target X coordinate on screen. Defaults to 0." },
+              y: { type: "integer", description: "Target Y coordinate on screen. Defaults to 0." },
+            },
+            required: ["mode"],
+          },
+        },
+        {
+          name: "send_desktop_notification",
+          description: "Pop up a native Windows toast notification on the user's screen (via tools/notifier.py). Use when the user asks to be reminded of something or wants an on-screen alert.",
+          parameters: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "Notification title." },
+              message: { type: "string", description: "Notification body text." },
+            },
+            required: ["title", "message"],
+          },
+        },
+        {
+          name: "system_control",
+          description: "Control the user's hardware/OS settings via tools/sys_control.py: volume, screen brightness, Wi-Fi, Bluetooth, or camera. Toggling wifi/bluetooth/camera triggers a Windows UAC prompt — tell the user to click 'Yes' when the tool result says so. Pass only the field(s) relevant to the request.",
+          parameters: {
+            type: "object",
+            properties: {
+              volume: { type: "string", description: "One of: mute, up, down." },
+              brightness: { type: "integer", description: "Screen brightness percentage, 0-100." },
+              wifi: { type: "string", description: "One of: on, off." },
+              bluetooth: { type: "string", description: "One of: on, off." },
+              camera: { type: "string", description: "One of: on, off." },
+            },
+          },
+        },
+        {
+          name: "system_monitor",
+          description: "Check the user's system health via tools/sys_monitor.py: CPU %, RAM usage, disk usage, and battery. Use when the user asks about system health, performance, or 'is my PC okay'.",
+          parameters: { type: "object", properties: {} },
+        },
         {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
