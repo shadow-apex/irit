@@ -1,0 +1,11 @@
+# Dependencies cho các script trong thư mục /tools
+# Cài đặt bằng: pip install -r tools/requirements.txt
+#
+# Lưu ý: các script này chỉ chạy được trên Windows (dùng ctypes.windll,
+# WMI, PowerShell...).
+
+pyautogui       # ai_vision.py (chụp màn hình), api_server.py dùng chung
+pyperclip       # clipboard_manager.py, api_server.py (/type endpoint)
+psutil          # sys_monitor.py (CPU/RAM/Disk/Battery)
+pygetwindow     # magic_move.py (tìm & di chuyển cửa sổ)
+plyer           # notifier.py (thông báo hệ thống)

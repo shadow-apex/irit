@@ -15,7 +15,8 @@ const N_EMB = 16; // classifier input length
 const PREDICT_INTERVAL_MS = 200;
 // Balanced default (model's eval-optimal): high enough to reject random words,
 // low enough for a clear "Hey Iris". 0.10 caused false wakes; 0.18 missed too much.
-const DEFAULT_THRESHOLD = 0.15;
+// *Đã hạ xuống 0.05 theo yêu cầu để nhạy hơn với giọng nói người Việt*
+const DEFAULT_THRESHOLD = 0.05;
 const COOLDOWN_MS = 2500;
 
 let ortConfigured = false;
