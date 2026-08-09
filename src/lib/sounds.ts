@@ -11,7 +11,7 @@ function audioCtx(): AudioContext {
   return ctx;
 }
 
-const MASTER_GAIN = 0.8; // Tăng âm lượng lên gần tối đa để dễ nghe hơn
+const MASTER_GAIN = 0.22;
 
 type ToneSpec = {
   freq: number;
@@ -90,11 +90,11 @@ function taskDone() {
   ]);
 }
 
-/** Tiếng tít tít lớn cảnh báo lỗi rõ ràng. */
+/** Gentle minor fall — something didn't work out. */
 function taskFailed() {
   play([
-    { freq: 800, dur: 0.15, peak: 0.8 }, // Bíp 1 to, chói
-    { freq: 600, at: 0.2, dur: 0.4, peak: 0.8 }, // Bíp 2 trầm dài báo lỗi
+    { freq: 440, dur: 0.2, peak: 0.3 }, // A4
+    { freq: 311.1, at: 0.13, dur: 0.4, peak: 0.32 }, // Eb4
   ]);
 }
 
