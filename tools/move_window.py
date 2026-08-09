@@ -1,111 +1,111 @@
-import subprocess
-import argparse
+"""
+tools/move_window.py
+
+Di chuyen / doi kich thuoc cua so ung dung theo tieu de (title chua 1 phan
+ten). LUU Y: tool nay hien KHONG duoc wire vao electron/main/local-tools.mjs
+(magic_move.py duoc dung thay the, xem ghi chu trong local-tools.mjs) —
+giu lai de dung doc lap/CLI hoac cho muc dich tuong lai.
+
+FIX BAO MAT (2026): ban truoc day nhung 'window_title' TRUC TIEP vao 1
+chuoi PowerShell/C# roi chay qua subprocess — neu title chua dau nhay don
+(') se "thoat" khoi chuoi PowerShell va CHO PHEP CHAY LENH TUY Y (command
+injection). Ban nay bo hoan toan PowerShell/C#, dung thang ctypes goi
+user32.dll (SetWindowPos/EnumWindows) tu Python — vua an toan (khong con
+chuoi lenh nao de "thoat" ra duoc) vua nhanh hon nhieu (khong ton thoi
+gian khoi dong powershell.exe + biên dich C# moi lan goi).
+
+Vi du dung:
+    python tools/move_window.py "notepad" 100 100
+    python tools/move_window.py "notepad" 100 100 --width 800 --height 600
+"""
 import sys
 import io
+import json
+import argparse
+import ctypes
+from ctypes import wintypes
 
-# Đảm bảo in tiếng Việt không bị lỗi trên Windows console
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
-def move_window_with_powershell(window_title, x, y, width=None, height=None):
-    """
-    Sử dụng PowerShell để tìm và di chuyển cửa sổ ứng dụng trên Windows.
-    Hỗ trợ tìm kiếm theo một phần tên cửa sổ (không phân biệt hoa thường).
-    """
-    
-    # Mã C# để nhúng vào PowerShell nhằm tương tác với Windows API
-    csharp_code = """
-    using System;
-    using System.Runtime.InteropServices;
-    using System.Diagnostics;
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
-    public class WindowHelper {
-        [DllImport("user32.dll")]
-        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-        
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
-        }
+class RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-        public static void MoveWindow(string titleContains, int x, int y, int width, int height) {
-            IntPtr hWnd = IntPtr.Zero;
-            Process[] processes = Process.GetProcesses();
-            foreach (Process p in processes) {
-                if (!string.IsNullOrEmpty(p.MainWindowTitle) && p.MainWindowTitle.ToLower().Contains(titleContains.ToLower())) {
-                    hWnd = p.MainWindowHandle;
-                    Console.WriteLine("Đã tìm thấy cửa sổ: " + p.MainWindowTitle);
-                    break;
-                } else if (p.ProcessName.ToLower().Contains(titleContains.ToLower()) && p.MainWindowHandle != IntPtr.Zero) {
-                    hWnd = p.MainWindowHandle;
-                    Console.WriteLine("Đã tìm thấy cửa sổ thông qua tiến trình: " + p.ProcessName);
-                    break;
-                }
-            }
 
-            if (hWnd != IntPtr.Zero) {
-                // Nếu width hoặc height = 0, giữ nguyên kích thước cũ của cửa sổ
-                if (width == 0 || height == 0) {
-                    RECT rect;
-                    if (GetWindowRect(hWnd, out rect)) {
-                        if (width == 0) width = rect.Right - rect.Left;
-                        if (height == 0) height = rect.Bottom - rect.Top;
-                    }
-                }
-                
-                // 0x0040 = SWP_SHOWWINDOW (Hiển thị cửa sổ)
-                SetWindowPos(hWnd, IntPtr.Zero, x, y, width, height, 0x0040);
-                Console.WriteLine("Đã di chuyển thành công!");
-            } else {
-                Console.WriteLine("Không tìm thấy cửa sổ nào chứa từ khóa: " + titleContains);
-            }
-        }
+def _find_window(title_contains):
+    """Duyet cua so top-level dang hien thi, tra ve hwnd dau tien co tieu de
+    chua 'title_contains' (khong phan biet hoa/thuong), hoac None."""
+    user32 = ctypes.windll.user32
+    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    found = [None]
+    found_title = [None]
+    needle = title_contains.lower()
+
+    def _callback(hwnd, lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buff = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buff, length + 1)
+        if needle in buff.value.lower():
+            found[0] = hwnd
+            found_title[0] = buff.value
+            return False  # dung enum, da tim thay
+        return True
+
+    user32.EnumWindows(EnumWindowsProc(_callback), 0)
+    return found[0], found_title[0]
+
+
+def move_window(title, x, y, width=None, height=None):
+    hwnd, matched_title = _find_window(title)
+    if not hwnd:
+        return {"success": False, "error": f"Khong tim thay cua so nao chua tieu de '{title}'."}
+
+    user32 = ctypes.windll.user32
+    if width is None or height is None:
+        rect = RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        if width is None:
+            width = rect.right - rect.left
+        if height is None:
+            height = rect.bottom - rect.top
+
+    SWP_SHOWWINDOW = 0x0040
+    ok = user32.SetWindowPos(hwnd, None, x, y, width, height, SWP_SHOWWINDOW)
+    if not ok:
+        return {"success": False, "error": f"SetWindowPos() that bai cho cua so '{matched_title}'."}
+    return {
+        "success": True,
+        "message": f"Da di chuyen '{matched_title}' den ({x}, {y}), kich thuoc {width}x{height}.",
+        "title": matched_title,
     }
-    """
-    
-    # Kích thước mặc định là 0 (giữ nguyên) nếu không truyền vào
-    w = width if width is not None else 0
-    h = height if height is not None else 0
-    
-    # Tập lệnh PowerShell
-    ps_script = f"""
-    Add-Type -TypeDefinition @"
-    {csharp_code}
-"@
-    [WindowHelper]::MoveWindow('{window_title}', {x}, {y}, {w}, {h})
-    """
-    
-    print(f"Đang gọi PowerShell để di chuyển '{window_title}' đến ({x}, {y})...")
-    
-    # Chạy lệnh PowerShell
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps_script], 
-        capture_output=True, 
-        text=True,
-        encoding="utf-8",
-        errors="replace"
-    )
-    
-    # In kết quả
-    if result.stdout:
-        print(result.stdout.strip())
-    if result.stderr:
-        print("Lỗi PowerShell:", result.stderr.strip())
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Di chuyển và thay đổi kích thước cửa sổ ứng dụng trên Windows")
-    parser.add_argument("title", help="Tiêu đề (hoặc một phần tiêu đề) của cửa sổ ứng dụng")
-    parser.add_argument("x", type=int, help="Tọa độ X trên màn hình")
-    parser.add_argument("y", type=int, help="Tọa độ Y trên màn hình")
-    parser.add_argument("--width", type=int, help="Chiều rộng mới (tùy chọn)", default=None)
-    parser.add_argument("--height", type=int, help="Chiều cao mới (tùy chọn)", default=None)
-    
+    parser = argparse.ArgumentParser(description="Di chuyen va thay doi kich thuoc cua so ung dung tren Windows")
+    parser.add_argument("title", help="Tieu de (hoac mot phan tieu de) cua cua so ung dung")
+    parser.add_argument("x", type=int, help="Toa do X tren man hinh")
+    parser.add_argument("y", type=int, help="Toa do Y tren man hinh")
+    parser.add_argument("--width", type=int, help="Chieu rong moi (tuy chon)", default=None)
+    parser.add_argument("--height", type=int, help="Chieu cao moi (tuy chon)", default=None)
+
     args = parser.parse_args()
-    move_window_with_powershell(args.title, args.x, args.y, args.width, args.height)
+    try:
+        result = move_window(args.title, args.x, args.y, args.width, args.height)
+    except Exception as e:
+        result = {"success": False, "error": str(e)}
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if result.get("success") else 1)

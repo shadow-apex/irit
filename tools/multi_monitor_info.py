@@ -3,9 +3,14 @@ tools/multi_monitor_info.py
 
 Liet ke toan bo man hinh (monitor) dang gan vao may: vi tri, kich thuoc,
 man hinh nao la man hinh chinh (primary). Dung Windows API
-EnumDisplayMonitors qua ctypes (khong can cai them thu vien nao) — giup
-cac tool toa do khac (mouse_control.py, magic_move.py) biet chinh xac
-pham vi toa do tren tung man hinh khi may co nhieu man hinh.
+EnumDisplayMonitors qua ctypes — giup cac tool toa do khac (mouse_control.py,
+magic_move.py) biet chinh xac pham vi toa do tren tung man hinh khi may co
+nhieu man hinh.
+
+FIX (2026):
+  - Them try/except o __main__ (truoc day khong co).
+  - Them SetProcessDpiAwareness() de toa do tra ve dong bo voi cac tool
+    dung pyautogui (xem giai thich chi tiet trong active_window_info.py).
 
 Vi du dung:
     python tools/multi_monitor_info.py
@@ -18,6 +23,14 @@ from ctypes import wintypes
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 class RECT(ctypes.Structure):
@@ -71,4 +84,9 @@ def get_monitors():
 
 
 if __name__ == "__main__":
-    print(json.dumps(get_monitors()))
+    try:
+        result = get_monitors()
+    except Exception as e:
+        result = {"success": False, "error": str(e)}
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if result.get("success") else 1)

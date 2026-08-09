@@ -36,6 +36,11 @@ def _run(args):
 
 
 def list_networks():
+    # LUU Y: cac nhan "Signal"/"Authentication" duoi day la nhan TIENG ANH
+    # mac dinh cua netsh. Neu Windows dang chay o ngon ngu hien thi khac
+    # tieng Anh (vd tieng Viet), netsh co the tra ve cac nhan da dich, khien
+    # 2 truong nay tra ve None (khong crash, chi thieu du lieu — "ssid" van
+    # luon doc dung vi la thuat ngu ky thuat khong bi dich).
     result = _run(["wlan", "show", "networks", "mode=bssid"])
     if result.returncode != 0:
         return {"success": False, "error": result.stderr.strip() or "Khong the quet mang Wi-Fi. Kiem tra adapter Wi-Fi da bat chua."}
@@ -70,8 +75,14 @@ def list_profiles():
 
 def connect(ssid):
     result = _run(["wlan", "connect", f"name={ssid}"])
-    if result.returncode == 0 and "completed successfully" in result.stdout.lower():
-        return {"success": True, "message": f"Da ket noi toi '{ssid}'."}
+    # FIX: kiem tra chi bang chuoi tieng Anh co dinh "completed successfully"
+    # la SAI tren Windows khong dung ngon ngu tieng Anh (vd Windows tieng
+    # Viet, netsh se tra ve thong bao da dich, khong chua chuoi nay) —
+    # ket qua la connect() LUON bao that bai du da ket noi thanh cong that.
+    # Uu tien dung returncode (khong phu thuoc ngon ngu he thong); chi coi
+    # la loi khi returncode != 0.
+    if result.returncode == 0:
+        return {"success": True, "message": f"Da gui lenh ket noi toi '{ssid}'."}
     return {
         "success": False,
         "error": (result.stdout.strip() or result.stderr.strip() or f"Khong the ket noi toi '{ssid}'.")
@@ -111,13 +122,20 @@ if __name__ == "__main__":
     sub.add_parser("status", help="Xem trang thai ket noi Wi-Fi hien tai")
 
     args = parser.parse_args()
-    if args.command == "list":
-        print(json.dumps(list_networks(), ensure_ascii=False))
-    elif args.command == "profiles":
-        print(json.dumps(list_profiles(), ensure_ascii=False))
-    elif args.command == "connect":
-        print(json.dumps(connect(args.ssid), ensure_ascii=False))
-    elif args.command == "disconnect":
-        print(json.dumps(disconnect(), ensure_ascii=False))
-    elif args.command == "status":
-        print(json.dumps(status(), ensure_ascii=False))
+    try:
+        if args.command == "list":
+            out = list_networks()
+        elif args.command == "profiles":
+            out = list_profiles()
+        elif args.command == "connect":
+            out = connect(args.ssid)
+        elif args.command == "disconnect":
+            out = disconnect()
+        elif args.command == "status":
+            out = status()
+        else:
+            out = {"success": False, "error": f"Unknown command '{args.command}'."}
+    except Exception as e:
+        out = {"success": False, "error": str(e)}
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0 if out.get("success") else 1)

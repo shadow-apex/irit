@@ -8,6 +8,13 @@ Bo sung cho system_actions.py (chi dong 1 app theo ten cua so, khong cho
 xem truoc danh sach dang chay/tai nguyen) — tool nay them buoc "xem truoc
 roi moi quyet dinh kill".
 
+FIX (2026):
+  - subprocess.run(["taskkill", ...], text=True) truoc day KHONG chi dinh
+    encoding -> thong bao loi cua taskkill co dau tieng Viet co the gay
+    UnicodeDecodeError. Nay dung encoding="utf-8", errors="replace".
+  - Them try/except o __main__ (truoc day khong co) de khong crash "cam"
+    neu psutil.process_iter() nem loi bat ngo.
+
 Vi du dung:
     python tools/process_manager.py list                    # top 10 theo RAM
     python tools/process_manager.py list --sort cpu --top 5
@@ -62,7 +69,10 @@ def list_processes(sort_by="ram", top=10):
 def kill_process(name):
     if not name.lower().endswith(".exe"):
         name += ".exe"
-    result = subprocess.run(["taskkill", "/IM", name, "/F"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["taskkill", "/IM", name, "/F"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
     if result.returncode == 0:
         return {"success": True, "message": f"Da ket thuc {name}."}
     return {"success": False, "error": result.stderr.strip() or f"Khong the ket thuc {name} (co the tien trinh khong ton tai)."}
@@ -80,7 +90,10 @@ if __name__ == "__main__":
     p_kill.add_argument("name", type=str, help="Ten file .exe, vd chrome.exe")
 
     args = parser.parse_args()
-    if args.command == "list":
-        print(json.dumps(list_processes(args.sort, args.top), ensure_ascii=False))
-    elif args.command == "kill":
-        print(json.dumps(kill_process(args.name), ensure_ascii=False))
+    try:
+        out = list_processes(args.sort, args.top) if args.command == "list" else kill_process(args.name)
+    except Exception as e:
+        out = {"success": False, "error": str(e)}
+
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0 if out.get("success") else 1)

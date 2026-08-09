@@ -86,6 +86,8 @@ import {
   focusAssistTool,
   lockScreenTool,
   viewImageTool,
+  viewVideoTool,
+  recordScreenTool,
 } from "./local-tools.mjs";
 
 export async function executeClaudeTool(name, args = {}) {
@@ -254,6 +256,10 @@ export async function executeClaudeTool(name, args = {}) {
       return await lockScreenTool();
     case "view_image":
       return await viewImageTool(args);
+    case "view_video":
+      return await viewVideoTool(args);
+    case "record_screen":
+      return await recordScreenTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

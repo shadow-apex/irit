@@ -344,87 +344,109 @@ export async function openUrlOrApp(args) {
   }
 }
 
+// -----------------------------------------------------------------------
+// tools/system_actions.py bridge
+//
+// FIX (was a silent-failure bug): the previous implementation spawned
+// system_actions.py with `detached: true, stdio: "ignore"` and returned
+// "success" the instant the process was launched — the script's real
+// stdout/stderr/exit-code were thrown away, so a failed close/minimize/
+// restore/write (e.g. "No visible window found", access denied, taskkill
+// error) was ALWAYS reported back to the AI/user as a success. These four
+// actions are fast (a taskkill call or a EnumWindows pass), so we now
+// await the process with a short timeout and surface its real outcome —
+// same pattern as runPythonTool() in local-tools.mjs.
+// -----------------------------------------------------------------------
+function _runSystemActionPy(action, args, { timeoutMs = 8000 } = {}) {
+  const pyPath = join(process.cwd(), "tools", "system_actions.py");
+  const pythonBin = process.env.IRIS_PYTHON_BIN || "python";
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let child;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child?.kill(); } catch { /* ignore */ }
+      resolve({ ok: false, error: `Timed out after ${timeoutMs}ms`, stdout: stdout.trim(), stderr: stderr.trim() });
+    }, timeoutMs);
+
+    try {
+      child = spawn(pythonBin, [pyPath, action, ...args], { shell: false, windowsHide: action !== "note" });
+    } catch (err) {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.message, stdout: "", stderr: "" });
+      return;
+    }
+
+    child.stdout.on("data", (d) => { stdout += d.toString("utf-8"); });
+    child.stderr.on("data", (d) => { stderr += d.toString("utf-8"); });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.message, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+  });
+}
+
+// Parses system_actions.py's one-line JSON stdout into the { status, ... }
+// shape every tool here returns; falls back gracefully if it ever printed
+// plain text (kept during the Python-side migration to JSON output).
+function _resultFromSystemAction(result, failMsg) {
+  if (!result.ok) {
+    return { status: "error", error: result.error || result.stderr || result.stdout || failMsg };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return { status: parsed.success ? "success" : "error", ...parsed };
+  } catch {
+    return { status: "success", message: result.stdout || failMsg };
+  }
+}
+
 export async function closeAppTool(args) {
   const { target } = args;
   if (!target) return { status: "error", error: "Missing 'target' executable name." };
   const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(process.cwd(), "tools", "system_actions.py");
-    const child = spawn("python", [pyPath, "close", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to close application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to close app: ${err.message}` };
-  }
+  const result = await _runSystemActionPy("close", [basename]);
+  return _resultFromSystemAction(result, `Failed to close app: ${basename}`);
 }
 
 export async function minimizeAppTool(args) {
   const { target } = args;
   if (!target) return { status: "error", error: "Missing 'target' executable name." };
   const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(process.cwd(), "tools", "system_actions.py");
-    const child = spawn("python", [pyPath, "minimize", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to minimize application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to minimize app: ${err.message}` };
-  }
+  const result = await _runSystemActionPy("minimize", [basename]);
+  return _resultFromSystemAction(result, `Failed to minimize app: ${basename}`);
 }
 
 export async function restoreAppTool(args) {
   const { target } = args;
   if (!target) return { status: "error", error: "Missing 'target' executable name." };
   const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(process.cwd(), "tools", "system_actions.py");
-    const child = spawn("python", [pyPath, "restore", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to restore/maximize application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to restore app: ${err.message}` };
-  }
+  const result = await _runSystemActionPy("restore", [basename]);
+  return _resultFromSystemAction(result, `Failed to restore app: ${basename}`);
 }
 
 export async function writeNoteTool(args) {
   const { text, is_new } = args;
   if (!text) return { status: "error", error: "Missing 'text' argument." };
-  
-  try {
-    const pyPath = join(process.cwd(), "tools", "system_actions.py");
-    const cmdArgs = [pyPath, "note", text];
-    if (is_new) cmdArgs.push("--new");
-    
-    // Do not use windowsHide: true here because we want Notepad to be visible to the user
-    const child = spawn("python", cmdArgs, {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to write note in Notepad with text starting: ${text.substring(0, 50)}` };
-  } catch (err) {
-    return { status: "error", error: `Failed to write note: ${err.message}` };
-  }
+  const cmdArgs = [text];
+  if (is_new) cmdArgs.push("--new");
+  // Notepad needs to actually appear on screen, and typing/rendering can be
+  // a little slower than the other actions, so give it more headroom.
+  const result = await _runSystemActionPy("note", cmdArgs, { timeoutMs: 12000 });
+  return _resultFromSystemAction(result, "Failed to write note.");
 }
 
 export function laneEventLogger(label) {

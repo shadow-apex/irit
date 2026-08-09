@@ -7,10 +7,17 @@ HWND/title + psutil (da co san trong requirements.txt) de tra ten file
 thuc thi tu PID.
 
 Day la tool CHI DOC — khong dieu khien man hinh, chuot, ban phim, khong
-chup anh, khong goi OmniParser hay bat ky server nao. Vi vay no KHONG
-xung dot voi OmniParser/computer-use hay cac vong lap vision (toggle_
-screen_vision...): khong tranh chap tai nguyen, khong lock, chi doc 3 Win32
-API cuc nhe roi tra ve ngay lap tuc.
+chup anh, khong goi OmniParser hay bat ky server nao.
+
+FIX (2026):
+  - Them try/except o __main__ (truoc day khong co) de khong crash "cam"
+    (khong in duoc JSON gi) neu bat ky loi Win32 nao xay ra.
+  - Them SetProcessDpiAwareness() — neu khong goi, GetWindowRect() tra ve
+    toa do theo he quy dieu ("virtualized") tren man hinh scale
+    (125%/150%...), LECH voi he toa do "vat ly" ma pyautogui dung (vd
+    trong mouse_control.py, tu dong DPI-aware khi import) — khien AI click
+    sai vi tri du da doc dung "rect" tu tool nay. Goi cang som cang tot,
+    truoc khi dung bat ky ham user32 nao.
 
 Vi du dung:
     python tools/active_window_info.py
@@ -23,6 +30,14 @@ from ctypes import wintypes
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 try:
     import psutil
@@ -75,4 +90,9 @@ def get_active_window_info():
 
 
 if __name__ == "__main__":
-    print(json.dumps(get_active_window_info(), ensure_ascii=False))
+    try:
+        result = get_active_window_info()
+    except Exception as e:
+        result = {"success": False, "error": str(e)}
+    print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if result.get("success") else 1)

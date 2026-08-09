@@ -8,6 +8,14 @@ Windows nen chay dung tren moi may, khong can tu do GUID:
   SCHEME_MIN      = Tiet kiem pin (Power saver)
   SCHEME_MAX      = Hieu nang cao (High performance)
 
+FIX (2026):
+  - subprocess.run(..., text=True) truoc day KHONG chi dinh encoding ->
+    dung codepage mac dinh cua console (thuong KHONG phai UTF-8 tren
+    Windows). Ten scheme powercfg tra ve co dau tieng Viet ("Cân bằng"...)
+    co the gay UnicodeDecodeError va crash script. Nay chi dinh ro
+    encoding="utf-8", errors="replace" de khong bao gio crash vi decode.
+  - Them try/except o __main__ (truoc day khong co).
+
 Vi du dung:
     python tools/power_plan.py get
     python tools/power_plan.py set balanced
@@ -30,8 +38,15 @@ ALIAS_MAP = {
 }
 
 
+def _run(args, timeout=10):
+    return subprocess.run(
+        args, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=timeout,
+    )
+
+
 def get_active_plan():
-    result = subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True)
+    result = _run(["powercfg", "/getactivescheme"])
     if result.returncode != 0:
         return {"success": False, "error": result.stderr.strip()}
     return {"success": True, "raw": result.stdout.strip()}
@@ -41,7 +56,7 @@ def set_plan(name):
     alias = ALIAS_MAP.get(name)
     if not alias:
         return {"success": False, "error": f"Che do khong hop le: {name}. Chon: balanced, saver, performance."}
-    result = subprocess.run(["powercfg", "/setactive", alias], capture_output=True, text=True)
+    result = _run(["powercfg", "/setactive", alias])
     if result.returncode == 0:
         return {"success": True, "message": f"Da chuyen sang che do '{name}'."}
     return {"success": False, "error": result.stderr.strip() or "Khong the doi che do nguon."}
@@ -55,7 +70,12 @@ if __name__ == "__main__":
     p_set.add_argument("name", choices=["balanced", "saver", "performance"])
     args = parser.parse_args()
 
-    if args.command == "get":
-        print(json.dumps(get_active_plan(), ensure_ascii=False))
-    else:
-        print(json.dumps(set_plan(args.name), ensure_ascii=False))
+    try:
+        out = get_active_plan() if args.command == "get" else set_plan(args.name)
+    except subprocess.TimeoutExpired:
+        out = {"success": False, "error": "Het thoi gian cho powercfg phan hoi."}
+    except Exception as e:
+        out = {"success": False, "error": str(e)}
+
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0 if out.get("success") else 1)

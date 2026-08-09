@@ -769,6 +769,38 @@ export function buildClaudeTools() {
           }
         },
         {
+          name: "view_video",
+          description: "Open and view videos recorded by Iris on the screen using the system's default media player. Use this when the user asks to see a video, switch to the previous/next video, or close the video player.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                description: "The action to perform: 'latest' (open the most recent video), 'prev' (show the older video), 'next' (show the newer video), or 'close' (close the video player)."
+              }
+            },
+            required: ["action"]
+          }
+        },
+        {
+          name: "record_screen",
+          description: "Start or stop recording a video of the screen. Use this when the user asks to record the screen or record a specific window. When stopping, the video will automatically open for the user.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                description: "The action to perform: 'start', 'stop', or 'status'."
+              },
+              window: {
+                type: "string",
+                description: "Optional. The specific window title to record. If omitted, records the entire screen."
+              }
+            },
+            required: ["action"]
+          }
+        },
+        {
           name: "go_to_sleep",
           description:
             "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",

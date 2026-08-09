@@ -96,12 +96,19 @@ export async function takeAiScreenshotTool() {
   if (!result.ok) {
     return { status: "error", error: result.error || result.stderr || "ai_vision.py failed." };
   }
-  // ai_vision.py prints: "Thành công! Ảnh màn hình đã được lưu tại: <path>"
-  const match = result.stdout.match(/l(?:ư|u)u t(?:ạ|a)i:\s*(.+)$/im) || result.stdout.match(/:\s*([A-Za-z]:\\.+\.png|\/.+\.png)/);
-  const screenshotPath = match ? match[1].trim() : null;
-  if (!screenshotPath) {
-    return { status: "error", error: `Could not parse screenshot path from output: ${result.stdout}` };
+  // ai_vision.py now prints one line of JSON: {success, message, screenshot_path}
+  // (it used to print free-form Vietnamese text that we had to regex out of —
+  // any wording change there silently broke this parse).
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return { status: "error", error: `Could not parse ai_vision.py output as JSON: ${result.stdout}` };
   }
+  if (!parsed.success || !parsed.screenshot_path) {
+    return { status: "error", error: parsed.error || "ai_vision.py did not return a screenshot_path." };
+  }
+  const screenshotPath = parsed.screenshot_path;
   // Feed the screenshot straight into the live session as a frame so Gemini
   // can literally look at it — same path sendFrameToGemini already uses for
   // camera/companion frames. Deferred import: gemini-live.mjs imports the
@@ -165,15 +172,26 @@ export async function moveWindowMagicTool(args = {}) {
     const demoArgs = ["--demo"];
     if (name) demoArgs.push("--name", name);
     const result = await runPythonTool("magic_move.py", demoArgs, { timeoutMs: 15000 });
-    if (!result.ok) return { status: "error", error: result.error || result.stderr || "magic_move.py failed." };
-    return { status: "success", message: result.stdout };
+    return _resultFromMagicMove(result, "magic_move.py --demo failed.");
   }
 
   // mode === "name"
   if (!name) return { status: "error", error: "Missing 'name' — which window should be moved?" };
   const result = await runPythonTool("magic_move.py", ["--name", name, "-x", String(x), "-y", String(y)], { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "magic_move.py failed." };
-  return { status: "success", message: result.stdout };
+  return _resultFromMagicMove(result, "magic_move.py --name failed.");
+}
+
+// magic_move.py now prints one line of JSON (like every other tool here)
+// instead of free-form Vietnamese text — parse it instead of dumping the
+// raw JSON string into `message`.
+function _resultFromMagicMove(result, failMsg) {
+  if (!result.ok) return { status: "error", error: result.error || result.stderr || failMsg };
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return { status: parsed.success ? "success" : "error", ...parsed };
+  } catch {
+    return { status: "success", message: result.stdout };
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -206,12 +224,24 @@ export async function systemControlTool(args = {}) {
   // sys_control.py's own subprocess.run(Start-Process ... -Verb RunAs) does
   // NOT pass -Wait, so the script returns as soon as the UAC prompt is
   // triggered rather than blocking until the user answers it — safe to await.
+  //
+  // sys_control.py exits 1 whenever ANY requested sub-action failed (e.g.
+  // volume worked but wifi didn't), so we must still parse stdout as JSON
+  // in the failure case instead of discarding it — otherwise a partial
+  // success would be reported as a total, undifferentiated error.
   const result = await runPythonTool("sys_control.py", cliArgs, { timeoutMs: 15000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "sys_control.py failed." };
   const needsUac = wifi || bluetooth || camera;
+  let parsed = null;
+  try { parsed = JSON.parse(result.stdout); } catch { /* not JSON — fall through */ }
+
+  if (!parsed) {
+    if (!result.ok) return { status: "error", error: result.error || result.stderr || "sys_control.py failed." };
+    return { status: "success", message: result.stdout };
+  }
   return {
-    status: "success",
-    message: result.stdout,
+    status: parsed.success ? "success" : "error",
+    results: parsed.results,
+    error: parsed.success ? undefined : (parsed.error || "One or more system_control actions failed — see 'results' for details."),
     instructions: needsUac
       ? "If a UAC (administrator) prompt appears on screen, tell the user right now to click 'Yes' for the action to take effect."
       : undefined,
@@ -463,4 +493,28 @@ export async function viewImageTool(args) {
     return { status: "error", error: "Missing 'action' parameter." };
   }
   return _runJsonTool("image_viewer.py", ["--action", args.action], { timeoutMs: 5000 }, "image_viewer.py failed.");
+}
+
+// -----------------------------------------------------------------------
+// video player skill -> tools/video_player.py
+// -----------------------------------------------------------------------
+export async function viewVideoTool(args) {
+  if (!args || !args.action) {
+    return { status: "error", error: "Missing 'action' parameter." };
+  }
+  return _runJsonTool("video_player.py", ["--action", args.action], { timeoutMs: 5000 }, "video_player.py failed.");
+}
+
+// -----------------------------------------------------------------------
+// screen recorder skill -> tools/screen_recorder.py
+// -----------------------------------------------------------------------
+export async function recordScreenTool(args) {
+  if (!args || !args.action) {
+    return { status: "error", error: "Missing 'action' parameter." };
+  }
+  const pythonArgs = ["--action", args.action];
+  if (args.window) {
+    pythonArgs.push("--window", args.window);
+  }
+  return _runJsonTool("screen_recorder.py", pythonArgs, { timeoutMs: 10000 }, "screen_recorder.py failed.");
 }
