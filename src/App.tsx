@@ -223,10 +223,17 @@ export default function App() {
     if (!hasBridge) return;
     
     let cleanupRobot = () => {};
+    let cleanupReset = () => {};
     let cleanupRobotExpand = () => {};
     let cleanupCompanion = () => {};
     let cleanupSmartHome = () => {};
     let cleanupCompanionLiveOpen = () => {};
+
+    if (window.iris.onResetToBoot) {
+      cleanupReset = window.iris.onResetToBoot(() => {
+        setSetup({ mode: "boot" });
+      });
+    }
 
     if (window.iris.onToggleRobotPip) {
       cleanupRobot = window.iris.onToggleRobotPip(() => {
@@ -268,6 +275,7 @@ export default function App() {
 
     return () => {
       cleanupRobot();
+      cleanupReset();
       cleanupRobotExpand();
       cleanupCompanion();
       cleanupSmartHome();

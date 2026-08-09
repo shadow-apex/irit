@@ -548,6 +548,16 @@ app.whenReady().then(() => {
     emitEvent({ type: "log", level: "error", message: `Could not register Screen Vision hotkey Super+Shift+V.` });
   }
 
+  const resetRegistered = globalShortcut.register("Super+Shift+R", () => {
+    if (mainWindow) {
+      mainWindow.webContents.send("ui:reset-to-boot");
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  if (!resetRegistered) console.error("Failed to register Super+Shift+R");
+
   // Register Win+Shift+L to toggle Ollama localchat
   const localchatRegistered = globalShortcut.register("Super+Shift+L", () => {
     localchatEnabled = !localchatEnabled;

@@ -177,6 +177,11 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("companion:status", handler);
     return () => ipcRenderer.removeListener("companion:status", handler);
   },
+  onResetToBoot: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("ui:reset-to-boot", handler);
+    return () => ipcRenderer.removeListener("ui:reset-to-boot", handler);
+  },
   onToggleRobotPip: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("ui:toggle-robot-pip", handler);

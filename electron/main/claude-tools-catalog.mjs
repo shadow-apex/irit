@@ -190,6 +190,156 @@ export function buildClaudeTools() {
           parameters: { type: "object", properties: {} },
         },
         {
+          name: "mouse_control",
+          description: "Control the mouse cursor by screen coordinates via tools/mouse_control.py: move it (optionally clicking on arrival), click (left/right/middle, single/double), drag from one point to another, scroll, or read its current position. Movement follows a smooth curved (Bezier) path by default — the same natural, human-like motion used by the OmniParser auto-click flow — rather than a robotic straight line. Use when the user gives explicit x/y coordinates or asks you to move/click/drag the mouse pointer somewhere on screen (e.g. 'di chuyen chuot den toa do 500 300', 'click vao diem 800, 400', 'keo tu diem A den diem B').",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: move, click, drag, scroll, position." },
+              x: { type: "integer", description: "Target X coordinate (move/click/drag start point)." },
+              y: { type: "integer", description: "Target Y coordinate (move/click/drag start point)." },
+              x2: { type: "integer", description: "Drag end X coordinate (drag only)." },
+              y2: { type: "integer", description: "Drag end Y coordinate (drag only)." },
+              button: { type: "string", description: "One of: left, right, middle. Defaults to left. Used for click/drag/move+click." },
+              double: { type: "boolean", description: "If true, performs a double-click instead of a single click." },
+              click: { type: "boolean", description: "For action 'move' only: click at the destination immediately after arriving, instead of needing a separate 'click' call." },
+              linear: { type: "boolean", description: "For move/click: use an instant straight-line move instead of the default smooth curved motion. Only use this if precise, non-human-like positioning is explicitly needed." },
+              amount: { type: "integer", description: "Scroll amount: positive scrolls up, negative scrolls down (scroll only)." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "active_window_info",
+          description: "Read-only: reports the title, process name/PID, and screen position/size of whichever window currently has focus, via tools/active_window_info.py. Use to know what app the user is looking at before deciding what to type/click. Does not touch the screen, mouse, or keyboard, so it never conflicts with OmniParser/computer-use or screen vision.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "ocr_region",
+          description: "Reads text out of a screen region (or the whole screen) via OCR using tools/ocr_region.py, without needing to send an image frame to you. Requires the separate Tesseract-OCR engine to be installed on the machine (not just a pip package) — report that clearly if the tool returns that error.",
+          parameters: {
+            type: "object",
+            properties: {
+              left: { type: "integer", description: "Left edge of the region to OCR. Omit all four region fields to OCR the whole screen." },
+              top: { type: "integer", description: "Top edge of the region to OCR." },
+              width: { type: "integer", description: "Width of the region to OCR." },
+              height: { type: "integer", description: "Height of the region to OCR." },
+              lang: { type: "string", description: "Tesseract language code, e.g. 'eng' or 'vie'. Defaults to 'eng'." },
+            },
+          },
+        },
+        {
+          name: "color_picker",
+          description: "Reads the RGB/hex color of the pixel at given screen coordinates (or under the mouse cursor if omitted), via tools/color_picker.py.",
+          parameters: {
+            type: "object",
+            properties: {
+              x: { type: "integer", description: "X coordinate. Omit both x and y to use the current mouse position." },
+              y: { type: "integer", description: "Y coordinate." },
+            },
+          },
+        },
+        {
+          name: "idle_time",
+          description: "Reports how many seconds it's been since the user last touched the keyboard or mouse, via tools/idle_time.py. Use for 'am I still there' checks or to decide whether to run something only while the user is away.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "clipboard_history",
+          description: "Manages a rolling history of clipboard entries (not just the current one) via tools/clipboard_history.py: start/stop a background watcher, list recent entries, re-copy an old entry, or clear the history. Use 'watch' once to start tracking, then 'list'/'use' later — without 'watch' running, history stays empty.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: watch, stop, list, use, clear." },
+              limit: { type: "integer", description: "Max entries to return for 'list'. Defaults to 10." },
+              index: { type: "integer", description: "Entry index to re-copy to the clipboard, required for 'use'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "quick_reminder",
+          description: "Schedules a one-off reminder that fires N minutes from now as a desktop notification, via tools/quick_reminder.py — unlike send_desktop_notification, this doesn't fire immediately. Also lists or cancels pending reminders.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: schedule, list, cancel." },
+              minutes: { type: "number", description: "Minutes from now the reminder should fire. Required for 'schedule'." },
+              title: { type: "string", description: "Notification title. Required for 'schedule'." },
+              message: { type: "string", description: "Notification body. Required for 'schedule'." },
+              id: { type: "string", description: "Reminder id to cancel, required for 'cancel' (get it from 'list')." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "tts_speak",
+          description: "Speaks text out loud using an offline text-to-speech voice (no network/API cost) via tools/tts_speak.py. Use when the user explicitly wants text read aloud locally rather than through your own voice.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "Text to speak. Required unless listVoices is true." },
+              rate: { type: "integer", description: "Speech rate in words/min. Omit for the system default (~200)." },
+              volume: { type: "number", description: "Volume from 0.0 to 1.0." },
+              voiceId: { type: "string", description: "Specific voice id, from listVoices." },
+              listVoices: { type: "boolean", description: "If true, lists available voices instead of speaking." },
+            },
+          },
+        },
+        {
+          name: "wifi_manager",
+          description: "Manages Wi-Fi via tools/wifi_manager.py: scan nearby networks, list saved profiles, connect to an already-known SSID, disconnect, or check connection status. Cannot connect to a brand-new network it has no saved profile for (passwords are never accepted here for security) — tell the user to connect once manually first in that case.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: list, profiles, connect, disconnect, status." },
+              ssid: { type: "string", description: "Network name, required for 'connect'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "multi_monitor_info",
+          description: "Lists every monitor attached to the machine — position, resolution, which one is primary — via tools/multi_monitor_info.py. Useful before choosing coordinates for mouse_control/magic_move on a multi-monitor setup.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "process_manager",
+          description: "Lists running processes by top CPU or RAM usage, or force-kills one by name, via tools/process_manager.py. Complements system_control's app-closing, which only closes by window name without a preview.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: list, kill." },
+              sort: { type: "string", description: "For 'list': 'cpu' or 'ram'. Defaults to 'ram'." },
+              top: { type: "integer", description: "For 'list': how many processes to return. Defaults to 10." },
+              name: { type: "string", description: "Process/executable name to kill, e.g. 'chrome.exe'. Required for 'kill'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "power_plan",
+          description: "Reads or switches the active Windows power plan (balanced / power saver / high performance) via tools/power_plan.py.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: get, set." },
+              name: { type: "string", description: "One of: balanced, saver, performance. Required for 'set'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "focus_assist",
+          description: "Opens Windows' Focus Assist (Do Not Disturb) settings page via tools/focus_assist.py. There is no official Windows API to toggle it silently, so this opens the real settings screen for the user to pick a mode — tell them that when you call it.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "lock_screen",
+          description: "Locks the Windows session immediately via tools/lock_screen.py. Confirm with the user before calling this, since it will require them to re-enter their password/PIN to get back in.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
           parameters: { type: "object", properties: {} },
@@ -603,6 +753,20 @@ export function buildClaudeTools() {
             },
             required: ["action"],
           },
+        },
+        {
+          name: "view_image",
+          description: "Open and view images/screenshots taken by Iris on the screen in a dedicated floating window. Use this when the user asks to see the image, switch to the previous/next image, or close the image viewer.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                description: "The action to perform: 'latest' (open the most recent screenshot), 'prev' (show the older screenshot), 'next' (show the newer screenshot), or 'close' (close the image viewer)."
+              }
+            },
+            required: ["action"]
+          }
         },
         {
           name: "go_to_sleep",

@@ -71,6 +71,21 @@ import {
   sendDesktopNotificationTool,
   systemControlTool,
   systemMonitorTool,
+  mouseControlTool,
+  activeWindowInfoTool,
+  ocrRegionTool,
+  colorPickerTool,
+  idleTimeTool,
+  clipboardHistoryTool,
+  quickReminderTool,
+  ttsSpeakTool,
+  wifiManagerTool,
+  multiMonitorInfoTool,
+  processManagerTool,
+  powerPlanTool,
+  focusAssistTool,
+  lockScreenTool,
+  viewImageTool,
 } from "./local-tools.mjs";
 
 export async function executeClaudeTool(name, args = {}) {
@@ -209,6 +224,36 @@ export async function executeClaudeTool(name, args = {}) {
       return await systemControlTool(args);
     case "system_monitor":
       return await systemMonitorTool();
+    case "mouse_control":
+      return await mouseControlTool(args);
+    case "active_window_info":
+      return await activeWindowInfoTool();
+    case "ocr_region":
+      return await ocrRegionTool(args);
+    case "color_picker":
+      return await colorPickerTool(args);
+    case "idle_time":
+      return await idleTimeTool();
+    case "clipboard_history":
+      return await clipboardHistoryTool(args);
+    case "quick_reminder":
+      return await quickReminderTool(args);
+    case "tts_speak":
+      return await ttsSpeakTool(args);
+    case "wifi_manager":
+      return await wifiManagerTool(args);
+    case "multi_monitor_info":
+      return await multiMonitorInfoTool();
+    case "process_manager":
+      return await processManagerTool(args);
+    case "power_plan":
+      return await powerPlanTool(args);
+    case "focus_assist":
+      return await focusAssistTool();
+    case "lock_screen":
+      return await lockScreenTool();
+    case "view_image":
+      return await viewImageTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

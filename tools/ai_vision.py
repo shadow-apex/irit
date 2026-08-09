@@ -8,8 +8,12 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-def take_screenshot(output_dir="."):
+def take_screenshot(output_dir=None):
     """Chụp ảnh màn hình và lưu vào thư mục chỉ định"""
+    if output_dir is None or output_dir == ".":
+        # Mặc định lưu vào thư mục img nằm cùng cấp với file script này (tools/img)
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "img")
+        
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
