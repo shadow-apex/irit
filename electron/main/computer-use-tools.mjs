@@ -292,7 +292,7 @@ export const ALLOWED_APP_EXECUTABLES = new Set([
 ]);
 
 export async function openUrlOrApp(args) {
-  const { target, is_url } = args;
+  const { target, is_url, force_new = false } = args;
 
   // --- URL branch ---
   if (is_url) {
@@ -327,6 +327,26 @@ export async function openUrlOrApp(args) {
       error: `App '${basename}' is not in the allowed list. Ask the user to add it to ALLOWED_APP_EXECUTABLES in main.mjs if needed.`,
     };
   }
+
+  // FIX (2026): "mở" ('open') used to ALWAYS spawn a brand new process,
+  // even if the app was already running (just minimized/hidden in the
+  // background) — so asking to "open" something you already had open just
+  // launched a second, unrelated instance/window instead of bringing the
+  // existing one back. Now, unless the caller explicitly asks for a new
+  // instance (force_new — "mở mới"/"open a new one"), we first try to
+  // restore+focus an already-running window of this app via
+  // system_actions.py's restore action (which now also finds windows that
+  // were hidden with hide_app, not just minimized ones). Only if nothing
+  // is currently running do we fall through to actually spawning it.
+  if (!force_new) {
+    const restoreResult = await _runSystemActionPy("restore", [basename]);
+    const restoreParsed = _resultFromSystemAction(restoreResult, "");
+    if (restoreParsed.status === "success") {
+      return { status: "success", message: `Restored the already-running ${basename} (${restoreParsed.message || ""}).`.trim(), reused_existing: true };
+    }
+    // Not running (or no window found) — fall through and launch it fresh.
+  }
+
   try {
     // Use spawn with shell:false so args are passed as an array, never concatenated
     // into a shell string.  This eliminates the cmd-injection vector that exec()
@@ -338,7 +358,7 @@ export async function openUrlOrApp(args) {
       windowsHide: false,
     });
     child.unref();
-    return { status: "success", message: `Started application: ${basename}` };
+    return { status: "success", message: `Started ${force_new ? "a new instance of " : ""}application: ${basename}`, reused_existing: false };
   } catch (err) {
     return { status: "error", error: `Failed to start app: ${err.message}` };
   }
@@ -420,6 +440,22 @@ export async function closeAppTool(args) {
   const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
   const result = await _runSystemActionPy("close", [basename]);
   return _resultFromSystemAction(result, `Failed to close app: ${basename}`);
+}
+
+// FIX (2026): "hide" and "minimize" used to be the same action (minimize_app
+// was documented as "invoke this for hide OR minimize"), so there was no way
+// to tell Iris apart what the user actually meant, and a mis-picked close_app
+// could even end up terminating the app when the user only asked to hide it.
+// hide_app is now its own distinct primitive: it truly hides the window
+// (gone from screen AND taskbar/Alt-Tab, but the process keeps running) via
+// tools/system_actions.py's new "hide" action (SW_HIDE) — separate from
+// minimizeAppTool below, which still just minimizes to the taskbar.
+export async function hideAppTool(args) {
+  const { target } = args;
+  if (!target) return { status: "error", error: "Missing 'target' executable name." };
+  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
+  const result = await _runSystemActionPy("hide", [basename]);
+  return _resultFromSystemAction(result, `Failed to hide app: ${basename}`);
 }
 
 export async function minimizeAppTool(args) {

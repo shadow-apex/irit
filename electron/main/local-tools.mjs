@@ -175,6 +175,15 @@ export async function moveWindowMagicTool(args = {}) {
     return _resultFromMagicMove(result, "magic_move.py --demo failed.");
   }
 
+  if (mode === "demo2") {
+    // Opens 6 Notepad windows and lines them up in a grid — previously
+    // CLI-only per magic_move.py's docstring, but nothing actually blocked
+    // it; this branch was just missing. Needs longer than the plain demo
+    // since it spawns and waits on 6 real processes.
+    const result = await runPythonTool("magic_move.py", ["--demo2"], { timeoutMs: 25000 });
+    return _resultFromMagicMove(result, "magic_move.py --demo2 failed.");
+  }
+
   // mode === "name"
   if (!name) return { status: "error", error: "Missing 'name' — which window should be moved?" };
   const result = await runPythonTool("magic_move.py", ["--name", name, "-x", String(x), "-y", String(y)], { timeoutMs: 10000 });
@@ -208,10 +217,25 @@ export async function sendDesktopNotificationTool(args = {}) {
 // -----------------------------------------------------------------------
 // sys-control skill -> tools/sys_control.py
 // -----------------------------------------------------------------------
+// FIX (2026): "volume" used to only accept mute/up/down, and "mute" itself
+// was just a raw VK_VOLUME_MUTE key TOGGLE (not a deterministic set-state)
+// — so there was no reliable way to unmute, even though the AI prompt
+// (gemini-live.mjs) explicitly told it "mute/unmute" was supported. Now
+// forwards "unmute" and "set" (with volumeLevel) straight through to
+// sys_control.py, which handles them deterministically via pycaw.
 export async function systemControlTool(args = {}) {
-  const { volume, brightness, wifi, bluetooth, camera } = args;
+  const { volume, volumeLevel, brightness, wifi, bluetooth, camera } = args;
   const cliArgs = [];
-  if (volume) cliArgs.push("--volume", volume);
+  if (volume) {
+    if (volume === "set") {
+      if (volumeLevel === undefined || volumeLevel === null) {
+        return { status: "error", error: "'volumeLevel' (0-100) is required when volume is 'set'." };
+      }
+      cliArgs.push("--volume", "set", "--volume-level", String(volumeLevel));
+    } else {
+      cliArgs.push("--volume", volume);
+    }
+  }
   if (brightness !== undefined && brightness !== null) cliArgs.push("--brightness", String(brightness));
   if (wifi) cliArgs.push("--wifi", wifi);
   if (bluetooth) cliArgs.push("--bluetooth", bluetooth);
@@ -508,13 +532,27 @@ export async function viewVideoTool(args) {
 // -----------------------------------------------------------------------
 // screen recorder skill -> tools/screen_recorder.py
 // -----------------------------------------------------------------------
+// FIX (2026): previously only start/stop/status were ever sent here, so
+// there was no way to mute/unmute the mic or pause/resume a recording
+// except by clicking the tiny always-on-top overlay buttons by hand.
+// screen_recorder.py now understands pause/resume/mic_on/mic_off as
+// real CLI actions (sent to the running daemon via its CMD_FILE), so we
+// just need to let them through here too.
+const RECORD_SCREEN_ACTIONS = ["start", "stop", "status", "pause", "resume", "mic_on", "mic_off"];
+
 export async function recordScreenTool(args) {
   if (!args || !args.action) {
     return { status: "error", error: "Missing 'action' parameter." };
+  }
+  if (!RECORD_SCREEN_ACTIONS.includes(args.action)) {
+    return { status: "error", error: `Unknown action '${args.action}'. Use: ${RECORD_SCREEN_ACTIONS.join(", ")}.` };
   }
   const pythonArgs = ["--action", args.action];
   if (args.window) {
     pythonArgs.push("--window", args.window);
   }
-  return _runJsonTool("screen_recorder.py", pythonArgs, { timeoutMs: 10000 }, "screen_recorder.py failed.");
+  // 'stop' can take a while: it waits for ffmpeg to mux system+mic audio
+  // into the final mp4 (screen_recorder.py itself polls for up to 30s).
+  const timeoutMs = args.action === "stop" ? 35000 : 10000;
+  return _runJsonTool("screen_recorder.py", pythonArgs, { timeoutMs }, "screen_recorder.py failed.");
 }

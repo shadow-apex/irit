@@ -3,8 +3,8 @@ tools/magic_move.py
 
 Cong cu "ma thuat" dieu khien cua so Windows: bat cua so dang active va
 di chuyen (--active), di chuyen theo ten (--name), va vai che do bieu dien
-(--demo, --demo2, --setup — CHI dung thu cong/CLI, KHONG duoc wire vao
-Electron, xem ghi chu trong electron/main/local-tools.mjs).
+(--demo, --demo2). --setup van la CLI-only/dev-only (khong wire vao
+Electron), xem ghi chu trong electron/main/local-tools.mjs.
 
 FIX (2026):
   - Cac che do --active/--name/--demo (nhung che do THAT SU duoc AI goi
@@ -18,6 +18,11 @@ FIX (2026):
     man hinh, khong con cach nao voi lai duoc.
   - Bare `except: pass` (bat ca BaseException, ke ca KeyboardInterrupt) doi
     thanh `except Exception: pass`.
+  - --demo2 (xep 6 cua so Notepad thang hang) truoc day bi khoa "CLI-only,
+    khong duoc AI goi toi" ngay trong docstring cua demo_mode_2(), nhung
+    KHONG he co gi ngan no ve mat ky thuat — chi la moveWindowMagicTool()
+    trong local-tools.mjs chua co nhanh mode "demo2". Da wire demo2 vao
+    Electron (mode: "demo2") de Iris goi duoc nhu demo thuong.
 
 Vi du dung:
     python tools/magic_move.py --active -x 100 -y 100
@@ -159,8 +164,8 @@ def demo_mode(target_name=None):
 
 
 def demo_mode_2():
-    """Mo 6 cua so Notepad va xep thang hang. Chi danh cho CLI/thu nghiem
-    thu cong, khong duoc AI goi toi."""
+    """Mo 6 cua so Notepad va xep thang hang. Gio da duoc wire vao Electron
+    (mode "demo2" trong moveWindowMagicTool), nen AI/Iris co the goi toi."""
     for _ in range(6):
         subprocess.Popen(["notepad.exe"])
 

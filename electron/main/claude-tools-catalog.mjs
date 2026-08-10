@@ -59,19 +59,20 @@ export function buildClaudeTools() {
         },
         {
           name: "open_url_or_app",
-          description: "Open a website in the default browser or open a local application on Windows. IMPORTANT: If the user asks to open a website like YouTube or Facebook, you MUST provide the full valid URL (e.g., 'https://www.youtube.com'). If they ask to open a system app, provide the executable name (e.g., 'calc.exe', 'notepad.exe'). DO NOT use this for complex GUI interaction, only for simply opening things.",
+          description: "Open a website in the default browser, or open/bring back a local application on Windows. IMPORTANT: If the user asks to open a website like YouTube or Facebook, you MUST provide the full valid URL (e.g., 'https://www.youtube.com'). If they ask to open a system app, provide the executable name (e.g., 'calc.exe', 'notepad.exe'). DO NOT use this for complex GUI interaction, only for simply opening things. For apps: by default (force_new omitted/false) this is a SMART open — if the app is already running (even if minimized or hidden), it brings the existing window back and focuses it instead of starting a duplicate; only launches a genuinely new process if nothing is running yet. Set force_new=true ONLY when the user explicitly asks for a brand-new window/instance/tab even though one is already open (e.g. 'mở mới', 'open a new one', 'open another window').",
           parameters: {
             type: "object",
             properties: {
               target: { type: "string", description: "The full URL or executable name." },
-              is_url: { type: "boolean", description: "True if it's a website URL, false if it's a local app executable." }
+              is_url: { type: "boolean", description: "True if it's a website URL, false if it's a local app executable." },
+              force_new: { type: "boolean", description: "Apps only. True to always start a brand-new instance/window even if one is already running ('mở mới'). False or omitted (default): reuse/restore the already-running instance if there is one ('mở')." }
             },
             required: ["target", "is_url"]
           }
         },
         {
           name: "close_app",
-          description: "Close an open local application on Windows. Invoke this when the user asks you to close an app. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          description: "Fully close/terminate an open local application on Windows (ends the process — it will need to be relaunched to use again). Invoke this ONLY when the user explicitly asks to close, quit, exit, or 'đóng'/'tắt' an app. Do NOT use this when they just want it out of the way (hide) or shrunk to the taskbar (minimize) — use hide_app or minimize_app for those instead, since closing loses the app's state. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
           parameters: {
             type: "object",
             properties: {
@@ -81,8 +82,19 @@ export function buildClaudeTools() {
           }
         },
         {
+          name: "hide_app",
+          description: "Hide an open app completely out of sight — it disappears from the screen AND from the taskbar/Alt-Tab, but keeps running in the background (nothing is closed, no state is lost). Invoke this when the user asks to hide an app ('ẩn ứng dụng', 'ẩn nó đi', 'giấu cửa sổ này'). This is DIFFERENT from minimize_app (which still leaves a visible taskbar icon) and from close_app (which actually terminates the app). To bring a hidden app back, use open_url_or_app (force_new=false) or restore_app.",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The executable name to hide (e.g. 'Discord.exe')." }
+            },
+            required: ["target"]
+          }
+        },
+        {
           name: "minimize_app",
-          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to hide or minimize an app without closing it. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          description: "Minimize an open local application on Windows down to the taskbar — the window disappears from the screen but its icon STAYS visible on the taskbar, and the user can click it to bring it back. Invoke this ONLY when the user explicitly asks to minimize / 'thu nhỏ' an app. Do NOT use this for a request to hide the app entirely (no taskbar icon) — use hide_app for that instead.",
           parameters: {
             type: "object",
             properties: {
@@ -93,7 +105,7 @@ export function buildClaudeTools() {
         },
         {
           name: "restore_app",
-          description: "Restore or maximize a minimized local application on Windows, bringing it back to the screen. Invoke this when the user asks you to open, restore, or maximize an app that is currently hidden or minimized. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          description: "Explicitly bring a specific app's window back to the screen and focus it, whether it was minimized OR hidden (via hide_app) — un-minimizes/un-hides and calls SetForegroundWindow. In most cases prefer open_url_or_app instead (it already does this restore automatically and also handles the 'not running yet, so launch it' case) — use restore_app directly only when you specifically want to skip the launch-fallback and just restore.",
           parameters: {
             type: "object",
             properties: {
@@ -149,7 +161,7 @@ export function buildClaudeTools() {
             properties: {
               mode: {
                 type: "string",
-                description: "'active' — the user will click the window themselves within 5 seconds (use when no window name is given); 'name' — move the window whose title contains the given name; 'demo' — play a short demo animation (optionally on the named window, otherwise File Explorer).",
+                description: "'active' — the user will click the window themselves within 5 seconds (use when no window name is given); 'name' — move the window whose title contains the given name; 'demo' — play a short demo animation (optionally on the named window, otherwise File Explorer); 'demo2' — open 6 Notepad windows and arrange them in a neat grid (a bigger, multi-window demo).",
               },
               name: { type: "string", description: "Window title (or part of it) to target. Required for mode 'name'; optional for 'demo'." },
               x: { type: "integer", description: "Target X coordinate on screen. Defaults to 0." },
@@ -176,7 +188,8 @@ export function buildClaudeTools() {
           parameters: {
             type: "object",
             properties: {
-              volume: { type: "string", description: "One of: mute, up, down." },
+              volume: { type: "string", description: "One of: mute, unmute, up, down, set. 'mute'/'unmute' are deterministic (not a toggle) — safe to call even if you don't know the current mute state. Use 'set' with volumeLevel for an exact percentage." },
+              volumeLevel: { type: "integer", description: "Volume percentage 0-100. REQUIRED when volume is 'set'; ignored otherwise." },
               brightness: { type: "integer", description: "Screen brightness percentage, 0-100." },
               wifi: { type: "string", description: "One of: on, off." },
               bluetooth: { type: "string", description: "One of: on, off." },
@@ -784,17 +797,17 @@ export function buildClaudeTools() {
         },
         {
           name: "record_screen",
-          description: "Start or stop recording a video of the screen. Use this when the user asks to record the screen or record a specific window. When stopping, the video will automatically open for the user.",
+          description: "Start, stop, pause, resume, or control the mic for a screen recording (via tools/screen_recorder.py). Recording captures video plus system/speaker audio automatically; the microphone is OFF by default and must be turned on explicitly with 'mic_on' — use this whenever the user asks to record their voice/narration along with the screen, not just system_control's camera toggle. Use 'pause'/'resume' when the user wants to briefly stop capturing without ending the recording. When stopping, the video opens automatically for the user; if the result mentions missing system or mic audio, tell the user plainly.",
           parameters: {
             type: "object",
             properties: {
               action: {
                 type: "string",
-                description: "The action to perform: 'start', 'stop', or 'status'."
+                description: "One of: 'start' (begin recording), 'stop' (finish, mux audio, and open the video), 'status' (is it recording / paused / is the mic on right now), 'pause', 'resume', 'mic_on' (turn the microphone on for the recording in progress), 'mic_off' (turn it back off)."
               },
               window: {
                 type: "string",
-                description: "Optional. The specific window title to record. If omitted, records the entire screen."
+                description: "Optional, only used with action 'start'. The specific window title to record. If omitted, records the entire screen."
               }
             },
             required: ["action"]

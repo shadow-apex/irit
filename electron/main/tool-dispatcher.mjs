@@ -53,6 +53,7 @@ import {
   browserScreenshotTool,
   browserCloseTool,
   closeAppTool,
+  hideAppTool,
   minimizeAppTool,
   restoreAppTool,
   writeNoteTool,
@@ -206,6 +207,8 @@ export async function executeClaudeTool(name, args = {}) {
       return await openUrlOrApp(args);
     case "close_app":
       return await closeAppTool(args);
+    case "hide_app":
+      return await hideAppTool(args);
     case "minimize_app":
       return await minimizeAppTool(args);
     case "restore_app":

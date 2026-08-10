@@ -25,5 +25,10 @@ When the user asks you to move a window, run the appropriate command using the `
    `python tools/magic_move.py --demo`
    (Optionally, if they specify a name to demo, add `--name "<Name>"`)
 
+4. **Demo Mode 2 (multi-window)**
+   If the user asks for the "second demo" / a bigger demo / to open and arrange several windows at once, run:
+   `python tools/magic_move.py --demo2`
+   This opens 6 Notepad windows and arranges them in a 3x2 grid.
+
 Always ensure you run these commands from the root directory of the workspace.
 After running the command, let the user know what you did so they can observe their screen!

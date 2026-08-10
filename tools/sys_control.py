@@ -1,10 +1,11 @@
 """
 tools/sys_control.py
 
-Dieu khien am luong (phim ao), do sang man hinh (WMI), va bat/tat
-wifi/bluetooth/camera (can quyen Admin qua UAC).
+Dieu khien am luong (mute/unmute/set %/up/down qua pycaw Core Audio API,
+fallback ve phim ao neu chua cai pycaw), do sang man hinh (WMI), va
+bat/tat wifi/bluetooth/camera (can quyen Admin qua UAC).
 
-FIX (2026):
+FIX (2026) #1:
   - Truoc day file chi in() text thuong, KHONG try/except o __main__, va
     toggle_hardware() luon exit code 0 du that bai -> ben goi (Electron)
     khong bao gio biet duoc thao tac that su thanh cong hay khong. Nay moi
@@ -20,8 +21,29 @@ FIX (2026):
     sung (best-effort).
   - --brightness gio duoc gioi han (clamp) trong khoang 0-100.
 
+FIX (2026) #2 — volume "mute" bi gop lenh (mute/unmute lam chung 1 nut):
+  - Truoc day --volume CHI co 3 gia tri: mute/up/down. "mute" mo phong 1
+    LAN BAM PHIM VK_VOLUME_MUTE — day la phim TOGGLE cua Windows, khong
+    phai "set mute = True". Nghia la goi "mute" khi dang BI mute san se
+    lam BAT TIENG LAI, va khong co cach nao goi rieng "unmute" (argparse
+    se tu choi vi "unmute" khong nam trong choices=[...]) — trong khi do
+    gemini-live.mjs lai mo ta cho AI la co the lam "mute/unmute" duoc!
+    Day chinh la kieu loi "gop lenh" giong het truong hop an/thu nho/dong
+    app truoc do.
+    -> Them pycaw (Core Audio Windows API) de co mute/unmute THAT SU
+       deterministic (SetMute(True)/SetMute(False), khong con la toggle),
+       cong them --volume set --volume-level N (0-100) de dat % chinh xac
+       thay vi chi tang/giam mo phong tung nac phim. Neu may chua cai
+       pycaw/comtypes (xem tools/requirements.txt), tu dong FALLBACK ve
+       phim ao (keybd_event) cho rieng up/down; rieng "unmute" va "set"
+       BAT BUOC can pycaw vi phim ao khong the lam duoc 2 viec nay mot
+       cach chinh xac — se tra loi loi ro rang thay vi lam sai.
+
 Vi du dung:
     python tools/sys_control.py --volume up
+    python tools/sys_control.py --volume mute
+    python tools/sys_control.py --volume unmute
+    python tools/sys_control.py --volume set --volume-level 40
     python tools/sys_control.py --brightness 50
     python tools/sys_control.py --wifi off
     python tools/sys_control.py --bluetooth on
@@ -48,24 +70,86 @@ def _run(args, timeout=15):
     )
 
 
-def set_volume(action):
+def _get_pycaw_volume_interface():
+    """Tra ve (interface, error_message). interface la None neu pycaw chua
+    duoc cai (xem tools/requirements.txt) hoac khong lay duoc thiet bi loa
+    mac dinh — trong ca 2 truong hop deu tra ve error_message ro rang de
+    bao cho nguoi dung/AI, thay vi lam sai lang le."""
+    try:
+        from ctypes import cast, POINTER
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+    except ImportError:
+        return None, (
+            "Chua cai pycaw/comtypes (can cho mute/unmute/set % chinh xac). "
+            "Chay: pip install pycaw comtypes --break-system-packages"
+        )
+    try:
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = cast(interface, POINTER(IAudioEndpointVolume))
+        return volume, None
+    except Exception as e:
+        return None, f"Khong lay duoc thiet bi loa mac dinh: {e}"
+
+
+def _volume_key_fallback(action, times=5):
+    """Fallback KHONG chinh xac (mo phong phim bam) — chi dung khi khong
+    co pycaw. CHI ho tro up/down (tang/giam tung nac); KHONG dung duoc cho
+    mute/unmute/set vi phim VK_VOLUME_MUTE la toggle, khong the biet chac
+    trang thai truoc do la gi."""
+    vk = {"up": VK_VOLUME_UP, "down": VK_VOLUME_DOWN}[action]
+    for _ in range(times):
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+    return {"success": True, "message": f"Da thuc hien lenh am thanh: {action} (che do phim ao, khong co pycaw)."}
+
+
+def set_volume(action, level=None):
+    volume_if, err = _get_pycaw_volume_interface()
+
+    if volume_if is None:
+        # Khong co pycaw: up/down van lam duoc (khong hoan hao nhung chap
+        # nhan duoc), con mute/unmute/set thi BAT BUOC phai bao loi ro
+        # rang thay vi doan mo (vd goi "mute" thanh toggle sai chieu).
+        if action in ("up", "down"):
+            try:
+                return _volume_key_fallback(action)
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        return {"success": False, "error": err}
+
     try:
         if action == "mute":
-            ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
-        elif action == "up":
-            for _ in range(5):
-                ctypes.windll.user32.keybd_event(VK_VOLUME_UP, 0, 0, 0)
-                ctypes.windll.user32.keybd_event(VK_VOLUME_UP, 0, 2, 0)
-        elif action == "down":
-            for _ in range(5):
-                ctypes.windll.user32.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
-                ctypes.windll.user32.keybd_event(VK_VOLUME_DOWN, 0, 2, 0)
+            volume_if.SetMute(1, None)
+            return {"success": True, "message": "Da tat tieng (mute)."}
+        elif action == "unmute":
+            volume_if.SetMute(0, None)
+            return {"success": True, "message": "Da bat tieng lai (unmute)."}
+        elif action == "set":
+            if level is None:
+                return {"success": False, "error": "Thieu --volume-level (0-100) cho hanh dong 'set'."}
+            level = max(0, min(100, int(level)))
+            # Dat 1 muc am luong cu the thi cung nen tu dong bo mute, giong
+            # hanh vi cac phim vat ly tren ban phim that.
+            volume_if.SetMute(0, None)
+            volume_if.SetMasterVolumeLevelScalar(level / 100.0, None)
+            return {"success": True, "message": f"Da dat am luong ve {level}%.", "level": level}
+        elif action in ("up", "down"):
+            # Tu dong bo mute khi tang/giam am luong, giong hanh vi phim
+            # vat ly that tren Windows (bam Volume Up khi dang mute se tu
+            # bat tieng lai).
+            current = volume_if.GetMasterVolumeLevelScalar()
+            step = 0.05  # ~1 nac, tuong duong 5 lan bam phim ao truoc day
+            new_level = current + step if action == "up" else current - step
+            new_level = max(0.0, min(1.0, new_level))
+            volume_if.SetMute(0, None)
+            volume_if.SetMasterVolumeLevelScalar(new_level, None)
+            return {"success": True, "message": f"Da {'tang' if action == 'up' else 'giam'} am luong len {round(new_level * 100)}%.", "level": round(new_level * 100)}
         else:
             return {"success": False, "error": f"Hanh dong am luong khong hop le: {action}."}
     except Exception as e:
         return {"success": False, "error": str(e)}
-    return {"success": True, "message": f"Da thuc hien lenh am thanh: {action}."}
 
 
 def set_brightness(level):
@@ -149,7 +233,8 @@ def toggle_hardware(device, state):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cong cu Quan ly He thong (System Control)")
-    parser.add_argument("--volume", choices=["mute", "up", "down"], help="Dieu khien am luong")
+    parser.add_argument("--volume", choices=["mute", "unmute", "up", "down", "set"], help="Dieu khien am luong")
+    parser.add_argument("--volume-level", type=int, help="Muc am luong 0-100, BAT BUOC khi --volume set")
     parser.add_argument("--brightness", type=int, help="Muc do sang (0-100)")
     parser.add_argument("--wifi", choices=["on", "off"], help="Bat/Tat Wi-Fi")
     parser.add_argument("--bluetooth", choices=["on", "off"], help="Bat/Tat Bluetooth")
@@ -161,7 +246,7 @@ if __name__ == "__main__":
     overall_ok = True
     try:
         if args.volume:
-            results["volume"] = set_volume(args.volume)
+            results["volume"] = set_volume(args.volume, args.volume_level)
         if args.brightness is not None:
             results["brightness"] = set_brightness(args.brightness)
         if args.wifi:

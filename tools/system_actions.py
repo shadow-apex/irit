@@ -1,18 +1,40 @@
 """
 tools/system_actions.py
 
-Dieu khien cua so cua UNG DUNG KHAC: dong (close), thu nho (minimize),
-phuc hoi (restore), va ghi note nhanh vao Notepad. Dung ctypes (user32)
-de enum cua so + tasklist/taskkill cho phan tien trinh.
+Dieu khien cua so cua UNG DUNG KHAC: dong (close), an (hide), thu nho
+(minimize), phuc hoi/mo lai (restore), va ghi note nhanh vao Notepad.
+Dung ctypes (user32) de enum cua so + tasklist/taskkill cho phan tien trinh.
 
-FIX (2026): truoc day file nay chi in text thuong va khong co try/except
+FIX (2026) #1: truoc day file nay chi in text thuong va khong co try/except
 o muc cao nhat -> neu co loi bat ngo, script crash va KHONG in duoc gi ca,
 lam electron/main/computer-use-tools.mjs (ben goi) khong biet duoc ket qua
 that su. Nay moi ham deu tra ve 1 dict va duoc bao boc trong try/except o
 __main__, luon luon in DUNG 1 dong JSON (giong cac tool khac trong /tools).
 
+FIX (2026) #2 — "an" (hide) vs "thu nho" (minimize) vs "dong" (close) bi
+lam lan nhau:
+  - Truoc day KHONG co khai niem "an" (hide) that su nao ca — chi co
+    minimize (SW_SHOWMINIMIZED, van thay icon tren taskbar) va close
+    (taskkill, tat han tien trinh). Cau lenh AI phia Electron lai mo ta
+    minimize_app la "invoke khi nguoi dung noi hide HOAC minimize", nen AI
+    khong phan biet duoc "an" voi "thu nho" — va khi khong chac, nhieu luc
+    lai chon nham close_app khien "an" thanh "dong app" (dung nhu loi
+    nguoi dung gap phai).
+    -> Them ham hide_app() moi, dung SW_HIDE that su (an khoi man hinh VA
+       khoi taskbar/Alt-Tab, khong dong tien trinh). minimize_app() giu
+       nguyen SW_SHOWMINIMIZED (thu nho, van thay o taskbar).
+  - _enum_visible_windows() (cu) chi duyet cua so co IsWindowVisible=True.
+    Neu dung ham nay cho restore_app(), mot cua so DA BI AN (SW_HIDE ->
+    IsWindowVisible tra ve False) se KHONG BAO GIO duoc tim thay nua ->
+    "mo lai" mot app da "an" se luon that bai. Da doi ten thanh
+    _enum_windows() + them tham so require_visible (mac dinh True, dung
+    cho minimize_app/hide_app vi chi nen tac dong len cua so DANG hien
+    thi), va restore_app() goi voi require_visible=False de tim duoc ca
+    cua so dang bi an lan dang bi thu nho.
+
 Vi du dung:
     python tools/system_actions.py close chrome
+    python tools/system_actions.py hide notepad
     python tools/system_actions.py minimize notepad
     python tools/system_actions.py restore notepad
     python tools/system_actions.py note "Ghi chu nhanh" [--new]
@@ -53,6 +75,47 @@ def _run_subprocess(args, timeout=10):
     )
 
 
+def _enum_windows(target, pids, on_match, require_visible=True):
+    """Duyet toan bo cua so top-level, goi on_match(hwnd) cho moi cua so
+    khop theo PID hoac tieu de chua ten 'target'. Tra ve so luong cua so
+    da khop.
+
+    require_visible=True (mac dinh): CHI xet cua so dang IsWindowVisible
+    (dung cho minimize_app/hide_app — chi nen tac dong len thu dang thay
+    tren man hinh). require_visible=False: xet CA cua so dang bi an
+    (SW_HIDE -> IsWindowVisible=False) lan dang thu nho — bat buoc phai
+    dung False cho restore_app(), neu khong "mo lai" mot app da bi "an"
+    se khong bao gio tim thay cua so cua no nua."""
+    EnumWindows = ctypes.windll.user32.EnumWindows
+    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    GetWindowText = ctypes.windll.user32.GetWindowTextW
+    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
+    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+
+    matched = [0]
+
+    def _callback(hwnd, lparam):
+        if require_visible and not IsWindowVisible(hwnd):
+            return True
+
+        pid = wintypes.DWORD(0)
+        GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+
+        length = GetWindowTextLength(hwnd)
+        buff = ctypes.create_unicode_buffer(length + 1)
+        GetWindowText(hwnd, buff, length + 1)
+        title = buff.value.lower()
+
+        if (pid.value in pids) or (target in title and len(target) > 2):
+            on_match(hwnd)
+            matched[0] += 1
+        return True
+
+    EnumWindows(EnumWindowsProc(_callback), 0)
+    return matched[0]
+
+
 def close_app(target):
     if not target.lower().endswith(".exe"):
         target += ".exe"
@@ -81,50 +144,40 @@ def _get_pids_by_name(target):
     return pids
 
 
-def _enum_visible_windows(target, pids, on_match):
-    """Duyet toan bo cua so top-level dang hien thi, goi on_match(hwnd) cho
-    moi cua so khop theo PID hoac tieu de chua ten 'target'. Tra ve so
-    luong cua so da khop."""
-    EnumWindows = ctypes.windll.user32.EnumWindows
-    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    GetWindowText = ctypes.windll.user32.GetWindowTextW
-    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-
-    matched = [0]
-
-    def _callback(hwnd, lparam):
-        if IsWindowVisible(hwnd):
-            pid = wintypes.DWORD(0)
-            GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-            length = GetWindowTextLength(hwnd)
-            buff = ctypes.create_unicode_buffer(length + 1)
-            GetWindowText(hwnd, buff, length + 1)
-            title = buff.value.lower()
-
-            if (pid.value in pids) or (target in title and len(target) > 2):
-                on_match(hwnd)
-                matched[0] += 1
-        return True
-
-    EnumWindows(EnumWindowsProc(_callback), 0)
-    return matched[0]
-
-
 def minimize_app(target):
+    """Thu nho cua so xuong taskbar (SW_SHOWMINIMIZED) — van thay icon o
+    taskbar, KHAC voi hide_app() (an hoan toan, khong con icon nao ca)."""
     target = target.lower().replace(".exe", "")
     ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
     SW_SHOWMINIMIZED = 2
     pids = _get_pids_by_name(target)
-    count = _enum_visible_windows(target, pids, lambda hwnd: ShowWindowAsync(hwnd, SW_SHOWMINIMIZED))
+    count = _enum_windows(target, pids, lambda hwnd: ShowWindowAsync(hwnd, SW_SHOWMINIMIZED), require_visible=True)
     if count:
-        return {"success": True, "message": f"Da thu nho {count} cua so cua '{target}'."}
+        return {"success": True, "message": f"Da thu nho {count} cua so cua '{target}' xuong taskbar."}
     return {"success": False, "error": f"Khong tim thay cua so nao dang hien thi cua '{target}'."}
 
 
+def hide_app(target):
+    """An hoan toan cua so (SW_HIDE) — bien mat khoi man hinh VA khoi
+    taskbar/Alt-Tab, nhung tien trinh VAN chay ngam. Muon lay lai thi phai
+    goi restore_app() (hoac lenh 'mo lai'), KHONG the tu bam vao taskbar
+    duoc nua vi cua so khong con hien dien o do."""
+    target = target.lower().replace(".exe", "")
+    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
+    SW_HIDE = 0
+    pids = _get_pids_by_name(target)
+    count = _enum_windows(target, pids, lambda hwnd: ShowWindowAsync(hwnd, SW_HIDE), require_visible=True)
+    if count:
+        return {"success": True, "message": f"Da an {count} cua so cua '{target}'. Ung dung van chay ngam, noi 'mo lai {target}' de hien lai."}
+    return {"success": False, "error": f"Khong tim thay cua so nao dang hien thi cua '{target}' de an (co the da dang bi an/thu nho san, hoac chua chay)."}
+
+
 def restore_app(target):
+    """Mo lai / phuc hoi cua so ve trang thai binh thuong + dua len tren
+    cung (SW_RESTORE + SetForegroundWindow). Dung chung cho ca 2 truong
+    hop: cua so dang bi THU NHO (minimize) va cua so dang bi AN (hide) —
+    vi vay phai duyet voi require_visible=False, neu khong se khong tim
+    thay duoc cua so da bi hide_app() an di."""
     target = target.lower().replace(".exe", "")
     ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
     SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
@@ -135,10 +188,10 @@ def restore_app(target):
         SetForegroundWindow(hwnd)
 
     pids = _get_pids_by_name(target)
-    count = _enum_visible_windows(target, pids, _restore)
+    count = _enum_windows(target, pids, _restore, require_visible=False)
     if count:
-        return {"success": True, "message": f"Da phuc hoi {count} cua so cua '{target}'."}
-    return {"success": False, "error": f"Khong tim thay cua so nao cua '{target}'."}
+        return {"success": True, "message": f"Da mo lai {count} cua so cua '{target}'."}
+    return {"success": False, "error": f"Khong tim thay cua so nao cua '{target}' dang chay."}
 
 
 def write_note(text, mode="a"):
@@ -217,6 +270,8 @@ if __name__ == "__main__":
 
         if action == "close":
             out = close_app(sys.argv[2])
+        elif action == "hide":
+            out = hide_app(sys.argv[2])
         elif action == "minimize":
             out = minimize_app(sys.argv[2])
         elif action == "restore":
