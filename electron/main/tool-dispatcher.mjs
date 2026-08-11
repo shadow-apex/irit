@@ -91,7 +91,109 @@ import {
   recordScreenTool,
 } from "./local-tools.mjs";
 
+// -----------------------------------------------------------------------
+// Claude fallback on local /tools script failure
+// -----------------------------------------------------------------------
+// These are exactly the Gemini-callable tool names backed by a script under
+// tools/*.py (the "LOCAL /tools SCRIPTS" lane described in gemini-live.mjs's
+// system prompt — see local-tools.mjs). When one of these errors out AND
+// Claude is enabled, we do NOT hand the raw error back to Gemini to read
+// aloud; instead we silently dispatch a fix-it/do-it-instead task to Claude
+// (which has full bash access to tools/*.py via `claude --permission-mode
+// bypassPermissions`, see claude-runner.mjs) and tell Gemini to say one short
+// line instead. If Claude is disabled (IRIS_CLAUDE_ENABLED=false), or the
+// tool isn't one of these local scripts, behavior is unchanged: the raw
+// error goes back to Gemini as before.
+// Tool name -> actual Python filename under tools/. Most match the tool
+// name 1:1, but several don't (e.g. take_ai_screenshot -> ai_vision.py,
+// read_clipboard/write_clipboard -> clipboard_manager.py, move_window_magic
+// -> magic_move.py) — see the runPythonTool()/_runJsonTool() calls in
+// local-tools.mjs, which is the source of truth this is kept in sync with.
+// Also doubles as the fallback-eligible tool list (its keys), so we don't
+// have to maintain the set and the mapping separately.
+const LOCAL_SCRIPT_FILENAMES = {
+  take_ai_screenshot: "ai_vision.py",
+  read_clipboard: "clipboard_manager.py",
+  write_clipboard: "clipboard_manager.py",
+  move_window_magic: "magic_move.py",
+  send_desktop_notification: "notifier.py",
+  system_control: "sys_control.py",
+  system_monitor: "sys_monitor.py",
+  mouse_control: "mouse_control.py",
+  active_window_info: "active_window_info.py",
+  ocr_region: "ocr_region.py",
+  color_picker: "color_picker.py",
+  idle_time: "idle_time.py",
+  clipboard_history: "clipboard_history.py",
+  quick_reminder: "quick_reminder.py",
+  tts_speak: "tts_speak.py",
+  wifi_manager: "wifi_manager.py",
+  multi_monitor_info: "multi_monitor_info.py",
+  process_manager: "process_manager.py",
+  power_plan: "power_plan.py",
+  focus_assist: "focus_assist.py",
+  lock_screen: "lock_screen.py",
+  view_image: "image_viewer.py",
+  view_video: "video_player.py",
+  record_screen: "screen_recorder.py",
+};
+const LOCAL_SCRIPT_TOOL_NAMES = new Set(Object.keys(LOCAL_SCRIPT_FILENAMES));
+
+function isClaudeEnabled() {
+  return process.env.IRIS_CLAUDE_ENABLED !== "false";
+}
+
+const FALLBACK_SPOKEN_LINE = "Đã xảy ra lỗi, tôi đang chuyển cho Claude xử lý giúp bạn.";
+
+async function fallbackToClaude(name, args, errorMessage) {
+  const scriptFile = LOCAL_SCRIPT_FILENAMES[name] || `${name}.py`;
+  const brief = [
+    `Gemini vừa gọi công cụ local "${name}" (thư mục tools/, script tools/${scriptFile}) với tham số ${JSON.stringify(args)} nhưng bị lỗi: ${errorMessage}.`,
+    `Hãy dùng bash để tự chạy/sửa tools/${scriptFile} (ví dụ: python tools/${scriptFile} --help để xem cú pháp), hoặc dùng bất kỳ công cụ nào khác trong danh mục của bạn, để tự sửa lỗi này hoặc hoàn thành tác vụ mà công cụ đó lẽ ra phải làm thay cho người dùng. Bạn chạy ở permission-mode bypassPermissions nên có toàn quyền bash để làm việc này.`,
+    "Báo cáo ngắn gọn kết quả khi xong.",
+  ].join(" ");
+  try {
+    const dispatch = await submitClaudeTask({ task: brief });
+    return {
+      status: "fallback_to_claude",
+      tool: name,
+      original_error: errorMessage,
+      claude_dispatch: dispatch,
+      instructions:
+        `Do NOT read the original tool error aloud and do NOT describe what went wrong. Say ONLY this short line to the user, then stop talking about it: "${FALLBACK_SPOKEN_LINE}". Claude is already working on it in the background and will report back via SYSTEM_EVENT_CLAUDE_COMPLETE when done.`,
+    };
+  } catch (dispatchError) {
+    // Dispatching to Claude itself failed — fall back to the plain error so
+    // the user isn't left with silence and no explanation at all.
+    return {
+      status: "error",
+      error: errorMessage,
+      claude_dispatch_error: dispatchError.message,
+    };
+  }
+}
+
 export async function executeClaudeTool(name, args = {}) {
+  try {
+    const result = await dispatchTool(name, args);
+    if (
+      result &&
+      result.status === "error" &&
+      LOCAL_SCRIPT_TOOL_NAMES.has(name) &&
+      isClaudeEnabled()
+    ) {
+      return await fallbackToClaude(name, args, result.error || "Unknown error");
+    }
+    return result;
+  } catch (error) {
+    if (LOCAL_SCRIPT_TOOL_NAMES.has(name) && isClaudeEnabled()) {
+      return await fallbackToClaude(name, args, error.message);
+    }
+    return { status: "error", error: error.message };
+  }
+}
+
+async function dispatchTool(name, args = {}) {
   switch (name) {
     case "display_hud_message":
       enterHud();

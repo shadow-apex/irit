@@ -316,6 +316,10 @@ type IrisApi = {
   }) => Promise<{ status: string; message?: string; error?: string }>;
   openApp?: (target: string) => Promise<{ success: boolean; error?: string }>;
   getDesktopApps?: () => Promise<Array<{ name: string; target: string }>>;
+  onResetToBoot: (callback: () => void) => () => void;
+  onMusicUpdate: (callback: (payload: any) => void) => () => void;
+  onMusicToggle: (callback: () => void) => () => void;
+  sendMusicControl: (action: string) => void;
 };
 interface Window {
   iris: IrisApi;

@@ -135,22 +135,19 @@ export async function startOmniParserTask(args) {
     // 1. Capture screen
     const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } });
     if (!sources || sources.length === 0) throw new Error("No screen source found");
-    const primarySource = sources[0];
-    const imgBuffer = primarySource.thumbnail.toPNG();
+    const imgBuffer = sources[0].thumbnail.toPNG();
 
-    // 2. Send to OmniParser Local API (with timeout so a stuck OCR/YOLO/Gemini
-    // call can never hang Iris indefinitely)
+    // 2. Send to OmniParser /parse — no prompt means api_server.py skips its
+    // internal vision-AI call (cheaper/faster). Gemini itself will look at the
+    // labeled image and decide which ID to click via click_id instead.
     const formData = new FormData();
     formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
-    formData.append("prompt", task);
+    // Intentionally NOT appending "prompt" — we skip api_server.py's own
+    // Claude/Gemini pick step; Gemini Live will pick the ID from the image.
 
     const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
     emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
 
-    // AUDIT-VIS-01 FIX: timeout thực tế là 90s (đủ cho YOLO+OCR chạy trên máy
-    // yếu) nhưng thông báo lỗi cũ ghi cứng "20s" — sai lệch này từng khiến
-    // việc debug độ trễ dễ hiểu lầm ("tưởng đã set 20s nhưng đợi hoài không
-    // timeout"). Gộp về 1 hằng số duy nhất để không còn lệch nhau lần nữa.
     const PARSE_TIMEOUT_MS = 90000;
     const parseController = new AbortController();
     const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
@@ -172,18 +169,94 @@ export async function startOmniParserTask(args) {
     const result = await response.json();
     if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
 
+    const elementCount = result.coordinates ? Object.keys(result.coordinates).length : 0;
+    emitEvent({ type: "log", level: "info", message: `OmniParser labeled ${elementCount} elements. Streaming image to Gemini...` });
+
+    // 3. Stream the labeled PNG (saved by api_server.py at omni_debug/) to
+    // Gemini Live so it can SEE the numbered elements and pick the right ID.
+    // Lazy import to avoid the circular dependency (same pattern as local-tools.mjs).
+    const labeledImgPath = join(process.cwd(), "reponew", "toado", "omni_debug", "latest_labeled_image.png");
+    let streamedOk = false;
+    try {
+      const fs = await import("node:fs/promises");
+      const { sendFrameToGemini } = await import("./gemini-live.mjs");
+      const imgData = await fs.readFile(labeledImgPath);
+      sendFrameToGemini(imgData.toString("base64"), "image/png");
+      streamedOk = true;
+      emitEvent({ type: "log", level: "info", message: "[OmniParser] Labeled image streamed to Gemini successfully." });
+    } catch (imgErr) {
+      emitEvent({ type: "log", level: "warn", message: `[OmniParser] Could not stream labeled image to Gemini: ${imgErr.message}` });
+    }
+
+    // 4a. Gemini can see the labeled screen → tell it to pick the right ID and
+    // call click_id immediately. Gemini is the decision-maker; no auto-click here.
+    if (streamedOk) {
+      return {
+        status: "success",
+        element_count: elementCount,
+        instructions:
+          `The labeled screenshot has been sent to you as an image frame RIGHT NOW — look at it immediately. ` +
+          `The screen shows ${elementCount} numbered UI elements (boxes with ID numbers on them). ` +
+          `Based on what you see and the user's request "${task}", identify which numbered element best matches, ` +
+          `then IMMEDIATELY call mouse_control with action="click_id" and id= set to that ID number (as a string). ` +
+          `Do NOT ask the user for coordinates or confirmation — just look at the image, pick the ID, and call click_id now.`,
+      };
+    }
+
+    // 4b. Fallback: image streaming failed (e.g. Gemini session not running).
+    // Fall back to the old auto-click path using api_server.py's /click endpoint
+    // so the feature still works in degraded mode.
+    emitEvent({ type: "log", level: "warn", message: "[OmniParser] Falling back to auto-click via /click endpoint." });
     if (!result.target_center) {
-      emitEvent({ type: "log", level: "info", message: `OmniParser could not find the target for: ${task}` });
+      // No prompt was sent so target_center won't be populated — re-call /parse
+      // with the prompt so api_server.py's vision AI can pick the element.
+      const formData2 = new FormData();
+      formData2.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
+      formData2.append("prompt", task);
+      const parseController2 = new AbortController();
+      const parseTimeout2 = setTimeout(() => parseController2.abort(), PARSE_TIMEOUT_MS);
+      let response2;
+      try {
+        response2 = await fetch(omniUrl, { method: "POST", body: formData2, signal: parseController2.signal });
+      } finally {
+        clearTimeout(parseTimeout2);
+      }
+      if (response2 && response2.ok) {
+        const result2 = await response2.json().catch(() => ({}));
+        if (result2.target_center) {
+          const [x, y] = result2.target_center;
+          const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
+          const clickController = new AbortController();
+          const clickTimeout = setTimeout(() => clickController.abort(), 10000);
+          let clickResponse;
+          try {
+            clickResponse = await fetch(clickUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ x_ratio: x, y_ratio: y }),
+              signal: clickController.signal,
+            });
+          } catch (fetchErr) {
+            if (fetchErr.name === "AbortError") throw new Error("Mouse click request timed out after 10s");
+            throw fetchErr;
+          } finally {
+            clearTimeout(clickTimeout);
+          }
+          const clickResult = await clickResponse.json().catch(() => ({}));
+          if (!clickResponse.ok || !clickResult.success) {
+            throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
+          }
+          emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
+          return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+        }
+      }
       return { status: "failed", message: `Could not find target on screen for: ${task}` };
     }
 
-    // 3. Move mouse and click by calling the persistent /click endpoint on the
-    // same Python server (api_server.py) instead of spawning a brand-new Python
-    // interpreter per click. This avoids the ~200-500ms cold-start + re-import
-    // overhead of `spawn("python", ...)` on every single action.
+    // target_center was already in the first response (shouldn't happen since
+    // we didn't send prompt, but handle it defensively).
     const [x, y] = result.target_center;
     emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}` });
-
     const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
     const clickController = new AbortController();
     const clickTimeout = setTimeout(() => clickController.abort(), 10000);
@@ -201,17 +274,10 @@ export async function startOmniParserTask(args) {
     } finally {
       clearTimeout(clickTimeout);
     }
-
-    // IMPORTANT: we only report success after actually confirming the click
-    // worked. Previously this function returned "clicked successfully" the
-    // instant the child process was spawned, without checking whether
-    // mouse_controller.py actually succeeded — a false positive if the click
-    // failed (e.g. missing OS Accessibility permission).
     const clickResult = await clickResponse.json().catch(() => ({}));
     if (!clickResponse.ok || !clickResult.success) {
       throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
     }
-
     emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
     return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
 

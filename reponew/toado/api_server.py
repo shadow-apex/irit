@@ -290,6 +290,29 @@ async def parse_image(file: UploadFile = File(...), prompt: str = Form(None)):
             imgsz=imgsz,
         )
 
+        try:
+            debug_dir = os.path.join(os.path.dirname(__file__), "omni_debug")
+            os.makedirs(debug_dir, exist_ok=True)
+            # Xóa các file cũ
+            for f_name in os.listdir(debug_dir):
+                os.remove(os.path.join(debug_dir, f_name))
+                
+            # Lưu ảnh đã đánh số (dino_labled_img là base64 string)
+            img_data = base64.b64decode(dino_labled_img)
+            with open(os.path.join(debug_dir, "latest_labeled_image.png"), "wb") as f:
+                f.write(img_data)
+                
+            # Lưu danh sách tọa độ với định dạng AI-friendly
+            with open(os.path.join(debug_dir, "latest_coordinates.txt"), "w", encoding="utf-8") as f:
+                f.write("# Định dạng: ID | Tâm (Center_X, Center_Y) | Khung (BBox [x, y, w, h])\n")
+                f.write("# Tất cả giá trị đều là tỉ lệ (0.0 - 1.0) so với kích thước thật của ảnh.\n")
+                for box_id, coords in label_coordinates.items():
+                    x, y, w, h = coords
+                    cx, cy = x + w/2, y + h/2
+                    f.write(f"ID: {box_id} | Center: {cx:.4f}, {cy:.4f} | BBox: [{x:.4f}, {y:.4f}, {w:.4f}, {h:.4f}]\n")
+        except Exception as e:
+            print(f"Warning: Failed to save debug outputs to omni_debug: {e}")
+
         if not prompt or not prompt.strip() or (anthropic_client is None and not GEMINI_VISION_API_KEY):
             return JSONResponse({
                 "labeled_image_base64": dino_labled_img,

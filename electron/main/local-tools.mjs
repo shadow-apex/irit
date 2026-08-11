@@ -276,8 +276,27 @@ export async function systemControlTool(args = {}) {
 // mouse-control skill -> tools/mouse_control.py
 // -----------------------------------------------------------------------
 export async function mouseControlTool(args = {}) {
-  const { action, x, y, x2, y2, button = "left", double = false, amount, click = false, linear = false } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (move, click, drag, scroll, position)." };
+  const {
+    action,
+    x,
+    y,
+    x2,
+    y2,
+    button = "left",
+    double = false,
+    amount,
+    click = false,
+    linear = false,
+    // random_move / draw (no exact coordinates required — see tools/mouse_control.py)
+    shape,
+    size,
+    hold_button,
+    margin,
+    id,
+  } = args;
+  if (!action) {
+    return { status: "error", error: "Missing 'action' (move, click, drag, scroll, position, random_move, draw)." };
+  }
 
   const cliArgs = [action];
   if (action === "move" || action === "click") {
@@ -300,12 +319,49 @@ export async function mouseControlTool(args = {}) {
   } else if (action === "scroll") {
     if (amount === undefined) return { status: "error", error: "'amount' is required for scroll (positive = up, negative = down)." };
     cliArgs.push(String(amount));
+  } else if (action === "random_move") {
+    // Khong bat buoc toa do — di chuyen chuot toi mot diem ngau nhien tren
+    // man hinh. Dung khi nguoi dung noi "di chuyen chuot ngau nhien" ma
+    // khong cho toa do cu the.
+    if (margin !== undefined) cliArgs.push("--margin", String(margin));
+  } else if (action === "draw") {
+    // Khong bat buoc toa do — "ve" mot hinh (square/circle/zigzag) bang
+    // cach keo con tro theo quy dao cua hinh do. x/y (neu co) la TAM hinh;
+    // neu bo qua, tam hinh la vi tri con tro hien tai.
+    if (shape) cliArgs.push("--shape", shape);
+    if (size !== undefined) cliArgs.push("--size", String(size));
+    if (x !== undefined) cliArgs.push("--x", String(x));
+    if (y !== undefined) cliArgs.push("--y", String(y));
+    cliArgs.push("--button", button);
+    if (hold_button === false) cliArgs.push("--no-hold-button");
+  } else if (action === "click_id") {
+    if (id === undefined) return { status: "error", error: "'id' is required for click_id." };
+    cliArgs.push(String(id), "--button", button);
+    if (double) cliArgs.push("--double");
   } else if (action !== "position") {
-    return { status: "error", error: `Unknown action '${action}'. Use: move, click, drag, scroll, position.` };
+    return { status: "error", error: `Unknown action '${action}'. Use: move, click, drag, scroll, position, random_move, draw, click_id.` };
   }
 
-  const result = await runPythonTool("mouse_control.py", cliArgs, { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "mouse_control.py failed." };
+  // draw can take a little longer than a plain move/click for bigger shapes.
+  const timeoutMs = action === "draw" ? 15000 : 10000;
+  const result = await runPythonTool("mouse_control.py", cliArgs, { timeoutMs });
+  if (!result.ok) {
+    // mouse_control.py always prints a JSON line (even on failure, e.g. the
+    // pyautogui fail-safe firing) to STDOUT before exiting non-zero, so
+    // result.error/result.stderr are usually empty here. Prefer the actual
+    // message from that JSON over a generic fallback — it's what gets
+    // surfaced to the user AND what gets forwarded to Claude when this
+    // tool is one of the local-script fallback candidates (see
+    // tool-dispatcher.mjs's fallbackToClaude).
+    let detail;
+    try {
+      const parsed = JSON.parse(result.stdout);
+      detail = parsed && parsed.error;
+    } catch {
+      /* stdout wasn't JSON (e.g. a Python traceback) — fall through */
+    }
+    return { status: "error", error: detail || result.error || result.stderr || "mouse_control.py failed." };
+  }
   try {
     return { status: "success", ...JSON.parse(result.stdout) };
   } catch {
@@ -332,7 +388,21 @@ export async function systemMonitorTool() {
 // normalize into the { status, ... } shape every tool here returns.
 async function _runJsonTool(script, args, opts, failMsg) {
   const result = await runPythonTool(script, args, opts);
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || failMsg };
+  if (!result.ok) {
+    // Most of these scripts print {"success": false, "error": "..."} to
+    // stdout before exiting non-zero, which result.error/result.stderr
+    // don't capture — prefer that real message when present so both the
+    // user and the Claude fallback brief (tool-dispatcher.mjs) get the
+    // actual reason instead of just "<script> failed.".
+    let detail;
+    try {
+      const parsed = JSON.parse(result.stdout);
+      detail = parsed && parsed.error;
+    } catch {
+      /* stdout wasn't JSON — fall through to the generic message */
+    }
+    return { status: "error", error: detail || result.error || result.stderr || failMsg };
+  }
   try {
     return { status: "success", ...JSON.parse(result.stdout) };
   } catch {

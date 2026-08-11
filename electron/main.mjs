@@ -461,12 +461,7 @@ app.whenReady().then(() => {
 
   ipcMain.on("iris:hand-gesture", async (_event, gesture) => {
     try {
-      if (gesture === "pinch") {
-        if (mainWindow) {
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          else mainWindow.minimize();
-        }
-      } else if (gesture === "swipe_left" || gesture === "swipe_right") {
+      if (gesture === "swipe_left" || gesture === "swipe_right") {
         const { keyboard, Key } = await getNutJs();
         if (gesture === "swipe_right") {
           // Swipe Right -> Chuyển ứng dụng (Alt + Tab)
@@ -510,6 +505,31 @@ app.whenReady().then(() => {
             global.isGrabbing = false;
             await mouse.releaseButton(Button.LEFT);
           }
+        } else if (gesture.type === "move") {
+          await mouse.setPosition(new Point(gesture.x, gesture.y));
+        } else if (gesture.type === "window_grab") {
+          const { getActiveWindow } = await getNutJs();
+          try {
+            global.draggedWindow = await getActiveWindow();
+            const region = await global.draggedWindow.region;
+            global.dragStartMouseX = gesture.x;
+            global.dragStartMouseY = gesture.y;
+            global.dragStartWindowX = region.left;
+            global.dragStartWindowY = region.top;
+            await mouse.setPosition(new Point(gesture.x, gesture.y));
+          } catch (e) {
+            console.error("Failed to grab window", e);
+            global.draggedWindow = null;
+          }
+        } else if (gesture.type === "window_move") {
+          if (global.draggedWindow) {
+            const dx = gesture.x - global.dragStartMouseX;
+            const dy = gesture.y - global.dragStartMouseY;
+            await global.draggedWindow.move(new Point(global.dragStartWindowX + dx, global.dragStartWindowY + dy));
+          }
+          await mouse.setPosition(new Point(gesture.x, gesture.y));
+        } else if (gesture.type === "window_release") {
+          global.draggedWindow = null;
         }
       }
     } catch (e) {

@@ -97,7 +97,7 @@ export default function App() {
   const [openNote, setOpenNote] = useState<{ id: string; title: string } | null>(null);
   const [openNoteContent, setOpenNoteContent] = useState<string>("");
   const [fullConfig, setFullConfig] = useState<IrisConfig | null>(null);
-  const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
+  const [setup, setSetup] = useState<{ mode: "boot" | "onboarding" | "settings" } | null>(null);
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -1053,8 +1053,10 @@ export default function App() {
   const lastGestureRef = useRef<{ name: string; time: number } | null>(null);
   // BUG-HAND-04 FIX: Dedicated ref for grab tracking — decoupled from debounce ref.
   const grabStateRef = useRef<boolean>(false);
+  const pinchStateRef = useRef<boolean>(false);
   // BUG-HAND-02 FIX: Track when Thumb_Down gesture started to require 2-second hold.
   const thumbDownStartRef = useRef<number | null>(null);
+  const lastMoveEventRef = useRef<number>(0);
 
   useEffect(() => {
     if (!hasBridge || !handControl) return;
@@ -1073,7 +1075,6 @@ export default function App() {
     };
 
     if (hand.shush) trigger("shush");
-    else if (hand.pinch) trigger("pinch");
     else if (hand.swipe) trigger(`swipe_${hand.swipe}`);
     else if (hand.zoom) trigger(`zoom_${hand.zoom}`);
     else if (hand.gesture === "Thumb_Up") trigger("thumb_up");
@@ -1100,7 +1101,26 @@ export default function App() {
       grabStateRef.current = false;
       window.iris.sendHandGesture({ type: "release" });
     }
-  }, [hasBridge, handControl, hand.shush, hand.pinch, hand.swipe, hand.zoom, hand.grab, hand.gesture, hand.point]);
+
+    if (hand.pinch && hand.screenPoint) {
+      if (!pinchStateRef.current) {
+        pinchStateRef.current = true;
+        window.iris.sendHandGesture({ type: "window_grab", x: hand.screenPoint.x, y: hand.screenPoint.y });
+      }
+    } else if (!hand.pinch && pinchStateRef.current) {
+      pinchStateRef.current = false;
+      window.iris.sendHandGesture({ type: "window_release" });
+    }
+
+    if (hand.screenPoint && (now - lastMoveEventRef.current > 30)) {
+      lastMoveEventRef.current = now;
+      if (pinchStateRef.current) {
+        window.iris.sendHandGesture({ type: "window_move", x: hand.screenPoint.x, y: hand.screenPoint.y });
+      } else {
+        window.iris.sendHandGesture({ type: "move", x: hand.screenPoint.x, y: hand.screenPoint.y });
+      }
+    }
+  }, [hasBridge, handControl, hand.shush, hand.pinch, hand.swipe, hand.zoom, hand.grab, hand.gesture, hand.point, hand.screenPoint]);
 
   // Universal point-and-hold: the finger pointer can activate ANY clickable
   // element — task cards, close buttons, PO answer options, chips. Holding

@@ -7,6 +7,7 @@ export type HandLandmark = { x: number; y: number };
 export type TrackedHand = {
   id: string;
   point: HandPoint;
+  screenPoint: HandPoint;
   landmarks: HandLandmark[];
   gesture: string;
   gestureScore: number;
@@ -21,6 +22,7 @@ export type HandState = {
   active: boolean;
   present: boolean;
   point: HandPoint | null;
+  screenPoint: HandPoint | null;
   gesture: string;
   gestureScore: number;
   pointing: boolean;
@@ -63,6 +65,7 @@ const EMPTY_STATE: HandState = {
   active: false,
   present: false,
   point: null,
+  screenPoint: null,
   gesture: "None",
   gestureScore: 0,
   pointing: false,
@@ -122,6 +125,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     video.muted = true;
 
     let smooth: HandPoint | null = null;
+    let smoothScreen: HandPoint | null = null;
     let primaryId = "";
     let primaryPoint: HandPoint | null = null;
     const stableGestureById = new Map<string, string>();
@@ -225,11 +229,16 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
               x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
               y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
             };
+            const screenPoint = {
+              x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.screen.width),
+              y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.screen.height),
+            };
             const pinchDistance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
             return {
               rawGesture,
               score,
               point,
+              screenPoint,
               landmarks: hand.map((landmark) => ({ x: 1 - landmark.x, y: landmark.y })),
               pinchDistance,
             };
@@ -242,6 +251,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             return {
               id,
               point: hand.point,
+              screenPoint: hand.screenPoint,
               landmarks: hand.landmarks,
               gesture,
               gestureScore: hand.score,
@@ -260,6 +270,12 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
                 y: smooth.y + (primary.point.y - smooth.y) * 0.5,
               }
             : primary.point;
+          smoothScreen = smoothScreen
+            ? {
+                x: smoothScreen.x + (primary.screenPoint.x - smoothScreen.x) * 0.5,
+                y: smoothScreen.y + (primary.screenPoint.y - smoothScreen.y) * 0.5,
+              }
+            : primary.screenPoint;
           primaryPoint = smooth;
 
           const shush =
@@ -315,13 +331,14 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             active: true,
             present: true,
             point: smooth,
+            screenPoint: smoothScreen,
             gesture: primary.gesture,
             gestureScore: primary.gestureScore,
             pointing: primary.pointing,
             openPalm: primary.openPalm,
             fist: primary.fist,
             pinchDistance: primary.pinchDistance,
-            hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
+            hands: hands.map((item) => (item === primary ? { ...item, point: smooth!, screenPoint: smoothScreen! } : item)),
             shush,
             pinch,
             swipe,
@@ -330,6 +347,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
           });
         } else {
           smooth = null;
+          smoothScreen = null;
           primaryId = "";
           primaryPoint = null;
           stableGestureById.clear();
