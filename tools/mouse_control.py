@@ -28,6 +28,7 @@ Vi du dung:
     python tools/mouse_control.py draw --shape circle
     python tools/mouse_control.py draw --shape square --size 300 --x 800 --y 400
     python tools/mouse_control.py draw --shape zigzag --no-hold-button
+    python tools/mouse_control.py draw --shape image --image-path ./logo.png
 
 random_move va draw KHONG can toa do (x, y) bat buoc: dung cho cac lenh nhu
 "di chuyen chuot ngau nhien" hoac "ve hinh vuong/tron/zigzag" ma nguoi dung
@@ -41,6 +42,7 @@ import math
 import time
 import random
 import argparse
+import cv2
 
 # Dam bao in tieng Viet khong bi loi tren Windows console (giong cac tool khac)
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -55,20 +57,21 @@ except ImportError:
     }))
     sys.exit(1)
 else:
+    # Vo hieu hoa FailSafe de tranh loi khi ve hoac di chuyen chuot sat bien
     pyautogui.FAILSAFE = False
     pyautogui.failSafeCheck = lambda *args, **kwargs: None
-# FailSafeException va dung ngay lap tuc — tranh chuot chay loan khong kiem
-# soat duoc. Giu mac dinh True (khac voi sidecar/mouse_controller.py va
-# api_server.py von tat de phuc vu auto-click lien tuc khong nguoi giam sat).
-pyautogui.FAILSAFE = True
-
+    # Xoa bo thoi gian delay 0.1s mac dinh cua pyautogui sau MOI lenh goi,
+    # vi script nay da tu quan ly thoi gian sleep giua cac diem tren quy dao.
+    # Neu khong, ve hinh tron (500 diem) se bi cong don them 50s va bi timeout!
+    pyautogui.PAUSE = 0
 
 def _clamp_to_screen(x, y):
     """Gioi han toa do trong pham vi man hinh de tranh loi khi nguoi dung
     nhap toa do ngoai man hinh (vi du am hoac lon hon do phan giai)."""
     screen_w, screen_h = pyautogui.size()
-    cx = max(0, min(screen_w - 1, x))
-    cy = max(0, min(screen_h - 1, y))
+    # Gioi han o 1 (thay vi 0) de tranh kich hoat pyautogui.FailSafeException o goc (0,0)
+    cx = max(1, min(screen_w - 2, x))
+    cy = max(1, min(screen_h - 2, y))
     return cx, cy
 
 
@@ -213,26 +216,129 @@ def random_move(margin=50, duration=None):
     }))
 
 
-def _shape_points(shape, size):
-    """Tra ve danh sach diem (dx, dy) LECH so voi tam hinh, mo ta quy dao
-    can di chuyen qua de "ve" hinh do. Diem dau tien la diem bat dau (noi se
-    ha chuot xuong neu hold_button=True)."""
+def _extract_paths_from_image(image_path, size):
+    """Doc anh, tim duong vien va tra ve danh sach cac duong."""
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Image not found: {image_path}")
+    
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Could not read image: {image_path}")
+        
+    # Giam nhieu nhe va chuyen thanh anh nhi phan
+    blurred = cv2.GaussianBlur(img, (3, 3), 0)
+    _, binary = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY_INV)
+    
+    # Dung RETR_TREE de lay duoc ca chi tiet ben trong (nhu long den cua mat)
+    # Khong dung Skeletonize nua vi no lam mat di do day/mong cua net ve va lam meo goc canh
+    contours, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+    
+    h, w = binary.shape
+    max_dim = max(w, h)
+    cx, cy = w / 2.0, h / 2.0
+    scale = size / max_dim
+    
+    paths = []
+    for contour in contours:
+        # Bo qua cac hat bui qua nho
+        if cv2.arcLength(contour, True) < 10:
+            continue
+            
+        # Khong dung approxPolyDP nua, lay 100% toa do diem tu anh goc
+        # De net ve hoan toan la duong cong tuyet doi, khong bi gap khuc (polygonal)
+        path = []
+        for point in contour:
+            x, y = point[0]
+            nx = (x - cx) * scale
+            ny = (y - cy) * scale
+            path.append((nx, ny))
+        
+        # Dong kin net ve de hinh tron/mat khong bi ho
+        if path:
+            path.append(path[0])
+            paths.append(path)
+    return paths
+
+def _shape_points(shape, size, image_path=None):
+    """Tra ve danh sach cac duong (moi duong la danh sach cac diem) mo ta quy dao.
+    Diem dau tien cua moi duong la diem bat dau (ha chuot)."""
     half = size / 2.0
+    
+    # Kiem tra thu vien anh image_registry.json
+    registry_path = os.path.join(os.path.dirname(__file__), "img", "image_registry.json")
+    if os.path.exists(registry_path):
+        try:
+            with open(registry_path, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+                if shape in registry:
+                    image_path = registry[shape]
+                    shape = "image"
+        except Exception as e:
+            print(f"[Warn] Could not read image registry: {e}", file=sys.stderr)
+            
+    if shape == "image" and image_path:
+        try:
+            return _extract_paths_from_image(image_path, size)
+        except Exception as e:
+            print(f"[Warn] Image extraction failed: {e}", file=sys.stderr)
+            shape = "square"
+
+    if shape == "gojo":
+        path_file = os.path.join(os.path.dirname(__file__), "gojo_paths.json")
+        try:
+            with open(path_file, "r") as f:
+                lines = json.load(f)
+            return [[(nx * size, ny * size) for nx, ny in line] for line in lines]
+        except Exception:
+            shape = "square"
+
     if shape == "square":
-        return [
+        return [[
             (-half, -half),
             (half, -half),
             (half, half),
             (-half, half),
             (-half, -half),
-        ]
+        ]]
     if shape == "circle":
         n = 48
-        return [
+        return [[
             (half * math.cos(2 * math.pi * i / n), half * math.sin(2 * math.pi * i / n))
             for i in range(n + 1)
-        ]
-    # zigzag (mac dinh): duong rang cua ngang qua tam hinh
+        ]]
+    if shape == "triangle":
+        return [[
+            (0, -half),
+            (half, half),
+            (-half, half),
+            (0, -half),
+        ]]
+    if shape == "star":
+        pts = []
+        for i in range(11):
+            radius = half if i % 2 == 0 else half * 0.382
+            angle = i * math.pi / 5 - math.pi / 2
+            pts.append((radius * math.cos(angle), radius * math.sin(angle)))
+        return [pts]
+    if shape == "spiral":
+        pts = []
+        for i in range(100):
+            theta = (i / 99.0) * (3 * 2 * math.pi)
+            radius = half * (i / 99.0)
+            pts.append((radius * math.cos(theta), radius * math.sin(theta)))
+        return [pts]
+    if shape == "heart":
+        pts = []
+        for i in range(61):
+            t = i * 2 * math.pi / 60
+            x = 16 * (math.sin(t) ** 3)
+            y = 13 * math.cos(t) - 5 * math.cos(2*t) - 2 * math.cos(3*t) - math.cos(4*t)
+            px = x * (half / 16.0)
+            py = -y * (half / 17.0)
+            pts.append((px, py))
+        return [pts]
+        
+    # zigzag (mac dinh)
     n_segments = 6
     step = size / n_segments
     points = [(-half, 0.0)]
@@ -242,7 +348,7 @@ def _shape_points(shape, size):
         y = -half / 2 if up else half / 2
         points.append((x, y))
         up = not up
-    return points
+    return [points]
 
 
 def _linear_path(p1, p2, steps=12):
@@ -253,14 +359,11 @@ def _linear_path(p1, p2, steps=12):
     return [(x1 + (x2 - x1) * t / steps, y1 + (y2 - y1) * t / steps) for t in range(1, steps + 1)]
 
 
-def draw(shape="zigzag", size=200, hold_button=True, button="left", x=None, y=None, duration=None):
-    """"Ve" mot hinh (square/circle/zigzag) bang cach di chuyen con tro theo
-    quy dao cua hinh do, giu chuot trong luc di chuyen (giong ve trong
-    Paint) neu hold_button=True. Neu khong truyen x/y, tam hinh se la VI TRI
-    HIEN TAI cua con tro — vi vay nguoi dung khong bat buoc phai cho toa do,
-    chi can noi 've hinh vuong' / 've hinh tron' / 've ngoang ngoeo'."""
-    if shape not in ("square", "circle", "zigzag"):
-        shape = "zigzag"
+def draw(shape="zigzag", size=200, hold_button=True, button="left", x=None, y=None, duration=None, image_path=None):
+    """"Ve" mot hinh bang cach di chuyen con tro theo quy dao cua hinh do."""
+    print("Vui long chuyen sang cua so Paint! Chuong trinh se bat dau ve sau 3 giay...", flush=True)
+    time.sleep(3)
+    
     size = max(20, min(int(size), 2000))
 
     if x is None or y is None:
@@ -268,32 +371,92 @@ def draw(shape="zigzag", size=200, hold_button=True, button="left", x=None, y=No
     else:
         cx, cy = _clamp_to_screen(x, y)
 
-    rel_points = _shape_points(shape, size)
-    abs_points = [_clamp_to_screen(cx + dx, cy + dy) for dx, dy in rel_points]
+    rel_lines = _shape_points(shape, size, image_path)
+    abs_lines = []
+    for line in rel_lines:
+        abs_lines.append([_clamp_to_screen(cx + dx, cy + dy) for dx, dy in line])
 
-    # Di chuyen mem toi diem dau tien truoc, CHUA giu chuot — giong nguoi
-    # that dua chuot toi vi tri bat dau truoc khi bat dau ve.
-    _smooth_move_to(*abs_points[0], duration=0.4)
+    total_segments = sum(max(1, len(line) - 1) for line in abs_lines)
+    total_duration = duration if duration is not None else max(0.8, size / 250.0)
+    if shape in ("gojo", "image"):
+        total_duration = max(10.0, total_duration)  # Tang thoi gian de ve cham va muot hon
+        
+    seg_duration = total_duration / max(1, total_segments)
 
-    if hold_button:
-        time.sleep(random.uniform(0.05, 0.15))
-        pyautogui.mouseDown(button=button)
+    # Thuat toan Toi uu Hoa Duong Di (Greedy TSP)
+    # Sap xep lai thu tu cac net ve de con chuot uu tien ve net gan nhat,
+    # tranh viec nhay loan xa tu dau den chan roi quay lai.
+    if shape in ("gojo", "image") and abs_lines:
+        optimized_lines = []
+        current_pt = pyautogui.position()
+        unvisited = abs_lines.copy()
+        while unvisited:
+            best_idx = 0
+            best_dist = float('inf')
+            reverse = False
+            for i, line in enumerate(unvisited):
+                if not line: continue
+                d_start = math.hypot(line[0][0] - current_pt[0], line[0][1] - current_pt[1])
+                d_end = math.hypot(line[-1][0] - current_pt[0], line[-1][1] - current_pt[1])
+                
+                if d_start < best_dist:
+                    best_dist = d_start
+                    best_idx = i
+                    reverse = False
+                if d_end < best_dist:
+                    best_dist = d_end
+                    best_idx = i
+                    reverse = True
+            
+            chosen_line = unvisited.pop(best_idx)
+            if reverse:
+                chosen_line.reverse()
+            optimized_lines.append(chosen_line)
+            current_pt = chosen_line[-1] if chosen_line else current_pt
+        abs_lines = optimized_lines
 
-    try:
-        total_duration = duration if duration is not None else max(0.8, size / 250.0)
-        n_segments = max(1, len(abs_points) - 1)
-        seg_duration = total_duration / n_segments
-        for i in range(n_segments):
-            path = _linear_path(abs_points[i], abs_points[i + 1], steps=12)
-            step_delay = seg_duration / len(path) if path else 0
-            for px, py in path:
-                pyautogui.moveTo(px, py, duration=0)
-                if step_delay:
-                    time.sleep(step_delay)
-    finally:
+    for line_idx, line in enumerate(abs_lines):
+        if not line: continue
+        
+        if line_idx == 0:
+            _smooth_move_to(*line[0], duration=0.4)
+        else:
+            # Tang thoi gian move giua cac net len 0.1 de Paint chac chan da ghi nhan viec nhac but
+            _smooth_move_to(*line[0], duration=0.1)
+
         if hold_button:
-            pyautogui.mouseUp(button=button)
+            # Giam do tre khi ha but de ve nhanh hon giua cac net
+            time.sleep(random.uniform(0.005, 0.01))
+            pyautogui.mouseDown(button=button)
 
+        try:
+            n_segments = max(1, len(line) - 1)
+            for i in range(n_segments):
+                p1 = line[i]
+                p2 = line[i + 1]
+                if shape in ("gojo", "image"):
+                    # Tinh khoang cach thuc te giua 2 diem
+                    dist = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+                    # Moi buoc ve chi chia nho ra neu khoang cach dai (> 4 pixels)
+                    # Dieu nay giup chuot khong bi giat cuc (jitter) khi ve cac diem o qua sat nhau
+                    steps = max(1, int(dist / 4.0))
+                else:
+                    steps = 12
+                    
+                path = _linear_path(p1, p2, steps=steps)
+                step_delay = seg_duration / max(1, len(path))
+                for px, py in path:
+                    pyautogui.moveTo(px, py, duration=0)
+                    if step_delay > 0.001:
+                        time.sleep(step_delay)
+        finally:
+            if hold_button:
+                # Phai cho chuot nhac len hoan toan de khong bi ve duong thang noi cac net
+                pyautogui.mouseUp(button=button)
+                time.sleep(0.1)
+                
+    # Nhac han chuot ra khoi vung ve khi hoan thanh
+    pyautogui.mouseUp(button=button)
     print(json.dumps({
         "success": True,
         "action": "draw",
@@ -403,8 +566,8 @@ if __name__ == "__main__":
     p_random.add_argument("--margin", type=int, default=50, help="Khoang cach toi thieu tinh tu vien man hinh (px). Mac dinh 50.")
     p_random.add_argument("--duration", type=float, default=None)
 
-    p_draw = sub.add_parser("draw", help="Ve mot hinh (square/circle/zigzag) bang cach di chuyen/keo chuot theo quy dao (khong can toa do)")
-    p_draw.add_argument("--shape", choices=["square", "circle", "zigzag"], default="zigzag", help="Hinh can ve. Mac dinh zigzag.")
+    p_draw = sub.add_parser("draw", help="Ve mot hinh (square/circle/zigzag/triangle/star/spiral/heart/image) bang cach di chuyen/keo chuot theo quy dao")
+    p_draw.add_argument("--shape", default="zigzag", help="Hinh can ve (hoac ten hinh trong image_registry.json). Mac dinh zigzag.")
     p_draw.add_argument("--size", type=int, default=200, help="Kich thuoc (px) cua hinh. Mac dinh 200.")
     p_draw.add_argument("--x", type=int, default=None, help="Tam hinh X. Neu bo qua, dung vi tri con tro hien tai.")
     p_draw.add_argument("--y", type=int, default=None, help="Tam hinh Y. Neu bo qua, dung vi tri con tro hien tai.")
@@ -412,6 +575,7 @@ if __name__ == "__main__":
     p_draw.add_argument("--duration", type=float, default=None, help="Tong thoi gian ve (giay). Mac dinh tu tinh theo size.")
     p_draw.add_argument("--hold-button", dest="hold_button", action="store_true", default=True, help="Giu chuot trong luc ve (mac dinh, giong ve trong Paint).")
     p_draw.add_argument("--no-hold-button", dest="hold_button", action="store_false", help="Chi DI CHUYEN theo quy dao hinh, khong giu chuot (khong 've' len bat ky dau, chi de lam chuyen dong).")
+    p_draw.add_argument("--image-path", type=str, default=None, help="Path to image file if shape is 'image'")
 
     p_click_id = sub.add_parser("click_id", help="Click vao 1 thanh phan bang ID tu OmniParser (khong can toa do)")
     p_click_id.add_argument("id", type=str, help="ID can click (vd: 5)")
@@ -435,7 +599,7 @@ if __name__ == "__main__":
         elif args.command == "random_move":
             random_move(args.margin, args.duration)
         elif args.command == "draw":
-            draw(args.shape, args.size, args.hold_button, args.button, args.x, args.y, args.duration)
+            draw(args.shape, args.size, args.hold_button, args.button, args.x, args.y, args.duration, args.image_path)
         elif args.command == "click_id":
             click_id(args.id, args.button, args.double, args.duration)
     except pyautogui.FailSafeException:

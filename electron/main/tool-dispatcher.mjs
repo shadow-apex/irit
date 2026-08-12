@@ -71,20 +71,13 @@ import {
   moveWindowMagicTool,
   sendDesktopNotificationTool,
   systemControlTool,
-  systemMonitorTool,
   mouseControlTool,
-  activeWindowInfoTool,
   ocrRegionTool,
-  colorPickerTool,
-  idleTimeTool,
   clipboardHistoryTool,
   quickReminderTool,
-  ttsSpeakTool,
   wifiManagerTool,
   multiMonitorInfoTool,
   processManagerTool,
-  powerPlanTool,
-  focusAssistTool,
   lockScreenTool,
   viewImageTool,
   viewVideoTool,
@@ -118,20 +111,13 @@ const LOCAL_SCRIPT_FILENAMES = {
   move_window_magic: "magic_move.py",
   send_desktop_notification: "notifier.py",
   system_control: "sys_control.py",
-  system_monitor: "sys_monitor.py",
   mouse_control: "mouse_control.py",
-  active_window_info: "active_window_info.py",
   ocr_region: "ocr_region.py",
-  color_picker: "color_picker.py",
-  idle_time: "idle_time.py",
   clipboard_history: "clipboard_history.py",
   quick_reminder: "quick_reminder.py",
-  tts_speak: "tts_speak.py",
   wifi_manager: "wifi_manager.py",
   multi_monitor_info: "multi_monitor_info.py",
   process_manager: "process_manager.py",
-  power_plan: "power_plan.py",
-  focus_assist: "focus_assist.py",
   lock_screen: "lock_screen.py",
   view_image: "image_viewer.py",
   view_video: "video_player.py",
@@ -329,34 +315,20 @@ async function dispatchTool(name, args = {}) {
       return await sendDesktopNotificationTool(args);
     case "system_control":
       return await systemControlTool(args);
-    case "system_monitor":
-      return await systemMonitorTool();
     case "mouse_control":
       return await mouseControlTool(args);
-    case "active_window_info":
-      return await activeWindowInfoTool();
     case "ocr_region":
       return await ocrRegionTool(args);
-    case "color_picker":
-      return await colorPickerTool(args);
-    case "idle_time":
-      return await idleTimeTool();
     case "clipboard_history":
       return await clipboardHistoryTool(args);
     case "quick_reminder":
       return await quickReminderTool(args);
-    case "tts_speak":
-      return await ttsSpeakTool(args);
     case "wifi_manager":
       return await wifiManagerTool(args);
     case "multi_monitor_info":
       return await multiMonitorInfoTool();
     case "process_manager":
       return await processManagerTool(args);
-    case "power_plan":
-      return await powerPlanTool(args);
-    case "focus_assist":
-      return await focusAssistTool();
     case "lock_screen":
       return await lockScreenTool();
     case "view_image":

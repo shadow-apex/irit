@@ -19,7 +19,7 @@ def play_video(action):
     files = get_video_files()
     if not files:
         print(json.dumps({"success": False, "error": "Không tìm thấy video nào."}))
-        return
+        sys.exit(1)
 
     current_index = 0
     if os.path.exists(STATE_FILE):
@@ -51,6 +51,7 @@ def play_video(action):
         print(json.dumps({"success": True, "message": f"Đã mở video: {os.path.basename(target_file)}"}))
     except Exception as e:
         print(json.dumps({"success": False, "error": f"Không thể mở video: {str(e)}"}))
+        sys.exit(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -174,13 +174,28 @@ async def type_keyboard(req: TypeRequest):
         if req.text:
             import pyperclip
             original_clipboard = pyperclip.paste()
-            pyperclip.copy(req.text)
+            # Đảm bảo dùng đúng định dạng xuống dòng của Windows (\r\n) để tránh lỗi đè dòng
+            safe_text = req.text.replace('\r\n', '\n').replace('\n', '\r\n')
+            pyperclip.copy(safe_text)
             pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.05)
+            # Doi 0.5s (thay vi 0.05s) de cac app nang tren Windows kip doc
+            # clipboard truoc khi ta restore lai clipboard cu. Neu delay qua
+            # ngan, app se paste ra noi dung cu hoac khong paste gi ca!
+            time.sleep(0.5)
             pyperclip.copy(original_clipboard)
         if req.key:
             if '+' in req.key:
                 pyautogui.hotkey(*req.key.split('+'))
+            elif len(req.key) > 1 and req.key.lower() not in pyautogui.KEYBOARD_KEYS:
+                # Gemini gửi nhầm chữ dài vào trường 'key' thay vì 'text'.
+                # Gõ từng phím sẽ bị lỗi bộ gõ tiếng Việt (Unikey), nên phải ép dùng clipboard.
+                import pyperclip
+                original_clipboard = pyperclip.paste()
+                safe_text = req.key.replace('\r\n', '\n').replace('\n', '\r\n')
+                pyperclip.copy(safe_text)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.5)
+                pyperclip.copy(original_clipboard)
             else:
                 pyautogui.press(req.key)
         return {"success": True}

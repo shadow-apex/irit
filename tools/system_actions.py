@@ -99,10 +99,13 @@ def _enum_windows(target, pids, on_match, require_visible=True):
         if require_visible and not IsWindowVisible(hwnd):
             return True
 
+        length = GetWindowTextLength(hwnd)
+        if length == 0:
+            return True  # Bo qua cac cua so shadow/helper khong co tieu de de tranh loi an mat ung dung
+
         pid = wintypes.DWORD(0)
         GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
 
-        length = GetWindowTextLength(hwnd)
         buff = ctypes.create_unicode_buffer(length + 1)
         GetWindowText(hwnd, buff, length + 1)
         title = buff.value.lower()
@@ -145,13 +148,13 @@ def _get_pids_by_name(target):
 
 
 def minimize_app(target):
-    """Thu nho cua so xuong taskbar (SW_SHOWMINIMIZED) — van thay icon o
+    """Thu nho cua so xuong taskbar (SW_MINIMIZE) — van thay icon o
     taskbar, KHAC voi hide_app() (an hoan toan, khong con icon nao ca)."""
     target = target.lower().replace(".exe", "")
     ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
-    SW_SHOWMINIMIZED = 2
+    SW_MINIMIZE = 6
     pids = _get_pids_by_name(target)
-    count = _enum_windows(target, pids, lambda hwnd: ShowWindowAsync(hwnd, SW_SHOWMINIMIZED), require_visible=True)
+    count = _enum_windows(target, pids, lambda hwnd: ShowWindowAsync(hwnd, SW_MINIMIZE), require_visible=True)
     if count:
         return {"success": True, "message": f"Da thu nho {count} cua so cua '{target}' xuong taskbar."}
     return {"success": False, "error": f"Khong tim thay cua so nao dang hien thi cua '{target}'."}
@@ -235,23 +238,56 @@ def write_note(text, mode="a"):
 
     if existing_hwnd[0]:
         hwnd = existing_hwnd[0]
+        
+        import pyautogui
+        import pyperclip
+        
+        ShowWindowAsync(hwnd, SW_RESTORE)
+        SetForegroundWindow(hwnd)
+        time.sleep(0.5)
+
+        # Click vao giua cua so de focus text
+        rect = wintypes.RECT()
+        GetWindowRect = ctypes.windll.user32.GetWindowRect
+        if GetWindowRect(hwnd, ctypes.byref(rect)):
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            pyautogui.click(cx, cy)
+            time.sleep(0.2)
+
+        # Lay do dai van ban hien tai de biet can nhan bao nhieu lan Backspace
+        WM_GETTEXTLENGTH = 0x000E
+        text_length = 50
         hEdit = FindWindowExW(hwnd, None, "Edit", None)
         if not hEdit:
             hEdit = FindWindowExW(hwnd, None, "RichEditD2DPT", None)
-
         if hEdit:
-            with open(temp_path, "r", encoding="utf-8") as f:
-                full_text = f.read()
-            SendMessageW(hEdit, WM_SETTEXT, 0, full_text)
-            SendMessageW(hEdit, EM_SETSEL, len(full_text), len(full_text))
-            SendMessageW(hEdit, EM_SCROLLCARET, 0, 0)
-            ShowWindowAsync(hwnd, SW_RESTORE)
-            SetForegroundWindow(hwnd)
-            return {"success": True, "message": "Da cap nhat ghi chu vao cua so Notepad dang mo."}
+            text_length = SendMessageW(hEdit, WM_GETTEXTLENGTH, 0, 0)
 
-        # Khong nhan dien duoc control text -> fallback: dong roi mo lai.
-        PostMessage(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-        time.sleep(0.5)
+        with open(temp_path, "r", encoding="utf-8") as f:
+            full_text = f.read()
+
+        if mode == "w":
+            # Hieu ung xoa lùi tung chu giong y nhu nguoi that
+            pyautogui.hotkey("ctrl", "end")
+            time.sleep(0.2)
+            if text_length > 0:
+                pyautogui.press("backspace", presses=text_length, interval=0.01)
+            else:
+                # Fallback neu khong lay duoc length
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.press("backspace")
+            time.sleep(0.2)
+        else:
+            pyautogui.hotkey("ctrl", "end")
+            time.sleep(0.2)
+            pyautogui.press("enter")
+        
+        # Paste noi dung moi
+        pyperclip.copy(full_text)
+        pyautogui.hotkey("ctrl", "v")
+
+        return {"success": True, "message": "Da ghi chu vao Notepad (hieu ung xoa tung chu)."}
 
     try:
         subprocess.Popen(["notepad.exe", temp_path])

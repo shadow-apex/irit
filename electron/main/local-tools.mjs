@@ -29,7 +29,7 @@ const PYTHON_BIN = process.env.IRIS_PYTHON_BIN || "python";
  * Resolves (never rejects) with { ok, code, stdout, stderr, error? } so
  * callers can always turn the result into a clean tool response for Gemini.
  */
-function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false } = {}) {
+function runPythonTool(script, args = [], { timeoutMs = 60000, detach = false } = {}) {
   const pyPath = join(TOOLS_DIR, script);
 
   if (detach) {
@@ -91,8 +91,10 @@ function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false } 
 // -----------------------------------------------------------------------
 // ai-vision skill -> tools/ai_vision.py
 // -----------------------------------------------------------------------
+const AI_VISION_IMG_DIR = join(TOOLS_DIR, "img");
+
 export async function takeAiScreenshotTool() {
-  const result = await runPythonTool("ai_vision.py", ["--outdir", TOOLS_DIR], { timeoutMs: 15000 });
+  const result = await runPythonTool("ai_vision.py", ["--outdir", AI_VISION_IMG_DIR], { timeoutMs: 60000 });
   if (!result.ok) {
     return { status: "error", error: result.error || result.stderr || "ai_vision.py failed." };
   }
@@ -138,7 +140,7 @@ export async function takeAiScreenshotTool() {
 // clipboard skill -> tools/clipboard_manager.py
 // -----------------------------------------------------------------------
 export async function readClipboardTool() {
-  const result = await runPythonTool("clipboard_manager.py", ["--action", "read"], { timeoutMs: 10000 });
+  const result = await runPythonTool("clipboard_manager.py", ["--action", "read"], { timeoutMs: 60000 });
   if (!result.ok) return { status: "error", error: result.error || result.stderr || "clipboard_manager.py failed." };
   return { status: "success", clipboard_text: result.stdout };
 }
@@ -146,7 +148,7 @@ export async function readClipboardTool() {
 export async function writeClipboardTool(args = {}) {
   const { text } = args;
   if (!text) return { status: "error", error: "Missing 'text' to write to clipboard." };
-  const result = await runPythonTool("clipboard_manager.py", ["--action", "write", "--text", text], { timeoutMs: 10000 });
+  const result = await runPythonTool("clipboard_manager.py", ["--action", "write", "--text", text], { timeoutMs: 60000 });
   if (!result.ok) return { status: "error", error: result.error || result.stderr || "clipboard_manager.py failed." };
   return { status: "success", message: result.stdout || `Copied ${text.length} characters to the clipboard.` };
 }
@@ -171,7 +173,7 @@ export async function moveWindowMagicTool(args = {}) {
   if (mode === "demo") {
     const demoArgs = ["--demo"];
     if (name) demoArgs.push("--name", name);
-    const result = await runPythonTool("magic_move.py", demoArgs, { timeoutMs: 15000 });
+    const result = await runPythonTool("magic_move.py", demoArgs, { timeoutMs: 60000 });
     return _resultFromMagicMove(result, "magic_move.py --demo failed.");
   }
 
@@ -180,13 +182,13 @@ export async function moveWindowMagicTool(args = {}) {
     // CLI-only per magic_move.py's docstring, but nothing actually blocked
     // it; this branch was just missing. Needs longer than the plain demo
     // since it spawns and waits on 6 real processes.
-    const result = await runPythonTool("magic_move.py", ["--demo2"], { timeoutMs: 25000 });
+    const result = await runPythonTool("magic_move.py", ["--demo2"], { timeoutMs: 60000 });
     return _resultFromMagicMove(result, "magic_move.py --demo2 failed.");
   }
 
   // mode === "name"
   if (!name) return { status: "error", error: "Missing 'name' — which window should be moved?" };
-  const result = await runPythonTool("magic_move.py", ["--name", name, "-x", String(x), "-y", String(y)], { timeoutMs: 10000 });
+  const result = await runPythonTool("magic_move.py", ["--name", name, "-x", String(x), "-y", String(y)], { timeoutMs: 60000 });
   return _resultFromMagicMove(result, "magic_move.py --name failed.");
 }
 
@@ -209,7 +211,7 @@ function _resultFromMagicMove(result, failMsg) {
 export async function sendDesktopNotificationTool(args = {}) {
   const { title, message } = args;
   if (!title || !message) return { status: "error", error: "Missing 'title' or 'message' for the notification." };
-  const result = await runPythonTool("notifier.py", ["--title", title, "--message", message], { timeoutMs: 10000 });
+  const result = await runPythonTool("notifier.py", ["--title", title, "--message", message], { timeoutMs: 60000 });
   if (!result.ok) return { status: "error", error: result.error || result.stderr || "notifier.py failed." };
   return { status: "success", message: result.stdout || `Notification sent: ${title}` };
 }
@@ -253,7 +255,7 @@ export async function systemControlTool(args = {}) {
   // volume worked but wifi didn't), so we must still parse stdout as JSON
   // in the failure case instead of discarding it — otherwise a partial
   // success would be reported as a total, undifferentiated error.
-  const result = await runPythonTool("sys_control.py", cliArgs, { timeoutMs: 15000 });
+  const result = await runPythonTool("sys_control.py", cliArgs, { timeoutMs: 60000 });
   const needsUac = wifi || bluetooth || camera;
   let parsed = null;
   try { parsed = JSON.parse(result.stdout); } catch { /* not JSON — fall through */ }
@@ -342,8 +344,8 @@ export async function mouseControlTool(args = {}) {
     return { status: "error", error: `Unknown action '${action}'. Use: move, click, drag, scroll, position, random_move, draw, click_id.` };
   }
 
-  // draw can take a little longer than a plain move/click for bigger shapes.
-  const timeoutMs = action === "draw" ? 15000 : 10000;
+  // draw can take a lot longer for complex shapes (like goku/gojo/image).
+  const timeoutMs = 60000;
   const result = await runPythonTool("mouse_control.py", cliArgs, { timeoutMs });
   if (!result.ok) {
     // mouse_control.py always prints a JSON line (even on failure, e.g. the
@@ -369,20 +371,7 @@ export async function mouseControlTool(args = {}) {
   }
 }
 
-// -----------------------------------------------------------------------
-// sys-monitor skill -> tools/sys_monitor.py
-// -----------------------------------------------------------------------
-export async function systemMonitorTool() {
-  // The script itself samples CPU over 1s (psutil.cpu_percent(interval=1)).
-  const result = await runPythonTool("sys_monitor.py", [], { timeoutMs: 15000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "sys_monitor.py failed." };
-  try {
-    const health = JSON.parse(result.stdout);
-    return { status: "success", health, instructions: "Summarize this system health data for the user in plain, friendly language. Warn them if RAM, disk, or CPU is over ~90%, or battery is low and unplugged." };
-  } catch {
-    return { status: "success", raw_output: result.stdout };
-  }
-}
+
 
 // Small shared helper: run a script, parse its one-line JSON stdout, and
 // normalize into the { status, ... } shape every tool here returns.
@@ -410,12 +399,7 @@ async function _runJsonTool(script, args, opts, failMsg) {
   }
 }
 
-// -----------------------------------------------------------------------
-// context skill -> tools/active_window_info.py
-// -----------------------------------------------------------------------
-export async function activeWindowInfoTool() {
-  return _runJsonTool("active_window_info.py", [], { timeoutMs: 8000 }, "active_window_info.py failed.");
-}
+
 
 // -----------------------------------------------------------------------
 // context skill -> tools/ocr_region.py
@@ -427,24 +411,12 @@ export async function ocrRegionTool(args = {}) {
     cliArgs.push("--region", String(left), String(top), String(width), String(height));
   }
   cliArgs.push("--lang", lang);
-  return _runJsonTool("ocr_region.py", cliArgs, { timeoutMs: 15000 }, "ocr_region.py failed.");
+  return _runJsonTool("ocr_region.py", cliArgs, { timeoutMs: 60000 }, "ocr_region.py failed.");
 }
 
-// -----------------------------------------------------------------------
-// context skill -> tools/color_picker.py
-// -----------------------------------------------------------------------
-export async function colorPickerTool(args = {}) {
-  const { x, y } = args;
-  const cliArgs = x !== undefined && y !== undefined ? [String(x), String(y)] : [];
-  return _runJsonTool("color_picker.py", cliArgs, { timeoutMs: 8000 }, "color_picker.py failed.");
-}
 
-// -----------------------------------------------------------------------
-// context skill -> tools/idle_time.py
-// -----------------------------------------------------------------------
-export async function idleTimeTool() {
-  return _runJsonTool("idle_time.py", [], { timeoutMs: 8000 }, "idle_time.py failed.");
-}
+
+
 
 // -----------------------------------------------------------------------
 // office skill -> tools/clipboard_history.py
@@ -457,13 +429,13 @@ export async function clipboardHistoryTool(args = {}) {
     const result = await runPythonTool("clipboard_history.py", ["watch"], { detach: true });
     return { status: result.ok ? "success" : "error", error: result.ok ? undefined : result.error, message: "Started watching the clipboard in the background." };
   }
-  if (action === "stop") return _runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 8000 }, "clipboard_history.py stop failed.");
-  if (action === "list") return _runJsonTool("clipboard_history.py", ["list", "--limit", String(limit)], { timeoutMs: 8000 }, "clipboard_history.py list failed.");
+  if (action === "stop") return _runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 60000 }, "clipboard_history.py stop failed.");
+  if (action === "list") return _runJsonTool("clipboard_history.py", ["list", "--limit", String(limit)], { timeoutMs: 60000 }, "clipboard_history.py list failed.");
   if (action === "use") {
     if (index === undefined) return { status: "error", error: "'index' is required for action 'use'." };
-    return _runJsonTool("clipboard_history.py", ["use", String(index)], { timeoutMs: 8000 }, "clipboard_history.py use failed.");
+    return _runJsonTool("clipboard_history.py", ["use", String(index)], { timeoutMs: 60000 }, "clipboard_history.py use failed.");
   }
-  if (action === "clear") return _runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 8000 }, "clipboard_history.py clear failed.");
+  if (action === "clear") return _runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 60000 }, "clipboard_history.py clear failed.");
   return { status: "error", error: `Unknown action '${action}'. Use: watch, stop, list, use, clear.` };
 }
 
@@ -479,37 +451,19 @@ export async function quickReminderTool(args = {}) {
     return _runJsonTool(
       "quick_reminder.py",
       ["schedule", "--minutes", String(minutes), "--title", title, "--message", message],
-      { timeoutMs: 8000 },
+      { timeoutMs: 60000 },
       "quick_reminder.py schedule failed."
     );
   }
-  if (action === "list") return _runJsonTool("quick_reminder.py", ["list"], { timeoutMs: 8000 }, "quick_reminder.py list failed.");
+  if (action === "list") return _runJsonTool("quick_reminder.py", ["list"], { timeoutMs: 60000 }, "quick_reminder.py list failed.");
   if (action === "cancel") {
     if (!id) return { status: "error", error: "'id' is required for action 'cancel'." };
-    return _runJsonTool("quick_reminder.py", ["cancel", id], { timeoutMs: 8000 }, "quick_reminder.py cancel failed.");
+    return _runJsonTool("quick_reminder.py", ["cancel", id], { timeoutMs: 60000 }, "quick_reminder.py cancel failed.");
   }
   return { status: "error", error: `Unknown action '${action}'. Use: schedule, list, cancel.` };
 }
 
-// -----------------------------------------------------------------------
-// office skill -> tools/tts_speak.py
-// -----------------------------------------------------------------------
-export async function ttsSpeakTool(args = {}) {
-  const { text, rate, volume, voiceId, listVoices = false } = args;
-  const cliArgs = [];
-  if (listVoices) {
-    cliArgs.push("--list-voices");
-  } else {
-    if (!text) return { status: "error", error: "Missing 'text' to speak (or set listVoices=true)." };
-    cliArgs.push(text);
-    if (rate !== undefined) cliArgs.push("--rate", String(rate));
-    if (volume !== undefined) cliArgs.push("--volume", String(volume));
-    if (voiceId) cliArgs.push("--voice-id", voiceId);
-  }
-  // Speaking blocks until the audio finishes playing — give long text room to run.
-  const estMs = listVoices ? 8000 : Math.max(10000, (text?.length || 0) * 120);
-  return _runJsonTool("tts_speak.py", cliArgs, { timeoutMs: estMs }, "tts_speak.py failed.");
-}
+
 
 // -----------------------------------------------------------------------
 // network skill -> tools/wifi_manager.py
@@ -519,10 +473,10 @@ export async function wifiManagerTool(args = {}) {
   if (!action) return { status: "error", error: "Missing 'action' (list, profiles, connect, disconnect, status)." };
   if (action === "connect") {
     if (!ssid) return { status: "error", error: "'ssid' is required for action 'connect'." };
-    return _runJsonTool("wifi_manager.py", ["connect", ssid], { timeoutMs: 15000 }, "wifi_manager.py connect failed.");
+    return _runJsonTool("wifi_manager.py", ["connect", ssid], { timeoutMs: 60000 }, "wifi_manager.py connect failed.");
   }
   if (["list", "profiles", "disconnect", "status"].includes(action)) {
-    return _runJsonTool("wifi_manager.py", [action], { timeoutMs: 15000 }, `wifi_manager.py ${action} failed.`);
+    return _runJsonTool("wifi_manager.py", [action], { timeoutMs: 60000 }, `wifi_manager.py ${action} failed.`);
   }
   return { status: "error", error: `Unknown action '${action}'. Use: list, profiles, connect, disconnect, status.` };
 }
@@ -531,7 +485,7 @@ export async function wifiManagerTool(args = {}) {
 // network skill -> tools/multi_monitor_info.py
 // -----------------------------------------------------------------------
 export async function multiMonitorInfoTool() {
-  return _runJsonTool("multi_monitor_info.py", [], { timeoutMs: 8000 }, "multi_monitor_info.py failed.");
+  return _runJsonTool("multi_monitor_info.py", [], { timeoutMs: 60000 }, "multi_monitor_info.py failed.");
 }
 
 // -----------------------------------------------------------------------
@@ -541,42 +495,24 @@ export async function processManagerTool(args = {}) {
   const { action, sort = "ram", top = 10, name } = args;
   if (!action) return { status: "error", error: "Missing 'action' (list, kill)." };
   if (action === "list") {
-    return _runJsonTool("process_manager.py", ["list", "--sort", sort, "--top", String(top)], { timeoutMs: 10000 }, "process_manager.py list failed.");
+    return _runJsonTool("process_manager.py", ["list", "--sort", sort, "--top", String(top)], { timeoutMs: 60000 }, "process_manager.py list failed.");
   }
   if (action === "kill") {
     if (!name) return { status: "error", error: "'name' is required for action 'kill' (e.g. 'chrome.exe')." };
-    return _runJsonTool("process_manager.py", ["kill", name], { timeoutMs: 10000 }, "process_manager.py kill failed.");
+    return _runJsonTool("process_manager.py", ["kill", name], { timeoutMs: 60000 }, "process_manager.py kill failed.");
   }
   return { status: "error", error: `Unknown action '${action}'. Use: list, kill.` };
 }
 
-// -----------------------------------------------------------------------
-// system-control-extended skill -> tools/power_plan.py
-// -----------------------------------------------------------------------
-export async function powerPlanTool(args = {}) {
-  const { action, name } = args;
-  if (action === "get") return _runJsonTool("power_plan.py", ["get"], { timeoutMs: 8000 }, "power_plan.py get failed.");
-  if (action === "set") {
-    if (!name) return { status: "error", error: "'name' is required for action 'set' (balanced, saver, performance)." };
-    return _runJsonTool("power_plan.py", ["set", name], { timeoutMs: 8000 }, "power_plan.py set failed.");
-  }
-  return { status: "error", error: "Missing/invalid 'action' (get, set)." };
-}
 
-// -----------------------------------------------------------------------
-// system-control-extended skill -> tools/focus_assist.py
-// -----------------------------------------------------------------------
-export async function focusAssistTool() {
-  // No official Windows API to silently toggle Focus Assist — this just
-  // opens the real Settings page (ms-settings:quiethours) for the user.
-  return _runJsonTool("focus_assist.py", ["open"], { timeoutMs: 8000 }, "focus_assist.py failed.");
-}
+
+
 
 // -----------------------------------------------------------------------
 // system-control-extended skill -> tools/lock_screen.py
 // -----------------------------------------------------------------------
 export async function lockScreenTool() {
-  return _runJsonTool("lock_screen.py", [], { timeoutMs: 8000 }, "lock_screen.py failed.");
+  return _runJsonTool("lock_screen.py", [], { timeoutMs: 60000 }, "lock_screen.py failed.");
 }
 
 // -----------------------------------------------------------------------
@@ -586,7 +522,7 @@ export async function viewImageTool(args) {
   if (!args || !args.action) {
     return { status: "error", error: "Missing 'action' parameter." };
   }
-  return _runJsonTool("image_viewer.py", ["--action", args.action], { timeoutMs: 5000 }, "image_viewer.py failed.");
+  return _runJsonTool("image_viewer.py", ["--action", args.action], { timeoutMs: 60000 }, "image_viewer.py failed.");
 }
 
 // -----------------------------------------------------------------------
@@ -596,7 +532,7 @@ export async function viewVideoTool(args) {
   if (!args || !args.action) {
     return { status: "error", error: "Missing 'action' parameter." };
   }
-  return _runJsonTool("video_player.py", ["--action", args.action], { timeoutMs: 5000 }, "video_player.py failed.");
+  return _runJsonTool("video_player.py", ["--action", args.action], { timeoutMs: 60000 }, "video_player.py failed.");
 }
 
 // -----------------------------------------------------------------------
@@ -623,6 +559,6 @@ export async function recordScreenTool(args) {
   }
   // 'stop' can take a while: it waits for ffmpeg to mux system+mic audio
   // into the final mp4 (screen_recorder.py itself polls for up to 30s).
-  const timeoutMs = args.action === "stop" ? 35000 : 10000;
+  const timeoutMs = 60000;
   return _runJsonTool("screen_recorder.py", pythonArgs, { timeoutMs }, "screen_recorder.py failed.");
 }

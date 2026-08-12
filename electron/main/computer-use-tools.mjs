@@ -131,135 +131,15 @@ export async function startOmniParserTask(args) {
   // clicking is now delegated to the Python server (see step 3).
   const { desktopCapturer } = electron;
 
-  try {
-    // 1. Capture screen
-    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } });
-    if (!sources || sources.length === 0) throw new Error("No screen source found");
-    const imgBuffer = sources[0].thumbnail.toPNG();
+  const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
+  const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
+  const PARSE_TIMEOUT_MS = 90000;
 
-    // 2. Send to OmniParser /parse — no prompt means api_server.py skips its
-    // internal vision-AI call (cheaper/faster). Gemini itself will look at the
-    // labeled image and decide which ID to click via click_id instead.
-    const formData = new FormData();
-    formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
-    // Intentionally NOT appending "prompt" — we skip api_server.py's own
-    // Claude/Gemini pick step; Gemini Live will pick the ID from the image.
-
-    const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
-    emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
-
-    const PARSE_TIMEOUT_MS = 90000;
-    const parseController = new AbortController();
-    const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
-    let response;
-    try {
-      response = await fetch(omniUrl, { method: "POST", body: formData, signal: parseController.signal });
-    } catch (fetchErr) {
-      if (fetchErr.name === "AbortError") throw new Error(`OmniParser API timed out after ${PARSE_TIMEOUT_MS / 1000}s`);
-      throw fetchErr;
-    } finally {
-      clearTimeout(parseTimeout);
-    }
-
-    if (!response.ok) {
-      const bodyText = await response.text().catch(() => "");
-      throw new Error(`OmniParser API error: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ""}`);
-    }
-
-    const result = await response.json();
-    if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
-
-    const elementCount = result.coordinates ? Object.keys(result.coordinates).length : 0;
-    emitEvent({ type: "log", level: "info", message: `OmniParser labeled ${elementCount} elements. Streaming image to Gemini...` });
-
-    // 3. Stream the labeled PNG (saved by api_server.py at omni_debug/) to
-    // Gemini Live so it can SEE the numbered elements and pick the right ID.
-    // Lazy import to avoid the circular dependency (same pattern as local-tools.mjs).
-    const labeledImgPath = join(process.cwd(), "reponew", "toado", "omni_debug", "latest_labeled_image.png");
-    let streamedOk = false;
-    try {
-      const fs = await import("node:fs/promises");
-      const { sendFrameToGemini } = await import("./gemini-live.mjs");
-      const imgData = await fs.readFile(labeledImgPath);
-      sendFrameToGemini(imgData.toString("base64"), "image/png");
-      streamedOk = true;
-      emitEvent({ type: "log", level: "info", message: "[OmniParser] Labeled image streamed to Gemini successfully." });
-    } catch (imgErr) {
-      emitEvent({ type: "log", level: "warn", message: `[OmniParser] Could not stream labeled image to Gemini: ${imgErr.message}` });
-    }
-
-    // 4a. Gemini can see the labeled screen → tell it to pick the right ID and
-    // call click_id immediately. Gemini is the decision-maker; no auto-click here.
-    if (streamedOk) {
-      return {
-        status: "success",
-        element_count: elementCount,
-        instructions:
-          `The labeled screenshot has been sent to you as an image frame RIGHT NOW — look at it immediately. ` +
-          `The screen shows ${elementCount} numbered UI elements (boxes with ID numbers on them). ` +
-          `Based on what you see and the user's request "${task}", identify which numbered element best matches, ` +
-          `then IMMEDIATELY call mouse_control with action="click_id" and id= set to that ID number (as a string). ` +
-          `Do NOT ask the user for coordinates or confirmation — just look at the image, pick the ID, and call click_id now.`,
-      };
-    }
-
-    // 4b. Fallback: image streaming failed (e.g. Gemini session not running).
-    // Fall back to the old auto-click path using api_server.py's /click endpoint
-    // so the feature still works in degraded mode.
-    emitEvent({ type: "log", level: "warn", message: "[OmniParser] Falling back to auto-click via /click endpoint." });
-    if (!result.target_center) {
-      // No prompt was sent so target_center won't be populated — re-call /parse
-      // with the prompt so api_server.py's vision AI can pick the element.
-      const formData2 = new FormData();
-      formData2.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
-      formData2.append("prompt", task);
-      const parseController2 = new AbortController();
-      const parseTimeout2 = setTimeout(() => parseController2.abort(), PARSE_TIMEOUT_MS);
-      let response2;
-      try {
-        response2 = await fetch(omniUrl, { method: "POST", body: formData2, signal: parseController2.signal });
-      } finally {
-        clearTimeout(parseTimeout2);
-      }
-      if (response2 && response2.ok) {
-        const result2 = await response2.json().catch(() => ({}));
-        if (result2.target_center) {
-          const [x, y] = result2.target_center;
-          const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
-          const clickController = new AbortController();
-          const clickTimeout = setTimeout(() => clickController.abort(), 10000);
-          let clickResponse;
-          try {
-            clickResponse = await fetch(clickUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ x_ratio: x, y_ratio: y }),
-              signal: clickController.signal,
-            });
-          } catch (fetchErr) {
-            if (fetchErr.name === "AbortError") throw new Error("Mouse click request timed out after 10s");
-            throw fetchErr;
-          } finally {
-            clearTimeout(clickTimeout);
-          }
-          const clickResult = await clickResponse.json().catch(() => ({}));
-          if (!clickResponse.ok || !clickResult.success) {
-            throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
-          }
-          emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
-          return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
-        }
-      }
-      return { status: "failed", message: `Could not find target on screen for: ${task}` };
-    }
-
-    // target_center was already in the first response (shouldn't happen since
-    // we didn't send prompt, but handle it defensively).
-    const [x, y] = result.target_center;
+  // Shared helper: click at a ratio position via api_server.py's /click endpoint.
+  async function clickAtRatio(x, y) {
     emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}` });
-    const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
     const clickController = new AbortController();
-    const clickTimeout = setTimeout(() => clickController.abort(), 10000);
+    const clickTimeout = setTimeout(() => clickController.abort(), 60000);
     let clickResponse;
     try {
       clickResponse = await fetch(clickUrl, {
@@ -279,7 +159,109 @@ export async function startOmniParserTask(args) {
       throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
     }
     emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
-    return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+  }
+
+  // Shared helper: POST the screenshot to /parse, optionally with a prompt so
+  // api_server.py's own vision AI (CLAUDE_VISION_MODEL / GEMINI_VISION_API_KEY,
+  // see .env.example) picks the target itself and returns target_center.
+  async function callParse(imgBuffer, prompt) {
+    const formData = new FormData();
+    formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
+    if (prompt) formData.append("prompt", prompt);
+    const parseController = new AbortController();
+    const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(omniUrl, { method: "POST", body: formData, signal: parseController.signal });
+    } catch (fetchErr) {
+      if (fetchErr.name === "AbortError") throw new Error(`OmniParser API timed out after ${PARSE_TIMEOUT_MS / 1000}s`);
+      throw fetchErr;
+    } finally {
+      clearTimeout(parseTimeout);
+    }
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "");
+      throw new Error(`OmniParser API error: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ""}`);
+    }
+    const result = await response.json();
+    if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
+    return result;
+  }
+
+  try {
+    // 1. Capture screen
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } });
+    if (!sources || sources.length === 0) throw new Error("No screen source found");
+    const imgBuffer = sources[0].thumbnail.toPNG();
+
+    // 2. PRIMARY PATH: send the screenshot + task prompt to /parse in one call.
+    // api_server.py runs its own vision AI (Claude first, else Gemini via
+    // GEMINI_VISION_API_KEY — a key kept separate from the voice assistant's
+    // GEMINI_API_KEY, see .env.example) and returns target_center directly.
+    // This is a single synchronous request/response, fully decoupled from the
+    // Gemini Live session's sendRealtimeInput channel — so it can't be
+    // interleaved or delayed by the once-per-second camera-companion frames
+    // or by voice audio sharing that same channel, which was the root cause
+    // of clicks feeling slow and occasionally landing on the wrong element.
+    emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl} (server-side pick)...` });
+    let result;
+    try {
+      result = await callParse(imgBuffer, task);
+    } catch (primaryErr) {
+      emitEvent({ type: "log", level: "warn", message: `[OmniParser] Primary server-side pick failed: ${primaryErr.message}` });
+      result = null;
+    }
+
+    if (result && result.target_center) {
+      const [x, y] = result.target_center;
+      await clickAtRatio(x, y);
+      return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+    }
+
+    // 3. FALLBACK: server-side pick didn't return a target (e.g. no
+    // ANTHROPIC_API_KEY/GEMINI_VISION_API_KEY configured, or it errored out).
+    // Re-parse without a prompt to get the labeled image, then stream it into
+    // Gemini Live so the voice assistant itself can look at the numbered boxes
+    // and call click_id. This is the old primary behavior, now used only as a
+    // degraded-mode fallback since it competes for the shared streaming channel.
+    emitEvent({ type: "log", level: "warn", message: "[OmniParser] Falling back to Gemini-Live image streaming for element pick." });
+    let parseResult = result;
+    if (!parseResult) {
+      try {
+        parseResult = await callParse(imgBuffer, null);
+      } catch (fallbackParseErr) {
+        throw new Error(`OmniParser fallback parse failed: ${fallbackParseErr.message}`);
+      }
+    }
+    const elementCount = parseResult.coordinates ? Object.keys(parseResult.coordinates).length : 0;
+
+    const labeledImgPath = join(process.cwd(), "reponew", "toado", "omni_debug", "latest_labeled_image.png");
+    let streamedOk = false;
+    try {
+      const fs = await import("node:fs/promises");
+      const { sendFrameToGemini } = await import("./gemini-live.mjs");
+      const imgData = await fs.readFile(labeledImgPath);
+      sendFrameToGemini(imgData.toString("base64"), "image/png");
+      streamedOk = true;
+      emitEvent({ type: "log", level: "info", message: "[OmniParser] Labeled image streamed to Gemini successfully." });
+    } catch (imgErr) {
+      emitEvent({ type: "log", level: "warn", message: `[OmniParser] Could not stream labeled image to Gemini: ${imgErr.message}` });
+    }
+
+    if (streamedOk) {
+      return {
+        status: "success",
+        element_count: elementCount,
+        instructions:
+          `The labeled screenshot has been sent to you as an image frame RIGHT NOW — look at it immediately. ` +
+          `The screen shows ${elementCount} numbered UI elements (boxes with ID numbers on them). ` +
+          `Based on what you see and the user's request "${task}", identify which numbered element best matches, ` +
+          `then IMMEDIATELY call mouse_control with action="click_id" and id= set to that ID number (as a string). ` +
+          `Do NOT ask the user for coordinates or confirmation — just look at the image, pick the ID, and call click_id now.`,
+      };
+    }
+
+    return { status: "failed", message: `Could not find target on screen for: ${task}` };
 
   } catch (err) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
@@ -296,7 +278,7 @@ export async function startComputerUseType(args) {
 
   const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
   
   try {
     const response = await fetch(typeUrl, {
@@ -443,7 +425,7 @@ export async function openUrlOrApp(args) {
 // await the process with a short timeout and surface its real outcome —
 // same pattern as runPythonTool() in local-tools.mjs.
 // -----------------------------------------------------------------------
-function _runSystemActionPy(action, args, { timeoutMs = 8000 } = {}) {
+function _runSystemActionPy(action, args, { timeoutMs = 60000 } = {}) {
   const pyPath = join(process.cwd(), "tools", "system_actions.py");
   const pythonBin = process.env.IRIS_PYTHON_BIN || "python";
 
@@ -547,7 +529,7 @@ export async function writeNoteTool(args) {
   if (is_new) cmdArgs.push("--new");
   // Notepad needs to actually appear on screen, and typing/rendering can be
   // a little slower than the other actions, so give it more headroom.
-  const result = await _runSystemActionPy("note", cmdArgs, { timeoutMs: 12000 });
+  const result = await _runSystemActionPy("note", cmdArgs, { timeoutMs: 60000 });
   return _resultFromSystemAction(result, "Failed to write note.");
 }
 

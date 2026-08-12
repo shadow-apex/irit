@@ -197,11 +197,7 @@ export function buildClaudeTools() {
             },
           },
         },
-        {
-          name: "system_monitor",
-          description: "Check the user's system health via tools/sys_monitor.py: CPU %, RAM usage, disk usage, and battery. Use when the user asks about system health, performance, or 'is my PC okay'.",
-          parameters: { type: "object", properties: {} },
-        },
+
         {
           name: "mouse_control",
           description: "Control the mouse cursor via tools/mouse_control.py: move to exact coordinates (optionally clicking on arrival), click (left/right/middle, single/double), drag from one point to another, scroll, read its current position, move to a RANDOM point on screen, DRAW a shape (square/circle/zigzag) by dragging the cursor along that trajectory, or CLICK_ID to click an element by its OmniParser ID. Movement follows a smooth curved (Bezier) path by default — the same natural, human-like motion used by the OmniParser auto-click flow — rather than a robotic straight line. x/y are only required for move/click/drag with explicit coordinates; they are NOT required for random_move, draw, or click_id.",
@@ -218,8 +214,12 @@ export function buildClaudeTools() {
               click: { type: "boolean", description: "For action 'move' only: click at the destination immediately after arriving, instead of needing a separate 'click' call." },
               linear: { type: "boolean", description: "For move/click: use an instant straight-line move instead of the default smooth curved motion. Only use this if precise, non-human-like positioning is explicitly needed." },
               amount: { type: "integer", description: "Scroll amount: positive scrolls up, negative scrolls down (scroll only)." },
-              shape: { type: "string", description: "For action 'draw' only. One of: square, circle, zigzag. Defaults to zigzag if omitted." },
+              shape: {
+                type: "string",
+                description: "The shape to draw. One of: square, circle, zigzag, triangle, star, spiral, heart, gojo, image, or ANY custom image name requested by the user (e.g. goku, doraemon). Defaults to zigzag if omitted."
+              },
               size: { type: "integer", description: "For action 'draw' only: rough width/diameter of the shape in pixels. Defaults to a sensible size (~200px) if omitted." },
+              image_path: { type: "string", description: "For action 'draw' and shape 'image' only: absolute path to the image file to draw." },
               hold_button: { type: "boolean", description: "For action 'draw' only: whether to hold the mouse button down while tracing the shape (like drawing in Paint). Defaults to true." },
               margin: { type: "integer", description: "For action 'random_move' only: minimum distance in pixels to keep from screen edges. Defaults to 50." },
               id: { type: "string", description: "For action 'click_id' only: the OmniParser ID to click on (e.g. '5')." },
@@ -227,11 +227,7 @@ export function buildClaudeTools() {
             required: ["action"],
           },
         },
-        {
-          name: "active_window_info",
-          description: "Read-only: reports the title, process name/PID, and screen position/size of whichever window currently has focus, via tools/active_window_info.py. Use to know what app the user is looking at before deciding what to type/click. Does not touch the screen, mouse, or keyboard, so it never conflicts with OmniParser/computer-use or screen vision.",
-          parameters: { type: "object", properties: {} },
-        },
+
         {
           name: "ocr_region",
           description: "Reads text out of a screen region (or the whole screen) via OCR using tools/ocr_region.py, without needing to send an image frame to you. Requires the separate Tesseract-OCR engine to be installed on the machine (not just a pip package) — report that clearly if the tool returns that error.",
@@ -246,22 +242,8 @@ export function buildClaudeTools() {
             },
           },
         },
-        {
-          name: "color_picker",
-          description: "Reads the RGB/hex color of the pixel at given screen coordinates (or under the mouse cursor if omitted), via tools/color_picker.py.",
-          parameters: {
-            type: "object",
-            properties: {
-              x: { type: "integer", description: "X coordinate. Omit both x and y to use the current mouse position." },
-              y: { type: "integer", description: "Y coordinate." },
-            },
-          },
-        },
-        {
-          name: "idle_time",
-          description: "Reports how many seconds it's been since the user last touched the keyboard or mouse, via tools/idle_time.py. Use for 'am I still there' checks or to decide whether to run something only while the user is away.",
-          parameters: { type: "object", properties: {} },
-        },
+
+
         {
           name: "clipboard_history",
           description: "Manages a rolling history of clipboard entries (not just the current one) via tools/clipboard_history.py: start/stop a background watcher, list recent entries, re-copy an old entry, or clear the history. Use 'watch' once to start tracking, then 'list'/'use' later — without 'watch' running, history stays empty.",
@@ -290,20 +272,7 @@ export function buildClaudeTools() {
             required: ["action"],
           },
         },
-        {
-          name: "tts_speak",
-          description: "Speaks text out loud using an offline text-to-speech voice (no network/API cost) via tools/tts_speak.py. Use when the user explicitly wants text read aloud locally rather than through your own voice.",
-          parameters: {
-            type: "object",
-            properties: {
-              text: { type: "string", description: "Text to speak. Required unless listVoices is true." },
-              rate: { type: "integer", description: "Speech rate in words/min. Omit for the system default (~200)." },
-              volume: { type: "number", description: "Volume from 0.0 to 1.0." },
-              voiceId: { type: "string", description: "Specific voice id, from listVoices." },
-              listVoices: { type: "boolean", description: "If true, lists available voices instead of speaking." },
-            },
-          },
-        },
+
         {
           name: "wifi_manager",
           description: "Manages Wi-Fi via tools/wifi_manager.py: scan nearby networks, list saved profiles, connect to an already-known SSID, disconnect, or check connection status. Cannot connect to a brand-new network it has no saved profile for (passwords are never accepted here for security) — tell the user to connect once manually first in that case.",
@@ -335,23 +304,8 @@ export function buildClaudeTools() {
             required: ["action"],
           },
         },
-        {
-          name: "power_plan",
-          description: "Reads or switches the active Windows power plan (balanced / power saver / high performance) via tools/power_plan.py.",
-          parameters: {
-            type: "object",
-            properties: {
-              action: { type: "string", description: "One of: get, set." },
-              name: { type: "string", description: "One of: balanced, saver, performance. Required for 'set'." },
-            },
-            required: ["action"],
-          },
-        },
-        {
-          name: "focus_assist",
-          description: "Opens Windows' Focus Assist (Do Not Disturb) settings page via tools/focus_assist.py. There is no official Windows API to toggle it silently, so this opens the real settings screen for the user to pick a mode — tell them that when you call it.",
-          parameters: { type: "object", properties: {} },
-        },
+
+
         {
           name: "lock_screen",
           description: "Locks the Windows session immediately via tools/lock_screen.py. Confirm with the user before calling this, since it will require them to re-enter their password/PIN to get back in.",
