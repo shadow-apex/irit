@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Facebook",
+    "icon": "Globe",
+    "target": "https://facebook.com"
+  },
+  {
+    "name": "YouTube",
+    "icon": "Youtube",
+    "target": "https://youtube.com"
+  },
+  {
+    "name": "VS Code",
+    "icon": "Code",
+    "target": "vscode://"
+  },
+  {
+    "name": "Terminal",
+    "icon": "Terminal",
+    "target": "cmd.exe"
+  }
+]

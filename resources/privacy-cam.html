@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Iris Privacy Cam</title>
+  <style>
+    body { margin: 0; background: #000; overflow: hidden; }
+    video, canvas { display: none; }
+    #status { color: #0f0; font-family: monospace; font-size: 12px; padding: 8px; position: absolute; top: 0; left: 0; }
+  </style>
+</head>
+<body>
+  <video id="src" autoplay playsinline muted></video>
+  <canvas id="out"></canvas>
+  <div id="status">Initializing...</div>
+
+  <script type="module">
+    const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+    const MODEL_URL = "https://storage.googleapis.com/mediapipe-tasks/face_landmarker/face_landmarker.task";
+
+    // Throttle to 15fps — face blur doesn't need 60fps and the hidden window
+    // was consuming ~15–20% GPU continuously at full rate.
+    const TARGET_FPS = 15;
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+    let lastFrameTime = 0;
+
+    const video = document.getElementById("src");
+    const canvas = document.getElementById("out");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
+    let landmarker = null;
+    let running = false;
+
+    async function init() {
+      try {
+        status.textContent = "Loading MediaPipe FaceLandmarker...";
+        const { FaceLandmarker, FilesetResolver } = await import(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/+esm"
+        );
+        const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+        landmarker = await FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+          runningMode: "VIDEO",
+          numFaces: 2,                    // Reduced from 4 — 2 covers the common case
+          outputFaceLandmarks: false,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
+        status.textContent = "Starting camera...";
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },  // Reduced from 1280×720 — saves ~4× GPU bandwidth
+        });
+        video.srcObject = stream;
+        await video.play();
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        running = true;
+        status.textContent = "Privacy cam active - blurring faces";
+        requestAnimationFrame(loop);
+      } catch (err) {
+        status.textContent = "Error: " + err.message;
+        console.error("[PrivacyCam]", err);
+      }
+    }
+
+    function loop(timestamp) {
+      if (!running) return;
+
+      // Throttle: skip frames to stay at TARGET_FPS
+      if (timestamp - lastFrameTime < FRAME_INTERVAL) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      lastFrameTime = timestamp;
+
+      if (video.readyState >= 2) {
+        const now = performance.now();
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        try {
+          const result = landmarker.detectForVideo(video, now);
+          const boxes = result.faceBoundingBoxes ?? [];
+          for (const box of boxes) {
+            const pad = 0.2;
+            const bx = Math.max(0, (box.originX - box.width * pad) * canvas.width);
+            const by = Math.max(0, (box.originY - box.height * pad) * canvas.height);
+            const bw = Math.min(canvas.width - bx, box.width * (1 + 2 * pad) * canvas.width);
+            const bh = Math.min(canvas.height - by, box.height * (1 + 2 * pad) * canvas.height);
+            ctx.save();
+            ctx.filter = "blur(20px)";
+            ctx.drawImage(canvas, bx, by, bw, bh, bx, by, bw, bh);
+            ctx.restore();
+          }
+        } catch (_) {}
+      }
+      requestAnimationFrame(loop);
+    }
+
+    init();
+  </script>
+</body>
+</html>
+

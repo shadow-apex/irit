@@ -1,0 +1,34 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.pyc
+*.log
+sidecar/runtime/
+roadmap.md
+.env_test*
+.ui-shots/
+meeting_recordings/
+
+# --- Lần 1/3: dữ liệu cá nhân / bí mật không được commit ---
+teleprompter_logs/
+robots.json
+smarthome_cameras.json
+tools/*.png
+tools/img/
+**/screenshots/
+PHONE_CAMERA/cert/
+
+# Firmware: token điều khiển (F-01)
+secrets.h
+**/secrets.yaml
+
+# MediaPipe asset cục bộ (sinh bởi scripts/prepare-mediapipe.mjs)
+public/mediapipe/
+
+# ONNX Runtime WASM tu host (sinh boi scripts/prepare-ort.mjs)
+public/ort/

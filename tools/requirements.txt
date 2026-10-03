@@ -1,0 +1,21 @@
+# Dependencies cho các script trong thư mục /tools
+# Cài đặt bằng: pip install -r tools/requirements.txt
+#
+# Lưu ý: các script này chỉ chạy được trên Windows (dùng ctypes.windll,
+# WMI, PowerShell...). Phía Node báo lỗi rõ ràng (không crash) khi chạy trên macOS/Linux.
+# (G-08: đã gỡ các tham chiếu tới sys_monitor.py / tts_speak.py / power_plan.py — các file này không tồn tại.)
+
+Pillow          # ai_vision.py (thu nhỏ + JPEG), pyautogui.screenshot() cần Pillow
+pyautogui       # ai_vision.py (chụp màn hình), mouse_control.py, ocr_region.py, color_picker.py, api_server.py dùng chung
+pyperclip       # clipboard_manager.py, clipboard_history.py, api_server.py (/type endpoint)
+psutil          # active_window_info.py, process_manager.py
+pygetwindow     # magic_move.py (tìm & di chuyển cửa sổ)
+plyer           # notifier.py, quick_reminder.py (thông báo hệ thống)
+pytesseract     # ocr_region.py — CẦN CÀI THÊM Tesseract-OCR engine riêng (không phải gói pip):
+                #   https://github.com/UB-Mannheim/tesseract/wiki
+pywin32         # system_actions.py — cần cho module wmi bên dưới (Win32 COM bindings)
+wmi             # system_actions.py (hide/minimize/restore) — tra PID theo tên tiến trình
+
+# Không cần cài thêm gì (chỉ dùng ctypes/subprocess có sẵn trong Python):
+#   idle_time.py, lock_screen.py, multi_monitor_info.py, active_window_info.py
+#   wifi_manager.py, focus_assist.py (netsh/user32.dll)
