@@ -1,65 +1,72 @@
 /**
  * electron/main/local-tools.mjs
  *
- * Wraps the standalone Python scripts in tools/ (originally written as
- * Claude-Code "skills" under .agents/skills) so Gemini Live can call them
- * DIRECTLY as function-calling tools, without going through submit_claude_task.
- * This is the fast/parallel-lane equivalent of the ai-vision, clipboard,
- * window-magic, notify, sys-control and sys-monitor skills.
+ * Bọc các script Python trong tools/ để Gemini Live gọi TRỰC TIẾP như function-calling tool (không qua
+ * submit_claude_task). Mỗi hàm spawn `python tools/<script> <args>`, thu stdout/stderr, rồi chuyển thành
+ * MỘT schema kết quả duy nhất `{ ...fields, status: "success"|"error" }` (xem tool-result.mjs, TL-03).
  *
- * Every helper here spawns `python tools/<script>.py <args>`, captures
- * stdout/stderr, and resolves once the process exits (or the timeout fires).
- * None of these hold the mic hostage for more than a few seconds, so — unlike
- * start_computer_use_task — they are all awaited and return their real
- * result straight to Gemini instead of just a "started" ack.
- *
- * tools/move_window.py is intentionally NOT wired here: it has no matching
- * .agents/skills SKILL.md entry and duplicates tools/magic_move.py (which
- * IS documented as the window-magic skill), so magic_move.py is the one
- * exposed as move_window_magic below.
+ * Ghi chú kiến trúc:
+ *  - take_ai_screenshot KHÔNG còn qua Python: chụp bằng desktopCapturer ngay trong tiến trình Electron (TL-11).
+ *  - quick_reminder do Electron quản lý (reminders.mjs), không còn tiến trình Python `sleep` (TL-09).
+ *  - moveWindowPreciseTool GỌI tools/move_window.py (ctypes, không còn PowerShell — TL-01).
+ *  - Mọi tool nguy hiểm đi qua xác nhận hai bước ở tool-dispatcher.mjs (dangerous-tools.mjs).
  */
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 import { toolsDir, pythonBin, userDataDir } from "./paths.mjs";
+import { killTree } from "./process-utils.mjs";
+import { buildToolResponse, optArg, toIntArg } from "./tool-result.mjs";
+import { frameToScreen } from "./coords.mjs";
+import { saveScreenshot } from "./screenshot-store.mjs";
+import { createReminderService } from "./reminders.mjs";
 
-// P-01: đường dẫn/Python tính theo mỗi lời gọi (không chốt lúc nạp module).
-
-/**
- * Runs `python tools/<script> ...args`, capturing combined stdout/stderr.
- * Resolves (never rejects) with { ok, code, stdout, stderr, error? } so
- * callers can always turn the result into a clean tool response for Gemini.
- */
 // G-08: các script dưới đây dùng ctypes.windll / WMI / PowerShell / netsh... => chỉ chạy được trên Windows.
-// Báo lỗi rõ ràng ở phía Node thay vì để Python văng traceback khó hiểu trên macOS/Linux.
 export const WINDOWS_ONLY_TOOLS = new Set([
   "active_window_info.py", "desktop_manager.py", "focus_assist.py", "idle_time.py", "lock_screen.py",
   "magic_move.py", "move_window.py", "multi_monitor_info.py", "power_manager.py", "read_notifications.py",
-  "search_everything.py", "sys_control.py", "system_actions.py", "wifi_manager.py",
+  "search_everything.py", "sys_control.py", "system_actions.py", "wifi_manager.py", "mouse_control.py",
+  "media_control.py", "image_viewer.py", "clipboard_history.py", "process_manager.py", "ocr_region.py",
+  "color_picker.py",
 ]);
 
-function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false } = {}) {
+export const MAX_STDOUT_BYTES = 1_000_000; // TL: giới hạn stdout ≤ 1 MB
+
+/** Môi trường chuẩn cho mọi tiến trình Python (TL-10: UTF-8; Python biết PID của Iris để không tự đóng mình). */
+export function pythonEnv(extra = {}) {
+  return {
+    ...process.env,
+    PYTHONUTF8: "1",
+    PYTHONIOENCODING: "utf-8",
+    IRIS_USER_DATA: userDataDir(),
+    IRIS_SELF_PID: String(process.pid),
+    IRIS_SCREENSHOT_DIR: join(userDataDir(), "screenshots"),
+    ...extra,
+  };
+}
+
+/**
+ * Chạy `python tools/<script> ...args`. Không bao giờ reject.
+ * @param {string} script
+ * @param {string[]} args
+ * @param {{timeoutMs?:number, detach?:boolean, stdin?:string, onTimeout?:()=>Promise<void>|void}} [opts]
+ * @returns {Promise<{ok:boolean,code?:number,stdout:string,stderr:string,error?:string,timedOut?:boolean,detached?:boolean}>}
+ */
+export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false, stdin = undefined, onTimeout } = {}) {
   if (process.platform !== "win32" && WINDOWS_ONLY_TOOLS.has(script)) {
     return Promise.resolve({
-      ok: false,
-      stdout: "",
-      stderr: "",
+      ok: false, stdout: "", stderr: "",
       error: `Công cụ ${script} chỉ hỗ trợ Windows (hệ điều hành hiện tại: ${process.platform}).`,
     });
   }
   const pyPath = join(toolsDir(), script);
 
   if (detach) {
-    // Fire-and-forget for scripts that block on human interaction (e.g.
-    // magic_move.py --active counts down 5s waiting for a click) — we must
-    // not hold the Gemini Live turn open for that.
     try {
       const child = spawn(pythonBin(), [pyPath, ...args], {
-        shell: false,
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
+        shell: false, detached: true, stdio: "ignore", windowsHide: true, env: pythonEnv(),
       });
+      child.on("error", () => {});
       child.unref();
       return Promise.resolve({ ok: true, detached: true, stdout: "", stderr: "" });
     } catch (err) {
@@ -72,459 +79,490 @@ function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false } 
     let stderr = "";
     let settled = false;
     let child;
+    let truncated = false;
 
-    const timer = setTimeout(() => {
+    const finish = (res) => {
       if (settled) return;
       settled = true;
-      try { child?.kill(); } catch { /* ignore */ }
-      resolve({ ok: false, error: `Timed out after ${timeoutMs}ms`, stdout: stdout.trim(), stderr: stderr.trim() });
+      clearTimeout(timer);
+      resolve(res);
+    };
+
+    const timer = setTimeout(async () => {
+      if (settled) return;
+      // killTree trước (TerminateProcess không chạy `finally` của Python), rồi dọn dẹp (vd. nhả nút chuột).
+      try { killTree(child); } catch { /* bỏ qua */ }
+      try { await onTimeout?.(); } catch { /* bỏ qua */ }
+      finish({ ok: false, timedOut: true, error: `Quá thời gian ${timeoutMs}ms`, stdout: stdout.trim(), stderr: stderr.trim() });
     }, timeoutMs);
 
     try {
-      child = spawn(pythonBin(), [pyPath, ...args], { shell: false, windowsHide: true });
+      child = spawn(pythonBin(), [pyPath, ...args], {
+        shell: false, windowsHide: true, env: pythonEnv(), stdio: ["pipe", "pipe", "pipe"],
+      });
     } catch (err) {
-      clearTimeout(timer);
-      resolve({ ok: false, error: err.message, stdout: "", stderr: "" });
+      finish({ ok: false, error: err.message, stdout: "", stderr: "" });
       return;
     }
 
-    child.stdout.on("data", (d) => { stdout += d.toString("utf-8"); });
-    child.stderr.on("data", (d) => { stderr += d.toString("utf-8"); });
-    child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: false, error: err.message, stdout: stdout.trim(), stderr: stderr.trim() });
+    child.stdout.setEncoding("utf8"); // StringDecoder: không vỡ ký tự nhiều byte giữa các chunk (R-04)
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      if (stdout.length + d.length > MAX_STDOUT_BYTES) {
+        truncated = true;
+        stdout += d.slice(0, Math.max(0, MAX_STDOUT_BYTES - stdout.length));
+        try { killTree(child); } catch { /* bỏ qua */ }
+      } else stdout += d;
     });
+    child.stderr.on("data", (d) => { if (stderr.length < 64_000) stderr += d; });
+    child.stdin.on("error", () => {});
+    if (stdin !== undefined) child.stdin.end(stdin, "utf8");
+    else child.stdin.end();
+    // WIN-PY-STUB: trên Windows, "python" có thể chỉ là alias Microsoft Store (thoát mã 9009) hoặc thiếu hẳn.
+    const py = pythonBin();
+    const pyHint = `Cài Python 3 từ python.org (tick "Add python.exe to PATH"), chạy "pip install -r tools/requirements.txt" rồi khởi động lại IRIS (hoặc đặt IRIS_PYTHON_BIN trong .env).`;
+    child.on("error", (err) =>
+      finish({
+        ok: false,
+        error: err.code === "ENOENT" ? `Không tìm thấy Python ("${py}"). ${pyHint}` : err.message,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      }),
+    );
     child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() });
+      let hint;
+      if (code === 9009) hint = `"${py}" chỉ là alias Microsoft Store, Python chưa được cài thật. ${pyHint}`;
+      else if (code !== 0) {
+        const m = stderr.match(/ModuleNotFoundError: No module named '([^']+)'/);
+        if (m) hint = `Thiếu thư viện Python "${m[1]}". Chạy: ${py} -m pip install -r tools/requirements.txt`;
+      }
+      if (hint) console.error(`[local-tools] ${script}: ${hint}`);
+      finish({
+        ok: code === 0 && !truncated,
+        code: truncated ? 1 : code,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        ...(truncated ? { error: `Đầu ra vượt ${MAX_STDOUT_BYTES} byte nên bị cắt.` } : hint ? { error: hint } : {}),
+      });
     });
   });
 }
 
-// -----------------------------------------------------------------------
-// ai-vision skill -> tools/ai_vision.py
-// -----------------------------------------------------------------------
-export async function takeAiScreenshotTool() {
-  // V-15: ảnh nằm ở <userData>/screenshots (không còn ghi vào tools/ trong repo).
-  const outDir = join(userDataDir(), "screenshots");
-  const result = await runPythonTool("ai_vision.py", ["--outdir", outDir], { timeoutMs: 15000 });
-  if (!result.ok) {
-    return { status: "error", error: result.error || result.stderr || "ai_vision.py failed." };
-  }
-  const match = result.stdout.match(/^SCREENSHOT_PATH=(.+)$/m);
-  const screenshotPath = match ? match[1].trim() : null;
-  if (!screenshotPath) {
-    return { status: "error", error: `Could not parse screenshot path from output: ${result.stdout}` };
-  }
-  // Gửi ảnh vào phiên live để Gemini "nhìn" được. Import trễ vì gemini-live.mjs import
-  // tool dispatcher (vòng tròn nếu import tĩnh).
-  try {
-    const fs = await import("node:fs/promises");
-    const { sendVideoFrame } = await import("./gemini-live.mjs");
-    const buffer = await fs.readFile(screenshotPath);
-    // mimeType tự nhận từ nội dung (JPEG) — không còn gắn nhãn jpeg cho file PNG.
-    if (!sendVideoFrame(buffer.toString("base64"))) {
-      return {
-        status: "error",
-        screenshot_path: screenshotPath,
-        error: "Đã chụp màn hình nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live hoặc ảnh không hợp lệ).",
-      };
-    }
-  } catch (err) {
-    return {
-      status: "error",
-      screenshot_path: screenshotPath,
-      error: `Đã chụp màn hình nhưng không thể gửi ảnh cho Gemini: ${err.message}`,
-    };
-  }
-  return {
-    status: "success",
-    screenshot_path: screenshotPath,
-    instructions: "The screenshot has just been sent to you as an image frame — describe what you see on the screen to the user now.",
-  };
+/** Chạy script, parse JSON, chuẩn hoá — dùng cho mọi tool trả JSON. */
+async function runJsonTool(script, args, opts, failMsg) {
+  const run = await runPythonTool(script, args, opts);
+  return buildToolResponse(run, failMsg || `${script} thất bại.`);
 }
 
 // -----------------------------------------------------------------------
-// clipboard skill -> tools/clipboard_manager.py
+// take_ai_screenshot — chụp trong Electron (desktopCapturer), KHÔNG qua Python (TL-11)
+// -----------------------------------------------------------------------
+export async function takeAiScreenshotTool(args = {}) {
+  const save = args?.save === true;
+  try {
+    const { grabPrimaryScreenJpeg } = await import("./vision.mjs");
+    const { sendVideoFrame } = await import("./gemini-live.mjs"); // import trễ: tránh vòng tròn với dispatcher
+    const { buffer, geometry } = await grabPrimaryScreenJpeg(70);
+    const sent = sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+    let screenshot_path;
+    if (save) screenshot_path = saveScreenshot(join(userDataDir(), "screenshots"), buffer);
+    if (!sent) {
+      return {
+        status: "error", ...(screenshot_path ? { screenshot_path } : {}),
+        error: "Đã chụp màn hình nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live hoặc ảnh không hợp lệ).",
+      };
+    }
+    return {
+      status: "success",
+      ...(screenshot_path ? { screenshot_path } : {}),
+      frame_geometry: geometry,
+      instructions:
+        "Ảnh chụp màn hình vừa được gửi cho bạn dưới dạng một khung hình — hãy mô tả những gì bạn thấy ngay bây giờ. " +
+        "Nếu cần click vào một điểm trong ảnh, gọi mouse_control với space:\"frame\".",
+    };
+  } catch (err) {
+    return { status: "error", error: `Không chụp được màn hình: ${err.message}` };
+  }
+}
+
+// -----------------------------------------------------------------------
+// clipboard
 // -----------------------------------------------------------------------
 export async function readClipboardTool() {
-  const result = await runPythonTool("clipboard_manager.py", ["--action", "read"], { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "clipboard_manager.py failed." };
-  return { status: "success", clipboard_text: result.stdout };
+  const r = await runJsonTool("clipboard_manager.py", ["--action=read"], { timeoutMs: 10000 }, "clipboard_manager.py thất bại.");
+  if (r.status === "success") r.clipboard_text = r.text ?? "";
+  return r;
 }
 
 export async function writeClipboardTool(args = {}) {
   const { text } = args;
-  if (!text) return { status: "error", error: "Missing 'text' to write to clipboard." };
-  const result = await runPythonTool("clipboard_manager.py", ["--action", "write", "--text", text], { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "clipboard_manager.py failed." };
-  return { status: "success", message: result.stdout || `Copied ${text.length} characters to the clipboard.` };
+  if (!text) return { status: "error", error: "Thiếu 'text' để ghi vào clipboard." };
+  // Văn bản dài/nhạy cảm đi qua STDIN: không dính giới hạn dòng lệnh ~32 KB và không lộ trong danh sách tiến trình.
+  return runJsonTool("clipboard_manager.py", ["--action=write", "--stdin"], { timeoutMs: 10000, stdin: String(text) }, "clipboard_manager.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// window-magic skill -> tools/magic_move.py
+// window magic (TL-07: --active có đếm ngược THẬT; demo chỉ khi IRIS_DEV_TOOLS=1)
 // -----------------------------------------------------------------------
 export async function moveWindowMagicTool(args = {}) {
-  const { mode = "active", name, x = 0, y = 0 } = args;
+  const { mode = "active", name } = args;
+  const x = toIntArg(args.x ?? 0) ?? 0;
+  const y = toIntArg(args.y ?? 0) ?? 0;
 
   if (mode === "active") {
-    // Blocks ~5s waiting for the user to click a window — never await this
-    // on the live session; fire-and-forget and tell Gemini what to say.
-    const result = await runPythonTool("magic_move.py", ["--active", "-x", String(x), "-y", String(y)], { detach: true });
-    return {
-      status: result.ok ? "started" : "error",
-      error: result.ok ? undefined : result.error,
-      instructions: "Tell the user right now: they have 5 seconds to click the window they want to move.",
-    };
+    // Script đếm ngược 5 s THẬT rồi mới lấy cửa sổ đang focus ⇒ phải chờ ~6 s (không detach để biết kết quả thật).
+    const r = await runJsonTool("magic_move.py", ["--active", "--wait=5", `-x=${x}`, `-y=${y}`], { timeoutMs: 15000 }, "magic_move.py thất bại.");
+    return { ...r, instructions: "Nếu thành công, báo cho người dùng cửa sổ đã được di chuyển. Nếu lỗi 'chính Iris', nhờ họ bấm vào cửa sổ cần di chuyển rồi thử lại." };
   }
-
   if (mode === "demo") {
-    const demoArgs = ["--demo"];
-    if (name) demoArgs.push("--name", name);
-    const result = await runPythonTool("magic_move.py", demoArgs, { timeoutMs: 15000 });
-    if (!result.ok) return { status: "error", error: result.error || result.stderr || "magic_move.py failed." };
-    return { status: "success", message: result.stdout };
+    if (process.env.IRIS_DEV_TOOLS !== "1") return { status: "error", error: "Chế độ demo bị tắt (chỉ bật khi IRIS_DEV_TOOLS=1)." };
+    if (!name) return { status: "error", error: "Thiếu 'name' cho chế độ demo." };
+    return runJsonTool("magic_move.py", ["--demo", optArg("name", name)], { timeoutMs: 15000 }, "magic_move.py thất bại.");
   }
-
-  // mode === "name"
-  if (!name) return { status: "error", error: "Missing 'name' — which window should be moved?" };
-  const result = await runPythonTool("magic_move.py", ["--name", name, "-x", String(x), "-y", String(y)], { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "magic_move.py failed." };
-  return { status: "success", message: result.stdout };
+  if (!name) return { status: "error", error: "Thiếu 'name' — cửa sổ nào cần di chuyển?" };
+  return runJsonTool("magic_move.py", [optArg("name", name), `-x=${x}`, `-y=${y}`], { timeoutMs: 10000 }, "magic_move.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// notify skill -> tools/notifier.py
+// notify
 // -----------------------------------------------------------------------
 export async function sendDesktopNotificationTool(args = {}) {
   const { title, message } = args;
-  if (!title || !message) return { status: "error", error: "Missing 'title' or 'message' for the notification." };
-  const result = await runPythonTool("notifier.py", ["--title", title, "--message", message], { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "notifier.py failed." };
-  return { status: "success", message: result.stdout || `Notification sent: ${title}` };
+  if (!title || !message) return { status: "error", error: "Thiếu 'title' hoặc 'message'." };
+  return runJsonTool("notifier.py", [optArg("title", title), optArg("message", message)], { timeoutMs: 10000 }, "notifier.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// sys-control skill -> tools/sys_control.py
+// system_control (TL-12)
 // -----------------------------------------------------------------------
 export async function systemControlTool(args = {}) {
   const { volume, brightness, wifi, bluetooth, camera } = args;
+  const volumeLevel = toIntArg(args.volume_level);
   const cliArgs = [];
-  if (volume) cliArgs.push("--volume", volume);
-  if (brightness !== undefined && brightness !== null) cliArgs.push("--brightness", String(brightness));
-  if (wifi) cliArgs.push("--wifi", wifi);
-  if (bluetooth) cliArgs.push("--bluetooth", bluetooth);
-  if (camera) cliArgs.push("--camera", camera);
-
+  if (volume) cliArgs.push(optArg("volume", volume));
+  if (volumeLevel !== null) cliArgs.push(optArg("volume-level", volumeLevel));
+  const b = toIntArg(brightness);
+  if (b !== null) cliArgs.push(optArg("brightness", b));
+  if (wifi) cliArgs.push(optArg("wifi", wifi));
+  if (bluetooth) cliArgs.push(optArg("bluetooth", bluetooth));
+  if (camera) cliArgs.push(optArg("camera", camera));
   if (!cliArgs.length) {
-    return { status: "error", error: "Specify at least one of: volume, brightness, wifi, bluetooth, camera." };
+    return { status: "error", error: "Chỉ định ít nhất một trong: volume, volume_level, brightness, wifi, bluetooth, camera." };
   }
-
-  // sys_control.py's own subprocess.run(Start-Process ... -Verb RunAs) does
-  // NOT pass -Wait, so the script returns as soon as the UAC prompt is
-  // triggered rather than blocking until the user answers it — safe to await.
-  const result = await runPythonTool("sys_control.py", cliArgs, { timeoutMs: 15000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "sys_control.py failed." };
-  const needsUac = wifi || bluetooth || camera;
-  return {
-    status: "success",
-    message: result.stdout,
-    instructions: needsUac
-      ? "If a UAC (administrator) prompt appears on screen, tell the user right now to click 'Yes' for the action to take effect."
-      : undefined,
-  };
+  // Script chờ UAC (-Wait) rồi mới trả kết quả THẬT ⇒ timeout dài hơn để người dùng kịp bấm 'Yes'.
+  const needsUac = Boolean(bluetooth || camera);
+  const r = await runJsonTool("sys_control.py", cliArgs, { timeoutMs: needsUac ? 60000 : 15000 }, "sys_control.py thất bại.");
+  if (needsUac && r.status === "error" && /Quá thời gian/.test(r.error || "")) {
+    r.error = "Hết thời gian chờ — có thể bảng UAC chưa được xác nhận. Hãy nhờ người dùng bấm 'Yes' rồi thử lại.";
+  }
+  return r;
 }
 
 // -----------------------------------------------------------------------
-// mouse-control skill -> tools/mouse_control.py
+// mouse_control (TL-04, TL-05)
 // -----------------------------------------------------------------------
+const MOUSE_TIMEOUT_MS = { move: 10000, click: 10000, drag: 20000, scroll: 8000, position: 5000, release: 5000 };
+
+async function releaseMouse() {
+  await runPythonTool("mouse_control.py", ["release"], { timeoutMs: 5000 });
+}
+
 export async function mouseControlTool(args = {}) {
-  const { action, x, y, x2, y2, button = "left", double = false, amount, click = false, linear = false } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (move, click, drag, scroll, position)." };
+  const { action, button = "left", double = false, click = false, linear = false, human_like = false, space = "screen" } = args;
+  if (!action) return { status: "error", error: "Thiếu 'action' (move, click, drag, scroll, position, release)." };
+  if (!(action in MOUSE_TIMEOUT_MS)) {
+    return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: move, click, drag, scroll, position, release.` };
+  }
 
-  const cliArgs = [action];
+  let x = toIntArg(args.x), y = toIntArg(args.y), x2 = toIntArg(args.x2), y2 = toIntArg(args.y2);
+  const amount = toIntArg(args.amount);
+  const monitor = toIntArg(args.monitor);
+
+  // TL-05: toạ độ đọc TỪ ẢNH (khung đã thu nhỏ) → pixel vật lý.
+  if (space === "frame" && ["move", "click", "drag"].includes(action)) {
+    try {
+      const { visionFrameGeometry } = await import("./vision.mjs");
+      const g = visionFrameGeometry();
+      if (x !== null && y !== null) ({ x, y } = frameToScreen(x, y, g));
+      if (x2 !== null && y2 !== null) ({ x: x2, y: y2 } = frameToScreen(x2, y2, g));
+    } catch (e) {
+      return { status: "error", error: `Không đổi được toạ độ khung → màn hình: ${e.message}` };
+    }
+  } else if (space !== "screen" && space !== "frame") {
+    return { status: "error", error: "space phải là 'screen' hoặc 'frame'." };
+  }
+
+  const cli = [action];
   if (action === "move" || action === "click") {
-    if (x === undefined || y === undefined) return { status: "error", error: "'x' and 'y' are required for move/click." };
-    cliArgs.push(String(x), String(y));
-    if (linear) cliArgs.push("--linear");
-    if (action === "click") {
-      cliArgs.push("--button", button);
-      if (double) cliArgs.push("--double");
-    } else if (action === "move" && click) {
-      // Cho phep move gop luon click, khong can goi rieng action "click".
-      cliArgs.push("--click", "--button", button);
-      if (double) cliArgs.push("--double");
-    }
+    if (x === null || y === null) return { status: "error", error: "'x' và 'y' (số) là bắt buộc cho move/click." };
+    cli.push(String(x), String(y));
+    if (!human_like) cli.push("--fast"); // mặc định NHANH; đường Bezier mềm chỉ khi human_like:true
+    if (linear) cli.push("--linear");
+    cli.push(optArg("button", button));
+    if (double) cli.push("--double");
+    if (action === "move" && click) cli.push("--click");
   } else if (action === "drag") {
-    if ([x, y, x2, y2].some((v) => v === undefined)) {
-      return { status: "error", error: "'x', 'y', 'x2', 'y2' are all required for drag." };
-    }
-    cliArgs.push(String(x), String(y), String(x2), String(y2), "--button", button);
+    if ([x, y, x2, y2].some((v) => v === null)) return { status: "error", error: "'x','y','x2','y2' đều bắt buộc cho drag." };
+    cli.push(String(x), String(y), String(x2), String(y2), optArg("button", button));
+    if (!human_like) cli.push("--fast");
   } else if (action === "scroll") {
-    if (amount === undefined) return { status: "error", error: "'amount' is required for scroll (positive = up, negative = down)." };
-    cliArgs.push(String(amount));
-  } else if (action !== "position") {
-    return { status: "error", error: `Unknown action '${action}'. Use: move, click, drag, scroll, position.` };
+    if (amount === null) return { status: "error", error: "'amount' (số) là bắt buộc cho scroll (dương = lên, âm = xuống)." };
+    cli.push(String(amount));
   }
+  if (monitor !== null && ["move", "click", "drag"].includes(action)) cli.push(optArg("monitor", monitor));
 
-  const result = await runPythonTool("mouse_control.py", cliArgs, { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "mouse_control.py failed." };
-  try {
-    return { status: "success", ...JSON.parse(result.stdout) };
-  } catch {
-    return { status: "success", raw_output: result.stdout };
-  }
-}
-
-
-// Small shared helper: run a script, parse its one-line JSON stdout, and
-// normalize into the { status, ... } shape every tool here returns.
-async function _runJsonTool(script, args, opts, failMsg) {
-  const result = await runPythonTool(script, args, opts);
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || failMsg };
-  try {
-    return { status: "success", ...JSON.parse(result.stdout) };
-  } catch {
-    return { status: "success", raw_output: result.stdout };
-  }
+  // Hết giờ ⇒ killTree rồi `release` để nút chuột không bị kẹt (TL-04b).
+  return runJsonTool(
+    "mouse_control.py", cli,
+    { timeoutMs: MOUSE_TIMEOUT_MS[action], onTimeout: action === "drag" || action === "click" || action === "move" ? releaseMouse : undefined },
+    "mouse_control.py thất bại.",
+  );
 }
 
 // -----------------------------------------------------------------------
-// context skill -> tools/active_window_info.py
+// context tools
 // -----------------------------------------------------------------------
 export async function activeWindowInfoTool() {
-  return _runJsonTool("active_window_info.py", [], { timeoutMs: 8000 }, "active_window_info.py failed.");
+  return runJsonTool("active_window_info.py", [], { timeoutMs: 8000 }, "active_window_info.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// context skill -> tools/ocr_region.py
-// -----------------------------------------------------------------------
 export async function ocrRegionTool(args = {}) {
-  const { left, top, width, height, lang = "eng" } = args;
-  const cliArgs = [];
-  if ([left, top, width, height].every((v) => v !== undefined)) {
-    cliArgs.push("--region", String(left), String(top), String(width), String(height));
-  }
-  cliArgs.push("--lang", lang);
-  return _runJsonTool("ocr_region.py", cliArgs, { timeoutMs: 15000 }, "ocr_region.py failed.");
+  const vals = [args.left, args.top, args.width, args.height].map(toIntArg);
+  const cli = [];
+  if (vals.every((v) => v !== null)) cli.push("--region", ...vals.map(String)); // nargs=4: bốn giá trị rời
+  // lang: bỏ trống ⇒ để script tự chọn (IRIS_OCR_LANG hoặc vie+eng nếu có gói) — TL-15
+  if (args.lang) cli.push(optArg("lang", args.lang));
+  return runJsonTool("ocr_region.py", cli, { timeoutMs: 30000 }, "ocr_region.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// context skill -> tools/color_picker.py
-// -----------------------------------------------------------------------
 export async function colorPickerTool(args = {}) {
-  const { x, y } = args;
-  const cliArgs = x !== undefined && y !== undefined ? [String(x), String(y)] : [];
-  return _runJsonTool("color_picker.py", cliArgs, { timeoutMs: 8000 }, "color_picker.py failed.");
+  const x = toIntArg(args.x), y = toIntArg(args.y);
+  return runJsonTool("color_picker.py", x !== null && y !== null ? [String(x), String(y)] : [], { timeoutMs: 8000 }, "color_picker.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// context skill -> tools/idle_time.py
-// -----------------------------------------------------------------------
 export async function idleTimeTool() {
-  return _runJsonTool("idle_time.py", [], { timeoutMs: 8000 }, "idle_time.py failed.");
+  return runJsonTool("idle_time.py", [], { timeoutMs: 8000 }, "idle_time.py thất bại.");
+}
+
+export async function sysMonitorTool() {
+  return runJsonTool("sys_monitor.py", [], { timeoutMs: 10000 }, "sys_monitor.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// office skill -> tools/clipboard_history.py
+// clipboard_history (TL-08: mặc định TẮT, có chỉ báo)
 // -----------------------------------------------------------------------
+export const clipboardHistoryEnabled = () => process.env.IRIS_CLIPBOARD_HISTORY === "1";
+
 export async function clipboardHistoryTool(args = {}) {
   const { action, limit = 10, index } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (watch, stop, list, use, clear)." };
+  if (!action) return { status: "error", error: "Thiếu 'action' (start, stop, list, use, clear)." };
+  const act = action === "watch" ? "start" : action; // tương thích tên cũ
+  if (act !== "stop" && act !== "clear" && !clipboardHistoryEnabled()) {
+    return {
+      status: "error",
+      error: "Lịch sử clipboard đang TẮT để bảo vệ quyền riêng tư (clipboard có thể chứa mật khẩu/OTP). Người dùng cần tự bật bằng IRIS_CLIPBOARD_HISTORY=1 trong .env rồi khởi động lại Iris.",
+    };
+  }
+  if (act === "start") {
+    const r = await runJsonTool("clipboard_history.py", ["start"], { timeoutMs: 12000 }, "clipboard_history.py start thất bại.");
+    if (r.status === "success") {
+      try {
+        const { emitEvent } = await import("./events.mjs");
+        emitEvent({ type: "log", level: "warn", message: "🔴 Đang theo dõi clipboard (ngắn hạn, bỏ qua mật khẩu/OTP/số thẻ)." });
+      } catch { /* bỏ qua */ }
+    }
+    return r;
+  }
+  if (act === "stop") return runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 8000 }, "clipboard_history.py stop thất bại.");
+  if (act === "list") return runJsonTool("clipboard_history.py", ["list", optArg("limit", toIntArg(limit) ?? 10)], { timeoutMs: 8000 }, "clipboard_history.py list thất bại.");
+  if (act === "use") {
+    const i = toIntArg(index);
+    if (i === null) return { status: "error", error: "'index' (số) là bắt buộc cho action 'use'." };
+    return runJsonTool("clipboard_history.py", ["use", String(i)], { timeoutMs: 8000 }, "clipboard_history.py use thất bại.");
+  }
+  if (act === "clear") return runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 8000 }, "clipboard_history.py clear thất bại.");
+  return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: start, stop, list, use, clear.` };
+}
 
-  if (action === "watch") {
-    const result = await runPythonTool("clipboard_history.py", ["watch"], { detach: true });
-    return { status: result.ok ? "success" : "error", error: result.ok ? undefined : result.error, message: "Started watching the clipboard in the background." };
-  }
-  if (action === "stop") return _runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 8000 }, "clipboard_history.py stop failed.");
-  if (action === "list") return _runJsonTool("clipboard_history.py", ["list", "--limit", String(limit)], { timeoutMs: 8000 }, "clipboard_history.py list failed.");
-  if (action === "use") {
-    if (index === undefined) return { status: "error", error: "'index' is required for action 'use'." };
-    return _runJsonTool("clipboard_history.py", ["use", String(index)], { timeoutMs: 8000 }, "clipboard_history.py use failed.");
-  }
-  if (action === "clear") return _runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 8000 }, "clipboard_history.py clear failed.");
-  return { status: "error", error: `Unknown action '${action}'. Use: watch, stop, list, use, clear.` };
+/** Gọi khi Iris thoát: dừng vòng lặp theo dõi clipboard (nếu có). Không bao giờ ném lỗi. */
+export async function stopClipboardWatcher() {
+  try { await runPythonTool("clipboard_history.py", ["stop"], { timeoutMs: 5000 }); } catch { /* bỏ qua */ }
 }
 
 // -----------------------------------------------------------------------
-// office skill -> tools/quick_reminder.py
+// quick_reminder — Electron quản lý (TL-09)
 // -----------------------------------------------------------------------
+let reminderService = null;
+export function getReminderService() {
+  if (!reminderService) {
+    reminderService = createReminderService({
+      file: join(userDataDir(), "reminders.json"),
+      notify: async ({ title, message }) => {
+        const electron = (await import("electron")).default;
+        const { Notification } = electron;
+        if (!Notification?.isSupported?.()) throw new Error("Hệ điều hành không hỗ trợ thông báo.");
+        new Notification({ title, body: message, silent: false }).show();
+        try {
+          const { emitEvent } = await import("./events.mjs");
+          emitEvent({ type: "log", level: "info", message: `⏰ Nhắc việc: ${title} — ${message}` });
+        } catch { /* bỏ qua */ }
+      },
+      log: (m) => console.warn(m),
+    });
+  }
+  return reminderService;
+}
+
+/** main.mjs gọi sau app.whenReady(). */
+export function initReminders() {
+  return getReminderService().load();
+}
+export function disposeReminders() {
+  reminderService?.dispose();
+}
+
 export async function quickReminderTool(args = {}) {
-  const { action, minutes, title, message, id } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (schedule, list, cancel)." };
-
-  if (action === "schedule") {
-    if (!minutes || !title || !message) return { status: "error", error: "'minutes', 'title', and 'message' are required to schedule a reminder." };
-    return _runJsonTool(
-      "quick_reminder.py",
-      ["schedule", "--minutes", String(minutes), "--title", title, "--message", message],
-      { timeoutMs: 8000 },
-      "quick_reminder.py schedule failed."
-    );
-  }
-  if (action === "list") return _runJsonTool("quick_reminder.py", ["list"], { timeoutMs: 8000 }, "quick_reminder.py list failed.");
+  const { action, title, message, id } = args;
+  if (!action) return { status: "error", error: "Thiếu 'action' (schedule, list, cancel)." };
+  const svc = getReminderService();
+  const wrap = (r) => {
+    const { success, ...rest } = r;
+    return { ...rest, status: success ? "success" : "error" };
+  };
+  if (action === "schedule") return wrap(svc.schedule({ minutes: args.minutes, title, message }));
+  if (action === "list") return wrap(svc.list());
   if (action === "cancel") {
-    if (!id) return { status: "error", error: "'id' is required for action 'cancel'." };
-    return _runJsonTool("quick_reminder.py", ["cancel", id], { timeoutMs: 8000 }, "quick_reminder.py cancel failed.");
+    if (!id) return { status: "error", error: "'id' là bắt buộc cho action 'cancel'." };
+    return wrap(svc.cancel(String(id)));
   }
-  return { status: "error", error: `Unknown action '${action}'. Use: schedule, list, cancel.` };
+  return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: schedule, list, cancel.` };
 }
 
-
 // -----------------------------------------------------------------------
-// network skill -> tools/wifi_manager.py
+// network
 // -----------------------------------------------------------------------
 export async function wifiManagerTool(args = {}) {
   const { action, ssid } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (list, profiles, connect, disconnect, status)." };
+  if (!action) return { status: "error", error: "Thiếu 'action' (list, profiles, connect, disconnect, status)." };
   if (action === "connect") {
-    if (!ssid) return { status: "error", error: "'ssid' is required for action 'connect'." };
-    return _runJsonTool("wifi_manager.py", ["connect", ssid], { timeoutMs: 15000 }, "wifi_manager.py connect failed.");
+    if (!ssid) return { status: "error", error: "'ssid' là bắt buộc cho action 'connect'." };
+    return runJsonTool("wifi_manager.py", ["connect", String(ssid)], { timeoutMs: 20000 }, "wifi_manager.py connect thất bại.");
   }
   if (["list", "profiles", "disconnect", "status"].includes(action)) {
-    return _runJsonTool("wifi_manager.py", [action], { timeoutMs: 15000 }, `wifi_manager.py ${action} failed.`);
+    return runJsonTool("wifi_manager.py", [action], { timeoutMs: 20000 }, `wifi_manager.py ${action} thất bại.`);
   }
-  return { status: "error", error: `Unknown action '${action}'. Use: list, profiles, connect, disconnect, status.` };
+  return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: list, profiles, connect, disconnect, status.` };
 }
 
-// -----------------------------------------------------------------------
-// network skill -> tools/multi_monitor_info.py
-// -----------------------------------------------------------------------
 export async function multiMonitorInfoTool() {
-  return _runJsonTool("multi_monitor_info.py", [], { timeoutMs: 8000 }, "multi_monitor_info.py failed.");
+  return runJsonTool("multi_monitor_info.py", [], { timeoutMs: 8000 }, "multi_monitor_info.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// system-control-extended skill -> tools/process_manager.py
+// process_manager (TL-02)
 // -----------------------------------------------------------------------
 export async function processManagerTool(args = {}) {
-  const { action, sort = "ram", top = 10, name } = args;
-  if (!action) return { status: "error", error: "Missing 'action' (list, kill)." };
+  const { action, sort = "ram", name } = args;
+  const top = toIntArg(args.top) ?? 10;
+  const force = args.force === true;
+  if (!action) return { status: "error", error: "Thiếu 'action' (list, kill)." };
   if (action === "list") {
-    return _runJsonTool("process_manager.py", ["list", "--sort", sort, "--top", String(top)], { timeoutMs: 10000 }, "process_manager.py list failed.");
+    if (!["cpu", "ram"].includes(sort)) return { status: "error", error: "sort phải là 'cpu' hoặc 'ram'." };
+    return runJsonTool("process_manager.py", ["list", optArg("sort", sort), optArg("top", top)], { timeoutMs: 12000 }, "process_manager.py list thất bại.");
   }
   if (action === "kill") {
-    if (!name) return { status: "error", error: "'name' is required for action 'kill' (e.g. 'chrome.exe')." };
-    return _runJsonTool("process_manager.py", ["kill", name], { timeoutMs: 10000 }, "process_manager.py kill failed.");
+    if (!name) return { status: "error", error: "'name' là bắt buộc cho action 'kill' (vd 'chrome.exe')." };
+    return runJsonTool("process_manager.py", ["kill", String(name), ...(force ? ["--force"] : [])], { timeoutMs: 15000 }, "process_manager.py kill thất bại.");
   }
-  return { status: "error", error: `Unknown action '${action}'. Use: list, kill.` };
+  return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: list, kill.` };
 }
 
-
-// -----------------------------------------------------------------------
-// system-control-extended skill -> tools/focus_assist.py
-// -----------------------------------------------------------------------
 export async function focusAssistTool() {
-  // No official Windows API to silently toggle Focus Assist — this just
-  // opens the real Settings page (ms-settings:quiethours) for the user.
-  return _runJsonTool("focus_assist.py", ["open"], { timeoutMs: 8000 }, "focus_assist.py failed.");
+  return runJsonTool("focus_assist.py", [], { timeoutMs: 8000 }, "focus_assist.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// system-control-extended skill -> tools/lock_screen.py
-// -----------------------------------------------------------------------
 export async function lockScreenTool() {
-  return _runJsonTool("lock_screen.py", [], { timeoutMs: 8000 }, "lock_screen.py failed.");
+  return runJsonTool("lock_screen.py", [], { timeoutMs: 8000 }, "lock_screen.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// image viewer skill -> tools/image_viewer.py
+// view_image — chỉ hiển thị cho NGƯỜI DÙNG (TL-11)
 // -----------------------------------------------------------------------
 export async function viewImageTool(args) {
-  if (!args || !args.action) {
-    return { status: "error", error: "Missing 'action' parameter." };
+  if (!args || !args.action) return { status: "error", error: "Thiếu tham số 'action' (latest, prev, next, close)." };
+  if (!["latest", "prev", "next", "close"].includes(args.action)) {
+    return { status: "error", error: `Action '${args.action}' không hợp lệ. Dùng: latest, prev, next, close.` };
   }
-  return _runJsonTool("image_viewer.py", ["--action", args.action], { timeoutMs: 5000 }, "image_viewer.py failed.");
+  const dir = join(userDataDir(), "screenshots");
+  return runJsonTool("image_viewer.py", [optArg("action", args.action), optArg("dir", dir)], { timeoutMs: 12000 }, "image_viewer.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// window-magic (precise mode) -> tools/move_window.py
+// move_window_precise (TL-01: ctypes, không còn PowerShell)
 // -----------------------------------------------------------------------
 export async function moveWindowPreciseTool(args = {}) {
-  const { name, x = 0, y = 0, width, height } = args;
-  if (!name) return { status: "error", error: "Missing 'name' — which window should be moved?" };
-  
-  const cliArgs = [name, String(x), String(y)];
-  if (width !== undefined) {
-      cliArgs.push("--width", String(width));
-  }
-  if (height !== undefined) {
-      cliArgs.push("--height", String(height));
-  }
-  
-  const result = await runPythonTool("move_window.py", cliArgs, { timeoutMs: 10000 });
-  if (!result.ok) return { status: "error", error: result.error || result.stderr || "move_window.py failed." };
-  return { status: "success", message: result.stdout };
+  const { name } = args;
+  if (!name) return { status: "error", error: "Thiếu 'name' — cửa sổ nào cần di chuyển?" };
+  const x = toIntArg(args.x ?? 0) ?? 0;
+  const y = toIntArg(args.y ?? 0) ?? 0;
+  const cli = [String(name), String(x), String(y)];
+  const w = toIntArg(args.width), h = toIntArg(args.height);
+  if (w !== null) cli.push(optArg("width", w));
+  if (h !== null) cli.push(optArg("height", h));
+  return runJsonTool("move_window.py", cli, { timeoutMs: 10000 }, "move_window.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// power management skill -> tools/power_manager.py
+// power / media / desktop
 // -----------------------------------------------------------------------
 export async function powerManagerTool(action) {
-  if (!action) return { status: "error", error: "Missing 'action' (sleep, shutdown, restart)." };
-  return _runJsonTool("power_manager.py", [action], { timeoutMs: 10000 }, "power_manager.py failed.");
+  if (!["sleep", "shutdown", "restart"].includes(action)) return { status: "error", error: "action phải là sleep, shutdown hoặc restart." };
+  return runJsonTool("power_manager.py", [action], { timeoutMs: 12000 }, "power_manager.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// media control skill -> tools/media_control.py
-// -----------------------------------------------------------------------
 export async function mediaControlTool(action) {
-  if (!action) return { status: "error", error: "Missing 'action' (playpause, next, prev)." };
-  return _runJsonTool("media_control.py", [action], { timeoutMs: 8000 }, "media_control.py failed.");
+  if (!["playpause", "next", "prev"].includes(action)) return { status: "error", error: "action phải là playpause, next hoặc prev." };
+  return runJsonTool("media_control.py", [action], { timeoutMs: 8000 }, "media_control.py thất bại.");
 }
 
-// -----------------------------------------------------------------------
-// desktop manager skill -> tools/desktop_manager.py
-// -----------------------------------------------------------------------
 export async function desktopManagerTool(action) {
-  if (!action) return { status: "error", error: "Missing 'action' (new, close, left, right, boss)." };
-  return _runJsonTool("desktop_manager.py", [action], { timeoutMs: 8000 }, "desktop_manager.py failed.");
+  if (!["new", "close", "left", "right", "boss"].includes(action)) return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
+  return runJsonTool("desktop_manager.py", [action], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// search_everything skill -> tools/search_everything.py
+// search / notifications (TL-08: riêng tư)
 // -----------------------------------------------------------------------
 export async function searchEverythingTool(args = {}) {
-  const { query, max = 10 } = args;
-  if (!query) return { status: "error", error: "Missing query parameter." };
-  
-  const result = await runPythonTool("search_everything.py", [query, "--max", String(max)], { timeoutMs: 10000 });
-  if (!result.ok) {
-    return { status: "error", output: result.stdout || result.stderr || result.error };
-  }
-  
-  try {
-    const data = JSON.parse(result.stdout);
-    if (!data.success) {
-      return { status: "error", error: data.error };
-    }
-    return { status: "success", query: data.query, results: data.results, count: data.results.length };
-  } catch (err) {
-    return { status: "error", output: result.stdout, error: "Failed to parse JSON" };
-  }
+  const { query } = args;
+  const max = toIntArg(args.max) ?? 10;
+  if (!query) return { status: "error", error: "Thiếu tham số 'query'." };
+  const r = await runJsonTool("search_everything.py", [String(query), optArg("max", max)], { timeoutMs: 12000 }, "search_everything.py thất bại.");
+  if (r.status === "success") r.count = Array.isArray(r.results) ? r.results.length : 0;
+  return r;
+}
+
+export async function readNotificationsTool(args = {}) {
+  const limit = toIntArg(args.limit) ?? 5;
+  const cli = [optArg("limit", limit)];
+  if (args.reveal_otp === true) cli.push("--reveal-otp");
+  return runJsonTool("read_notifications.py", cli, { timeoutMs: 15000 }, "read_notifications.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
-// read_notifications skill -> tools/read_notifications.py
+// system_actions.py: close/hide/minimize/restore/note (dùng bởi computer-use-tools.mjs)
 // -----------------------------------------------------------------------
-export async function readNotificationsTool(args = {}) {
-  const { limit = 5 } = args;
-  const result = await runPythonTool("read_notifications.py", ["--limit", String(limit)], { timeoutMs: 10000 });
-  if (!result.ok) {
-    return { status: "error", output: result.stdout || result.stderr || result.error };
-  }
-  
-  try {
-    const data = JSON.parse(result.stdout);
-    if (!data.success) {
-      return { status: "error", error: data.error };
-    }
-    return { status: "success", notifications: data.notifications };
-  } catch (err) {
-    return { status: "error", output: result.stdout, error: "Failed to parse JSON" };
-  }
+export function appTarget(raw) {
+  return String(raw ?? "").split(/[\\/]/).pop().trim();
+}
+
+export async function systemActionTool(action, target, extra = []) {
+  const t = appTarget(target);
+  if (!t) return { status: "error", error: "Thiếu 'target' (tên file .exe hoặc một phần tiêu đề cửa sổ)." };
+  return runJsonTool("system_actions.py", [action, t, ...extra], { timeoutMs: 20000 }, `system_actions.py ${action} thất bại.`);
+}
+
+export async function writeNoteScriptTool(text, isNew) {
+  if (!text) return { status: "error", error: "Thiếu 'text'." };
+  return runJsonTool("system_actions.py", ["note", optArg("text", text), ...(isNew ? ["--new"] : [])], { timeoutMs: 15000 }, "system_actions.py note thất bại.");
 }

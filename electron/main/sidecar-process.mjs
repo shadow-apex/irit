@@ -18,11 +18,15 @@ export function resolvePythonCommand() {
   const forced = String(process.env.IRIS_PYTHON_BIN || "").trim();
   if (forced) return forced;
   if (cachedPythonCommand) return cachedPythonCommand;
-  const candidates = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
+  const candidates = process.platform === "win32" ? ["py", "python", "python3"] : ["python3", "python"];
   for (const cmd of candidates) {
     try {
-      const res = spawnSync(cmd, ["--version"], { stdio: "ignore" });
-      if (!res.error) {
+      // WIN-PY-STUB: trên Windows, python.exe trong %LOCALAPPDATA%\Microsoft\WindowsApps là
+      // "App Execution Alias" của Microsoft Store — spawn được (không có res.error) nhưng chỉ in
+      // "Python was not found..." rồi thoát mã 9009. Phải kiểm tra status === 0, nếu không mọi
+      // tool trong tools/ đều hỏng âm thầm khi Gemini Live gọi.
+      const res = spawnSync(cmd, ["--version"], { stdio: "ignore", windowsHide: true, timeout: 5000 });
+      if (!res.error && res.status === 0) {
         cachedPythonCommand = cmd;
         return cmd;
       }

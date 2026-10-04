@@ -1,3 +1,41 @@
+# Nhật ký sửa lỗi — Lần 2/3: thư mục `tools/` (04/10/2026)
+
+Nguồn: `IRIS_PROMPT_2_TOOLS.md`. Chạy: `npm run build`, `npm test` (153 test), `npm run test:py` (44 test).
+
+## Kiểm tra lần 1 trước khi làm lần 2
+`npm install` + `npm run build` xanh; `npm test` 115/115 qua; `npm run setup:ort` thật sự chép 8 file `ort-wasm*` (mục "chưa kiểm chứng" của lượt bổ sung đã được xác nhận); mọi `.mjs` qua `node --check`;
+`toolsDir()/pythonBin()/userDataDir()`, `killTree`, xác nhận hai bước, `sendVideoFrame` đều có. **Không cần sửa lại phần lần 1.**
+
+## Kết quả kiểm chứng
+| Hạng mục | Kết quả |
+|---|---|
+| `npm run build` | xanh |
+| `npm test` | 153/153 (38 test mới cho tools) |
+| `python -m unittest discover -s tools/tests` | 44/44 (hàm thuần chạy trên Linux) |
+| `py_compile` toàn bộ `tools/*.py` | sạch |
+| Smoke test script trên Linux (nhánh không cần Windows) | `kill *`, `kill *.exe`, `kill explorer.exe`, `kill python`, truy vấn `-n`, SSID rỗng, tiêu đề rỗng, tham số sai ⇒ JSON `success:false` + mã thoát ≠ 0 |
+
+## ĐÃ SỬA
+**T.1 lớp chạy Python (`local-tools.mjs`, `tool-result.mjs`):** `PYTHONUTF8/PYTHONIOENCODING`, `setEncoding("utf8")`, giới hạn stdout 1 MB, hết giờ ⇒ `killTree` rồi chạy `onTimeout` (nhả chuột); truyền `IRIS_SELF_PID`/`IRIS_USER_DATA`; tham số tự do dạng `--opt=<v>`, số thực làm tròn, văn bản clipboard dài qua **stdin** (TL-14); `normalizeToolResult` — `status` đặt sau cùng, kết quả không phải JSON không bao giờ là success (TL-03); `pythonBin()/toolsDir()` đọc lười, `computer-session.mjs` đọc `OMNIPARSER_*` lười (P-03).
+**TL-01** `move_window.py` viết lại bằng ctypes (`_winutil.py`), không còn PowerShell/C#. **TL-02** `validate_process_name` + danh sách bảo vệ + đóng êm + `--force` (`_common.py`, `_procutil.py`); `close_app`/`kill` chờ kết quả thật. **TL-03** (trên). **TL-04** `PAUSE=0`, lệnh `release`, đường Bezier kẹp trong màn hình ảo và né góc fail-safe, timeout `drag` 20 s, mặc định `--fast`. **TL-05** kẹp theo màn hình ảo, `--monitor N`, `space:"frame"` + `frame_geometry` (vision/`take_ai_screenshot`). **TL-06** sổ cửa sổ đã ẩn (`hidden_windows.json`), khớp exe chính xác trước, tiêu đề ≥ 4 ký tự, loại cửa sổ Iris. **TL-07** `--wait` đếm ngược thật, từ chối cửa sổ Iris, `demo` chỉ khi `IRIS_DEV_TOOLS=1`, xoá `--setup/--demo2`. **TL-08** clipboard history mặc định tắt/TTL/lọc mật khẩu-OTP-thẻ/PID kiểm `create_time`+cmdline/dừng khi thoát; thông báo che OTP. **TL-09** nhắc việc chuyển sang Electron (`reminders.mjs`), lưu userData, nạp lại, không nuốt lỗi. **TL-10** `wifi_manager` đọc bytes OEM + phân tích độc lập ngôn ngữ; `search_everything` giải mã UTF-8→OEM, chặn truy vấn `-`/`/`. **TL-11** chụp màn hình bằng `desktopCapturer` (bỏ `ai_vision.py`), chỉ lưu khi `save:true` (≤ 20 ảnh/24 h); `image_viewer.py` cùng thư mục ảnh, báo lỗi thật, kênh lệnh trong userData. **TL-12** độ sáng kiểm hỗ trợ + mã thoát, bluetooth/camera chạy UAC `-Wait` với `-EncodedCommand` hằng số, âm lượng tuyệt đối + `unmute`, `power_manager` bỏ `os.system`, shutdown trễ 5 s, báo `hibernate_enabled`. **TL-13** `idle_time` số học modulo 2^32. **TL-15** OCR tự chọn `vie+eng`, `IRIS_OCR_LANG`, thu nhỏ vùng lớn, `ImageGrab(all_screens)`. **TL-16** xoá `minimize.ps1`, 2 `.bat`, `quick_reminder.py`, `ai_vision.py`; `_common.py`; `requirements.txt` khớp thật; mọi lỗi tham số `argparse` cũng ra JSON. **TL-17** tạo `sys_monitor.py` + tool `get_system_stats`; cập nhật 5 `SKILL.md`; `tools/README.md`.
+Khác: catalog mô tả đúng hành vi thật, bỏ 2 khai báo trùng tên còn sót, thêm `reveal_otp`/`force`/`save`/`volume_level`/`space`/`monitor`; `dangerous-tools` thêm bluetooth/camera "on" và `reveal_otp`.
+
+## Chỗ prompt 2 nói SAI / lệch (đã đối chiếu code)
+- **TL-17:** `project_tree.md` liệt kê `mouse_controller.py` — đó là file **thật** ở `sidecar/mouse_controller.py`, không phải lỗi; không sửa.
+- **P-03:** `pythonBin()` đã lười từ lần 1; chỉ `computer-session.mjs` còn đọc env ở cấp module (đã sửa).
+- Mô tả `power_manager sleep` ⇒ hibernate là kiến thức Windows, không kiểm được ở đây; code chỉ báo `hibernate_enabled` thay vì tự quyết.
+
+## BLOCKED(Windows) — chưa chạy trên máy thật, KHÔNG tự đánh PASS
+Chỉ phần logic thuần được test. Cần bạn thử trên Windows: `mouse drag` + timeout + `release`; kẹp toạ độ ở màn hình phụ/`--monitor`; `hide` rồi `restore`; `minimize "iris"` không thu nhỏ Iris; `magic_move --active --wait 5`; `move_window_precise` với tên có ký tự lạ; `wifi_manager list/profiles/connect` trên **Windows tiếng Việt**; `search_local_files "tài liệu"`; `clipboard_history` (start/stop/TTL/quyền 0600); `read_system_notifications` che OTP; `power_manager` (xác nhận hai bước, shutdown trễ 5 s); `system_control` camera/bluetooth (UAC `-Wait`), độ sáng trên màn hình rời; `idle_time`; `image_viewer` (cần Pillow + tkinter); `ocr_region` với gói `vie`; `take_ai_screenshot` (`desktopCapturer`) + `space:"frame"` click đúng điểm; nhắc việc qua restart thật; `taskkill` đóng êm với ứng dụng có hộp thoại lưu.
+**Giới hạn của test:** `run-python-tool.test.mjs` chạy runner thật nhưng dùng `node` làm "python" (kiểm UTF-8, stdin, timeout, giới hạn 1 MB); chưa đối chứng được rằng test chunk-đa-byte sẽ đỏ với code cũ.
+
+## Việc bạn cần làm
+1. `pip install -r tools/requirements.txt` (có thêm `winsdk`; `Pillow` giờ bắt buộc cho OCR/color/viewer). Cài Tesseract + gói `vie` nếu cần OCR tiếng Việt; `es.exe` (Everything CLI) cho `search_local_files`.
+2. Lịch sử clipboard muốn dùng: `IRIS_CLIPBOARD_HISTORY=1` trong `.env`.
+3. Chạy `npm install && npm run build && npm test && npm run test:py`, rồi duyệt danh sách BLOCKED(Windows) ở trên.
+
+---
+
 # Nhật ký sửa lỗi — Lần 1/3: Vision & Chức năng (03/10/2026)
 
 Nguồn: `IRIS_PROMPT_1_VISION_VA_CHUC_NANG.md`. Mọi thay đổi có test hoặc kiểm tra tương ứng; chạy `npm test`

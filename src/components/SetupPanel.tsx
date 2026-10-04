@@ -18,6 +18,8 @@ type PermState = "idle" | "granted" | "denied";
 
 type Draft = {
   GEMINI_API_KEY: string;
+  GEMINI_VISION_API_KEY: string;
+  ANTHROPIC_API_KEY: string;
   GEMINI_LIVE_MODEL: string;
   GEMINI_LIVE_VOICE: string;
   IRIS_USER_NAME: string;
@@ -113,6 +115,8 @@ export default function SetupPanel({
 }) {
   const [draft, setDraft] = useState<Draft>({
     GEMINI_API_KEY: "", // S-10: khoá đã lưu không bao giờ được gửi lại cho renderer; chỉ nhập khi muốn thay
+    GEMINI_VISION_API_KEY: "",
+    ANTHROPIC_API_KEY: "",
     GEMINI_LIVE_MODEL: config.geminiModel,
     GEMINI_LIVE_VOICE: config.geminiVoice,
     IRIS_USER_NAME: config.userName,
@@ -280,6 +284,20 @@ export default function SetupPanel({
           , then paste the whole thing. Stored locally only.
         </small>
       </label>
+      <label className="setup-field">
+        <span>Vision API key (Tuỳ chọn)</span>
+        <input
+          type="password"
+          value={draft.GEMINI_VISION_API_KEY}
+          placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — đã lưu (nhập khoá mới để thay)` : "Dùng xử lý ảnh (tránh đụng quota)"}
+          onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <small className="setup-note">
+          Khoá thứ 2 để tách riêng xử lý ảnh. Nếu bỏ trống, Iris sẽ dùng chung khoá Live ở trên.
+        </small>
+      </label>
       <div className="setup-actions">
         <button className="setup-btn" onClick={testGemini} disabled={!keyReady || gemini.status === "testing"}>
           {gemini.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
@@ -305,6 +323,20 @@ export default function SetupPanel({
         />
         <small className="setup-note">
           When off, Gemini handles everything locally without needing a Claude API key. If a task requires Claude, Iris will apologize and remind you to enable it here.
+        </small>
+      </label>
+      <label className="setup-field">
+        <span>Anthropic API key</span>
+        <input
+          type="password"
+          value={draft.ANTHROPIC_API_KEY}
+          placeholder={config.anthropicApiKeySet ? `•••• ${config.anthropicApiKeyHint} — đã lưu (nhập khoá mới để thay)` : "Dùng cho Computer Use và OmniParser"}
+          onChange={(event) => set("ANTHROPIC_API_KEY", event.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <small className="setup-note">
+          Dùng để cấp quyền cho Claude điều khiển máy tính. (PO/STUDY agent vẫn dùng token từ claude setup-token).
         </small>
       </label>
       <div className="setup-actions">

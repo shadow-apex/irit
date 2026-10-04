@@ -13,9 +13,14 @@ import crypto from "node:crypto";
 /** tool -> (args) => true nếu lời gọi đó nguy hiểm. */
 export const DANGEROUS = {
   power_manager: (a) => ["shutdown", "restart", "sleep"].includes(String(a.action || "").toLowerCase()),
-  system_control: (a) => [a.wifi, a.bluetooth, a.camera].some((v) => String(v || "").toLowerCase() === "off"),
+  // TL-12: bluetooth/camera đổi trạng thái qua UAC ẩn (cả "on"); camera "off" còn tắt cả webcam Iris đang dùng.
+  system_control: (a) =>
+    [a.wifi, a.bluetooth, a.camera].some((v) => String(v || "").toLowerCase() === "off") ||
+    [a.bluetooth, a.camera].some((v) => String(v || "").toLowerCase() === "on"),
   process_manager: (a) => String(a.action || "").toLowerCase() === "kill",
   close_app: () => true,
+  // TL-08: để lộ mã OTP chưa che cho mô hình đám mây cần người dùng đồng ý rõ.
+  read_system_notifications: (a) => a.reveal_otp === true,
 };
 
 export const CONFIRM_TTL_MS = 30_000;

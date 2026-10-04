@@ -143,8 +143,12 @@ type PoQuestionAnswer = {
 
 type IrisConfig = {
   geminiApiKeySet: boolean;
-  autoStart?: boolean;
   geminiApiKeyHint: string;
+  geminiVisionApiKeySet: boolean;
+  geminiVisionApiKeyHint: string;
+  anthropicApiKeySet: boolean;
+  anthropicApiKeyHint: string;
+  autoStart?: boolean;
   saveError?: string;
   geminiModel: string;
   geminiVoice: string;

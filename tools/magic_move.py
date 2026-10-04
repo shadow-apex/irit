@@ -1,260 +1,104 @@
-import time
+"""
+tools/magic_move.py — di chuyển cửa sổ: cửa sổ đang focus (có đếm ngược thật) hoặc theo tên.
+
+    python tools/magic_move.py --active --wait 5 -x 100 -y 100
+    python tools/magic_move.py --name "Notepad" -x 100 -y 100
+    IRIS_DEV_TOOLS=1 python tools/magic_move.py --demo --name "Notepad"      # chỉ để dev
+
+TL-07: `--wait N` đếm ngược thật rồi mới lấy cửa sổ focus; cửa sổ của chính Iris bị từ chối.
+Chế độ biểu diễn `--demo` chỉ chạy khi IRIS_DEV_TOOLS=1. Đã xoá `--setup`/`--demo2` (cứng theo
+máy tác giả: antigravity/cursor, mở claude.ai bằng shell=True).
+"""
+import math
+import os
 import sys
-import io
-import argparse
-import subprocess
+import time
 
-# Sửa lỗi in tiếng Việt trên console Windows
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-# QUAN TRONG: khai bao DPI-awareness truoc khi import pygetwindow, neu khong
-# toa do/kich thuoc cua so tra ve se bi Windows "gia lap" (virtualized) theo
-# ty le scaling thay vi pixel vat ly thuc, lam cua so bi di chuyen sai vi tri.
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+MAX_WAIT = 30
 
-import pygetwindow as gw
 
 def move_active_window(x, y, wait_time=0):
-    """Di chuyển ngay cửa sổ hiện hành (không cần đếm ngược)"""
-    if wait_time > 0:
-        print(f"BẠN CÓ {wait_time} GIÂY ĐỂ CLICK VÀO CỬA SỔ MUỐN DI CHUYỂN...")
-        for i in range(wait_time, 0, -1):
-            print(f"{i}...")
-            time.sleep(1)
-        
-    win = gw.getActiveWindow()
-    if win:
-        print(f"Đã tóm được cửa sổ: '{win.title}'")
-        win.moveTo(x, y)
-        print(f"Đã ném cửa sổ về tọa độ ({x}, {y}) thành công!")
-    else:
-        print("Không tìm thấy cửa sổ nào được chọn.")
+    import _winutil
+
+    wait = max(0, min(int(wait_time), MAX_WAIT))
+    for _ in range(wait):
+        time.sleep(1)
+    win = _winutil.foreground_window()
+    if not win:
+        return {"success": False, "error": "Không có cửa sổ nào đang được focus."}
+    if _winutil.is_self_window(win):
+        return {"success": False,
+                "error": "Cửa sổ đang focus là chính Iris — hãy bấm vào cửa sổ muốn di chuyển rồi thử lại."}
+    if not _winutil.move_resize(win["hwnd"], x, y):
+        return {"success": False, "error": "Không di chuyển được cửa sổ (có thể cần quyền cao hơn)."}
+    return {"success": True, "message": f"Đã di chuyển '{win['title']}' đến ({x}, {y}).", "window": win["title"]}
+
 
 def move_window_by_name(title, x, y):
-    """Tìm và di chuyển cửa sổ theo tên"""
-    windows = gw.getAllWindows()
-    found = False
-    for win in windows:
-        if title.lower() in win.title.lower():
-            print(f"Đã tìm thấy cửa sổ: '{win.title}'")
-            win.moveTo(x, y)
-            print(f"Đã di chuyển về ({x}, {y})")
-            found = True
-            break
-            
-    if not found:
-        print(f"Không tìm thấy cửa sổ nào có tên chứa '{title}'.")
+    import _winutil
+    from move_window import validate_window_title
 
-def demo_mode(target_name=None):
-    """Chế độ biểu diễn ma thuật (mặc định mở Explorer, hoặc tìm theo tên)"""
-    import math
-    win = None
-    
-    if target_name:
-        print(f"Đang tìm cửa sổ '{target_name}' để biểu diễn...")
-        windows = gw.getAllWindows()
-        for w in windows:
-            if target_name.lower() in w.title.lower():
-                win = w
-                break
-    else:
-        print("Đang mở File Explorer để biểu diễn mặc định...")
-        subprocess.Popen(['explorer.exe'])
-        time.sleep(1.5)
-        win = gw.getActiveWindow()
-    
-    if win:
-        print(f"Đang biểu diễn với: '{win.title}'")
-        try:
-            win.resizeTo(500, 400)
-            win.moveTo(100, 100)
-        except: pass
-        
-        time.sleep(0.5)
-        
-        # Di chuyển dích dắc nhanh
-        print("Ziczac siêu tốc...")
-        for i in range(10):
-            try:
-                win.moveTo(100 + i*60, 100 if i%2==0 else 300)
-                time.sleep(0.04)
-            except: pass
-            
-        # Hình sin (lượn sóng)
-        print("Lượn sóng đại dương...")
-        for x in range(100, 800, 15):
-            y = int(300 + 150 * math.sin(x / 40.0))
-            try:
-                win.moveTo(x, y)
-                time.sleep(0.01)
-            except: pass
-            
-        # Vòng tròn xoắn ốc ma thuật
-        print("Xoắn ốc không gian...")
-        center_x, center_y = 600, 350
-        for angle in range(0, 360 * 3, 15):
-            rad = angle * math.pi / 180
-            radius = 250 - (angle / 6)  # Thu nhỏ dần
-            if radius < 0: radius = 0
-            x = int(center_x + radius * math.cos(rad))
-            y = int(center_y + radius * math.sin(rad))
-            try:
-                win.moveTo(x, y)
-                time.sleep(0.01)
-            except: pass
-            
-        # Phóng to và quay về giữa
-        try:
-            win.moveTo(250, 150)
-            win.resizeTo(800, 600)
-        except: pass
-        
-        print("Hoàn tất màn ảo thuật!")
-    else:
-        if target_name:
-            print(f"Lỗi: Không tìm thấy cửa sổ nào chứa tên '{target_name}'. Hãy chắc chắn bạn đã mở nó.")
-        else:
-            print("Lỗi: Không bắt được cửa sổ biểu diễn.")
+    t = validate_window_title(title)
+    wins = _winutil.select_windows(_winutil.enum_windows(), t)
+    if not wins:
+        return {"success": False, "error": f"Không tìm thấy cửa sổ nào khớp '{t}'."}
+    win = wins[0]
+    if not _winutil.move_resize(win["hwnd"], x, y):
+        return {"success": False, "error": "Không di chuyển được cửa sổ."}
+    return {"success": True, "message": f"Đã di chuyển '{win['title']}' đến ({x}, {y}).", "window": win["title"]}
 
-def demo_mode_2():
-    """Mở 6 cửa sổ Notepad và xếp thẳng hàng gọn gàng như phim viễn tưởng"""
-    print("Khởi động Demo 2: Triệu hồi 6 cửa sổ Notepad...")
-    for i in range(6):
-        subprocess.Popen(['notepad.exe'])
-    
-    print("Đang chờ các cửa sổ xuất hiện...")
-    time.sleep(2.5)
-    
-    windows = gw.getAllWindows()
-    notepad_wins = []
-    for w in windows:
-        if 'notepad' in w.title.lower():
-            notepad_wins.append(w)
-            if len(notepad_wins) == 6:
-                break
-                
-    print(f"Đã tìm thấy {len(notepad_wins)} cửa sổ Notepad. Bắt đầu dàn trận...")
-    
-    w_width, w_height = 250, 300
-    start_x, start_y = 400, 50
-    spacing_x = 20
-    spacing_y = 20
-    
-    for i, win in enumerate(notepad_wins):
-        row = i // 3
-        col = i % 3
-        try:
-            win.resizeTo(w_width, w_height)
-            target_x = start_x + col * (w_width + spacing_x)
-            target_y = start_y + row * (w_height + spacing_y)
-            win.moveTo(target_x, target_y)
-            time.sleep(0.3)
-        except: pass
-            
-    print("Dàn trận thành công!")
 
-def setup_work_mode():
-    """Chế độ tự động setup không gian làm việc: Antigravity toàn màn hình, Claude ở góc trái"""
-    import pyautogui
-    print("Đang dọn dẹp không gian làm việc...")
-    
-    # 1. Thu nhỏ tất cả các cửa sổ (Show Desktop)
-    pyautogui.hotkey('win', 'd')
-    time.sleep(1)
-    
-    # 2. Tìm và phóng to Antigravity IDE
-    windows = gw.getAllWindows()
-    agy_win = None
-    
-    print("Danh sách cửa sổ hiện tại (để debug):")
-    for w in windows:
-        if w.title.strip():
-            print(f" - {w.title}")
-            
-    for w in windows:
-        t_low = w.title.lower()
-        if 'antigravity' in t_low or 'agy' in t_low or 'code' in t_low or 'cursor' in t_low or 'irit' in t_low:
-            agy_win = w
-            break
-            
-    if agy_win:
-        print(f"Đã tìm thấy IDE: {agy_win.title}")
-        try:
-            if agy_win.isMinimized:
-                agy_win.restore()
-            agy_win.maximize()
-            agy_win.activate()
-        except: pass
-    else:
-        print("Không tìm thấy cửa sổ IDE đang mở.")
-        
-    # 3. Mở trình duyệt với Claude
-    print("Đang mở trình duyệt truy cập Claude...")
-    subprocess.Popen("start https://claude.ai", shell=True)
-    time.sleep(4) # Chờ trình duyệt tải
-    
-    # 4. Thu nhỏ trình duyệt và đưa vào góc trái
-    windows = gw.getAllWindows()
-    claude_win = None
-    for w in windows:
-        if 'claude' in w.title.lower():
-            claude_win = w
-            break
-            
-    if claude_win:
-        print(f"Đã tìm thấy trình duyệt Claude: {claude_win.title}")
-        try:
-            if claude_win.isMaximized or claude_win.isMinimized:
-                claude_win.restore()
-                
-            screen_w, screen_h = pyautogui.size()
-            
-            # Thu nhỏ ở góc trên bên trái (rộng 250, cao 300)
-            target_w, target_h = 250, 300
-            target_x = 10
-            target_y = 60 # Hơi thấp xuống 1 tí so với mép trên
-            
-            claude_win.resizeTo(target_w, target_h)
-            claude_win.moveTo(target_x, target_y)
-            claude_win.activate()
-            print("Đã đặt Claude vào góc trái thành công!")
-        except Exception as e:
-            print(f"Lỗi khi điều khiển cửa sổ Claude: {e}")
-    else:
-        print("Không tìm thấy cửa sổ trình duyệt Claude mới mở.")
-        
-    print("Setup không gian làm việc hoàn tất!")
+def demo_mode(name):
+    """Biểu diễn zig-zag + sóng sin (CHỈ dev)."""
+    import _winutil
+    from move_window import validate_window_title
+
+    t = validate_window_title(name)
+    wins = _winutil.select_windows(_winutil.enum_windows(), t)
+    if not wins:
+        return {"success": False, "error": f"Không tìm thấy cửa sổ '{t}'."}
+    hwnd = wins[0]["hwnd"]
+    _winutil.move_resize(hwnd, 100, 100, 500, 400)
+    for i in range(10):
+        _winutil.move_resize(hwnd, 100 + i * 60, 100 if i % 2 == 0 else 300)
+        time.sleep(0.04)
+    for xx in range(100, 800, 15):
+        _winutil.move_resize(hwnd, xx, int(300 + 150 * math.sin(xx / 40.0)))
+        time.sleep(0.01)
+    _winutil.move_resize(hwnd, 250, 150, 800, 600)
+    return {"success": True, "message": "Xong màn biểu diễn."}
+
+
+def build_parser():
+    p = _common.ArgParser(description="Di chuyển cửa sổ Windows")
+    p.add_argument("--active", action="store_true", help="cửa sổ đang focus (kết hợp --wait)")
+    p.add_argument("--wait", type=int, default=0, help="giây đếm ngược trước khi lấy cửa sổ focus")
+    p.add_argument("--demo", action="store_true", help="biểu diễn (cần IRIS_DEV_TOOLS=1)")
+    p.add_argument("--name", type=str, default=None)
+    p.add_argument("-x", type=int, default=0)
+    p.add_argument("-y", type=int, default=0)
+    return p
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Công cụ ma thuật điều khiển cửa sổ Windows")
-    parser.add_argument("--active", action="store_true", help="Chế độ click chọn cửa sổ (đếm ngược 5s)")
-    parser.add_argument("--demo", action="store_true", help="Chạy chế độ biểu diễn (mặc định File Explorer)")
-    parser.add_argument("--demo2", action="store_true", help="Mở 6 cửa sổ Notepad và xếp thẳng hàng")
-    parser.add_argument("--setup", action="store_true", help="Setup không gian làm việc (Antigravity Max, Claude Mini Góc Trái)")
-    parser.add_argument("--name", type=str, help="Tên cửa sổ (dùng kết hợp với --demo hoặc chế độ tìm theo tên)", default=None)
-    parser.add_argument("-x", type=int, help="Tọa độ X (mặc định 0)", default=0)
-    parser.add_argument("-y", type=int, help="Tọa độ Y (mặc định 0)", default=0)
-    
-    args = parser.parse_args()
-    
-    if args.demo:
-        demo_mode(args.name)
-    elif args.demo2:
-        demo_mode_2()
-    elif args.setup:
-        setup_work_mode()
-    elif args.active:
-        move_active_window(args.x, args.y)
-    elif args.name:
-        move_window_by_name(args.name, args.x, args.y)
-    else:
-        # Nếu không truyền tham số nào, mặc định chạy chế độ active
-        move_active_window(args.x, args.y)
+    _common.ensure_utf8()
+    _common.dpi_aware()
+    a = build_parser().parse_args()
+    try:
+        if a.demo:
+            if os.environ.get("IRIS_DEV_TOOLS") != "1":
+                _common.fail("Chế độ demo chỉ bật khi IRIS_DEV_TOOLS=1.")
+            if not a.name:
+                _common.fail("--demo cần --name.")
+            res = demo_mode(a.name)
+        elif a.name:
+            res = move_window_by_name(a.name, a.x, a.y)
+        else:
+            res = move_active_window(a.x, a.y, a.wait)
+    except ValueError as e:
+        _common.fail(str(e))
+    ok = res.pop("success")
+    _common.emit(ok, **res)

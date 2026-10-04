@@ -1,123 +1,131 @@
 """
-tools/wifi_manager.py
+tools/wifi_manager.py — quản lý Wi-Fi qua netsh (không cần cài thêm).
 
-Quan ly Wi-Fi tren Windows qua netsh (co san trong Windows, khong can cai
-them gi). Bo sung cho phan bat/tat Wi-Fi da co san trong sys_control.py
-bang kha nang: liet ke mang Wi-Fi quet duoc, xem profile da luu, va TU KET
-NOI vao 1 SSID da co profile luu san (SSID da tung ket noi va tick "Connect
-automatically" truoc do, hoac da duoc them bang 'netsh wlan add profile').
+    python tools/wifi_manager.py list | profiles | status | disconnect
+    python tools/wifi_manager.py connect -- "TenWifi"      # chỉ với SSID ĐÃ có profile lưu sẵn
 
-LUU Y BAO MAT: tool nay KHONG nhan hay luu mat khau Wi-Fi qua tham so dong
-lenh — mat khau truyen qua argv se bi lo trong danh sach tien trinh/log he
-thong. Vi vay 'connect' chi hoat dong voi SSID DA CO SAN profile tren may;
-neu la mang moi chua tung ket noi, hay ket noi thu cong 1 lan dau (nhap
-mat khau qua UI Windows) roi cac lan sau tool nay moi tu ket noi lai duoc.
-
-Vi du dung:
-    python tools/wifi_manager.py list                # cac mang Wi-Fi quet duoc
-    python tools/wifi_manager.py profiles              # cac profile da luu tren may
-    python tools/wifi_manager.py connect "TenWifi"     # ket noi (can da co profile luu san)
-    python tools/wifi_manager.py disconnect
-    python tools/wifi_manager.py status
+TL-10: không còn phụ thuộc nhãn tiếng Anh và không giả định UTF-8. `netsh` xuất theo code page OEM
+(vd. cp1258 trên Windows tiếng Việt) ⇒ đọc BYTES rồi giải mã (UTF-8 → OEM). Phân tích dựa vào cấu
+trúc (token `SSID n :`, `\\d+%`, dòng thụt lề `khoá : giá trị`) chứ không dựa vào chữ "All User Profile"…
+Mật khẩu Wi-Fi KHÔNG bao giờ đi qua argv.
 """
-import sys
-import io
+import os
 import re
-import json
-import argparse
 import subprocess
+import sys
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
+
+_AUTH_RE = re.compile(r"\b(Open|OWE|WEP|WPA3?(?:-\w+)?|WPA2(?:-\w+)?)\b", re.I)
 
 
-def _run(args):
-    return subprocess.run(["netsh"] + args, capture_output=True, text=True, encoding="utf-8", errors="replace")
-
-
-def list_networks():
-    result = _run(["wlan", "show", "networks", "mode=bssid"])
-    if result.returncode != 0:
-        return {"success": False, "error": result.stderr.strip() or "Khong the quet mang Wi-Fi. Kiem tra adapter Wi-Fi da bat chua."}
-    networks = []
-    current = None
-    for line in result.stdout.splitlines():
-        m = re.match(r"^SSID \d+ : (.*)$", line.strip())
+def parse_networks(text):
+    """`netsh wlan show networks mode=bssid` → [{ssid, signal, auth}] (không phụ thuộc ngôn ngữ)."""
+    networks, cur = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.match(r"^SSID\s+\d+\s*:\s*(.*)$", line)
         if m:
-            if current:
-                networks.append(current)
-            current = {"ssid": m.group(1), "signal": None, "auth": None}
+            if cur:
+                networks.append(cur)
+            cur = {"ssid": m.group(1).strip(), "signal": None, "auth": None}
             continue
-        if current:
-            m2 = re.match(r"^Signal\s*:\s*(.*)$", line.strip())
-            if m2:
-                current["signal"] = m2.group(1)
-            m3 = re.match(r"^Authentication\s*:\s*(.*)$", line.strip())
-            if m3:
-                current["auth"] = m3.group(1)
-    if current:
-        networks.append(current)
-    return {"success": True, "networks": networks}
+        if cur is None:
+            continue
+        if cur["signal"] is None:
+            ms = re.search(r"(\d{1,3})\s*%", line)
+            if ms:
+                cur["signal"] = f"{ms.group(1)}%"
+                continue
+        if cur["auth"] is None and ":" in line:
+            ma = _AUTH_RE.search(line.split(":", 1)[1])
+            if ma:
+                cur["auth"] = ma.group(1)
+    if cur:
+        networks.append(cur)
+    return networks
 
 
-def list_profiles():
-    result = _run(["wlan", "show", "profiles"])
-    if result.returncode != 0:
-        return {"success": False, "error": result.stderr.strip()}
-    profiles = re.findall(r"All User Profile\s*:\s*(.+)", result.stdout)
-    return {"success": True, "profiles": [p.strip() for p in profiles]}
+def parse_profiles(text):
+    """`netsh wlan show profiles` → tên profile: mọi dòng THỤT LỀ dạng `nhãn : tên` (bỏ <None>/rỗng)."""
+    out = []
+    for raw in text.splitlines():
+        if not raw[:1].isspace() or ":" not in raw:
+            continue
+        value = raw.split(":", 1)[1].strip()
+        if value and value.lower() not in ("<none>", "<không có>", "none") and value not in out:
+            out.append(value)
+    return out
 
 
-def connect(ssid):
-    result = _run(["wlan", "connect", f"name={ssid}"])
-    if result.returncode == 0 and "completed successfully" in result.stdout.lower():
-        return {"success": True, "message": f"Da ket noi toi '{ssid}'."}
-    return {
-        "success": False,
-        "error": (result.stdout.strip() or result.stderr.strip() or f"Khong the ket noi toi '{ssid}'.")
-        + " (Luu y: SSID phai da co profile luu san tren may.)",
-    }
-
-
-def disconnect():
-    result = _run(["wlan", "disconnect"])
-    if result.returncode == 0:
-        return {"success": True, "message": "Da ngat ket noi Wi-Fi."}
-    return {"success": False, "error": result.stderr.strip()}
-
-
-def status():
-    result = _run(["wlan", "show", "interfaces"])
-    if result.returncode != 0:
-        return {"success": False, "error": result.stderr.strip()}
+def parse_status(text):
     info = {}
-    for line in result.stdout.splitlines():
-        if ":" in line:
-            k, _, v = line.strip().partition(":")
+    for raw in text.splitlines():
+        if ":" in raw:
+            k, _, v = raw.strip().partition(":")
             k, v = k.strip(), v.strip()
             if k and v:
                 info[k] = v
-    return {"success": True, "status": info}
+    return info
+
+
+def validate_ssid(ssid):
+    if not isinstance(ssid, str) or not ssid.strip():
+        raise ValueError("SSID rỗng.")
+    s = ssid.strip()
+    if len(s) > 32:
+        raise ValueError("SSID dài quá 32 ký tự.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in s):
+        raise ValueError("SSID chứa ký tự điều khiển.")
+    return s
+
+
+def _run(args):
+    r = subprocess.run(["netsh"] + args, capture_output=True)
+    return r.returncode, _common.decode_bytes(r.stdout), _common.decode_bytes(r.stderr)
+
+
+def build_parser():
+    p = _common.ArgParser(description="Quản lý Wi-Fi qua netsh")
+    sub = p.add_subparsers(dest="command", required=True)
+    for n in ("list", "profiles", "disconnect", "status"):
+        sub.add_parser(n)
+    c = sub.add_parser("connect")
+    c.add_argument("ssid")
+    return p
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Quan ly Wi-Fi qua netsh")
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("list", help="Quet cac mang Wi-Fi xung quanh")
-    sub.add_parser("profiles", help="Liet ke profile Wi-Fi da luu tren may")
-    p_connect = sub.add_parser("connect", help="Ket noi vao 1 SSID da co profile luu san")
-    p_connect.add_argument("ssid", type=str)
-    sub.add_parser("disconnect", help="Ngat ket noi Wi-Fi hien tai")
-    sub.add_parser("status", help="Xem trang thai ket noi Wi-Fi hien tai")
-
-    args = parser.parse_args()
-    if args.command == "list":
-        print(json.dumps(list_networks(), ensure_ascii=False))
-    elif args.command == "profiles":
-        print(json.dumps(list_profiles(), ensure_ascii=False))
-    elif args.command == "connect":
-        print(json.dumps(connect(args.ssid), ensure_ascii=False))
-    elif args.command == "disconnect":
-        print(json.dumps(disconnect(), ensure_ascii=False))
-    elif args.command == "status":
-        print(json.dumps(status(), ensure_ascii=False))
+    _common.ensure_utf8()
+    a = build_parser().parse_args()
+    if a.command == "list":
+        code, out, err = _run(["wlan", "show", "networks", "mode=bssid"])
+        if code != 0:
+            _common.fail((err or out).strip() or "Không quét được Wi-Fi (adapter Wi-Fi đã bật chưa?).")
+        _common.emit(True, networks=parse_networks(out))
+    elif a.command == "profiles":
+        code, out, err = _run(["wlan", "show", "profiles"])
+        if code != 0:
+            _common.fail((err or out).strip() or "Không đọc được profile Wi-Fi.")
+        _common.emit(True, profiles=parse_profiles(out))
+    elif a.command == "status":
+        code, out, err = _run(["wlan", "show", "interfaces"])
+        if code != 0:
+            _common.fail((err or out).strip() or "Không đọc được trạng thái Wi-Fi.")
+        _common.emit(True, status=parse_status(out))
+    elif a.command == "disconnect":
+        code, out, err = _run(["wlan", "disconnect"])
+        if code != 0:
+            _common.fail((err or out).strip() or "Không ngắt được Wi-Fi.")
+        _common.emit(True, message="Đã ngắt kết nối Wi-Fi.")
+    else:
+        try:
+            ssid = validate_ssid(a.ssid)
+        except ValueError as e:
+            _common.fail(str(e))
+        # Chỉ tin mã thoát (không tìm chữ 'completed successfully' — sai trên Windows tiếng Việt).
+        code, out, err = _run(["wlan", "connect", f"name={ssid}"])
+        if code != 0:
+            _common.fail(f"{(out or err).strip() or 'Không kết nối được.'} (SSID phải đã có profile lưu sẵn.)")
+        _common.emit(True, message=f"Đã gửi yêu cầu kết nối tới '{ssid}'. Kiểm tra bằng action 'status'.")

@@ -1,92 +1,96 @@
 """
-tools/ocr_region.py
+tools/ocr_region.py — OCR một vùng màn hình (hoặc toàn màn hình) bằng pytesseract.
 
-OCR (nhan dang chu) mot vung man hinh chi dinh, hoac toan bo man hinh neu
-khong truyen toa do. Dung pytesseract + Pillow (Pillow di kem san voi
-pyautogui) de doc chu tu anh chup man hinh, khong can gui ca anh cho
-Gemini chi de doc mot dong text.
+    python tools/ocr_region.py [--region L T W H] [--lang vie+eng]
 
-**YEU CAU CAI DAT THEM (ngoai pip):** Tesseract-OCR engine phai duoc cai
-RIENG tren may (day la phan mem, khong phai goi pip):
-  https://github.com/UB-Mannheim/tesseract/wiki (ban cai Windows)
-Sau khi cai, hoac them thu muc cai dat vao PATH, hoac set bien moi truong
-TESSERACT_CMD tro toi tesseract.exe, vi du:
-  set TESSERACT_CMD=C:\\Program Files\\Tesseract-OCR\\tesseract.exe
+Cần cài thêm engine Tesseract-OCR riêng (https://github.com/UB-Mannheim/tesseract/wiki) — đặt
+TESSERACT_CMD nếu không có trong PATH.
 
-Vi du dung:
-    python tools/ocr_region.py                            # OCR toan man hinh
-    python tools/ocr_region.py --region 100 100 500 300    # OCR 1 vung (left top width height)
-    python tools/ocr_region.py --lang vie                  # OCR tieng Viet (can cai goi ngon ngu vie.traineddata)
+TL-15: ngôn ngữ mặc định lấy từ IRIS_OCR_LANG; nếu không đặt, dùng `vie+eng` khi Tesseract có gói
+`vie`, ngược lại `eng` kèm cảnh báo. Vùng quá lớn được thu nhỏ trước khi OCR. Chụp bằng
+PIL.ImageGrab(all_screens) nên vùng ở màn hình phụ (toạ độ âm) cũng đọc được.
 """
-import sys
-import io
 import os
-import json
-import argparse
+import sys
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-# QUAN TRONG: khai bao DPI-awareness truoc khi import pyautogui, neu khong
-# vung toa do OCR se bi lech tren man hinh Windows co scaling (125%/150%...).
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
-except Exception:
+MAX_OCR_WIDTH = 2400
+
+
+def to_int(v):
+    return int(round(float(v)))
+
+
+def pick_lang(requested, available, env_lang=""):
+    """Hàm thuần: chọn mã ngôn ngữ. Trả về (lang, warning|None)."""
+    if requested:
+        return requested, None
+    if env_lang:
+        return env_lang, None
+    if "vie" in (available or []):
+        return ("vie+eng" if "eng" in available else "vie"), None
+    return "eng", "Chưa cài gói ngôn ngữ 'vie' cho Tesseract — văn bản tiếng Việt sẽ đọc sai. Cài vie.traineddata hoặc đặt IRIS_OCR_LANG."
+
+
+def downscale_size(width, height, max_width=MAX_OCR_WIDTH):
+    """Hàm thuần: kích thước sau thu nhỏ (giữ tỉ lệ)."""
+    if width <= max_width:
+        return width, height, 1.0
+    f = max_width / float(width)
+    return max(1, int(width * f)), max(1, int(height * f)), f
+
+
+def ocr_region(region=None, lang=None):
+    _common.dpi_aware()
+    pytesseract = _common.require("pytesseract")
+    from PIL import ImageGrab
+
+    cmd = os.environ.get("TESSERACT_CMD")
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
     try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
-try:
-    import pyautogui
-except ImportError:
-    print(json.dumps({"success": False, "error": "Thieu thu vien pyautogui. Chay: pip install -r tools/requirements.txt"}))
-    sys.exit(1)
-
-try:
-    import pytesseract
-except ImportError:
-    print(json.dumps({
-        "success": False,
-        "error": "Thieu thu vien pytesseract. Chay: pip install -r tools/requirements.txt"
-    }))
-    sys.exit(1)
-
-tesseract_cmd = os.environ.get("TESSERACT_CMD")
-if tesseract_cmd:
-    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
-
-
-def ocr_region(region=None, lang="eng"):
-    try:
-        screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
-    except Exception as e:
-        return {"success": False, "error": f"Khong chup duoc man hinh: {e}"}
+        available = pytesseract.get_languages(config="")
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        if "not installed" in msg or "not in your path" in msg or "no such file" in msg:
+            _common.fail("Chưa tìm thấy Tesseract-OCR (phần mềm riêng, không phải gói pip). Cài từ "
+                         "https://github.com/UB-Mannheim/tesseract/wiki hoặc đặt TESSERACT_CMD.")
+        available = []
+    chosen, warn = pick_lang(lang, available, os.environ.get("IRIS_OCR_LANG", "").strip())
 
     try:
-        text = pytesseract.image_to_string(screenshot, lang=lang)
-    except Exception as e:
-        msg = str(e)
-        if "tesseract is not installed" in msg.lower() or "not in your path" in msg.lower():
-            return {
-                "success": False,
-                "error": (
-                    "Chua tim thay Tesseract-OCR engine tren may (day la phan mem rieng, "
-                    "khong phai goi pip). Cai tai "
-                    "https://github.com/UB-Mannheim/tesseract/wiki roi thu lai, hoac set "
-                    "bien moi truong TESSERACT_CMD tro toi tesseract.exe."
-                ),
-            }
-        return {"success": False, "error": f"Loi OCR: {msg}"}
+        if region:
+            l, t, w, h = region
+            if w <= 0 or h <= 0:
+                _common.fail("Vùng OCR có chiều rộng/cao không hợp lệ.")
+            img = ImageGrab.grab(bbox=(l, t, l + w, t + h), all_screens=True)
+        else:
+            img = ImageGrab.grab(all_screens=True)
+    except Exception as e:  # noqa: BLE001
+        _common.fail(f"Không chụp được màn hình: {e}")
+    nw, nh, factor = downscale_size(*img.size)
+    if factor < 1.0:
+        img = img.resize((nw, nh))
+    try:
+        text = pytesseract.image_to_string(img.convert("RGB"), lang=chosen)
+    except Exception as e:  # noqa: BLE001
+        _common.fail(f"Lỗi OCR: {e}")
+    res = {"text": text.strip(), "region": list(region) if region else None, "lang": chosen, "downscaled": factor < 1.0}
+    if warn:
+        res["warning"] = warn
+    return res
 
-    return {"success": True, "text": text.strip(), "region": region, "lang": lang}
+
+def build_parser():
+    p = _common.ArgParser(description="OCR một vùng màn hình")
+    p.add_argument("--region", type=to_int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"))
+    p.add_argument("--lang", type=str, default=None)
+    return p
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="OCR mot vung man hinh")
-    parser.add_argument("--region", type=int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"),
-                         help="Vung can OCR. Bo qua de OCR toan man hinh.")
-    parser.add_argument("--lang", type=str, default="eng", help="Ma ngon ngu Tesseract, vd 'eng', 'vie'. Mac dinh 'eng'.")
-    args = parser.parse_args()
-    print(json.dumps(ocr_region(args.region, args.lang), ensure_ascii=False))
+    _common.ensure_utf8()
+    a = build_parser().parse_args()
+    _common.emit(True, **ocr_region(a.region, a.lang))

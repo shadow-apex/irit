@@ -1,59 +1,47 @@
 """
-tools/color_picker.py
+tools/color_picker.py — lấy mã màu (RGB/HEX) của điểm ảnh tại toạ độ, hoặc tại vị trí chuột.
 
-Lay ma mau (RGB/HEX) cua diem anh tai toa do chi dinh, hoac tai vi tri con
-tro chuot hien tai neu khong truyen toa do. Dung pyautogui.pixel() (da di
-kem san voi pyautogui, khong can cai them gi).
+    python tools/color_picker.py [x y]
 
-Vi du dung:
-    python tools/color_picker.py               # mau tai vi tri chuot hien tai
-    python tools/color_picker.py 400 300        # mau tai toa do (400, 300)
+Dùng PIL.ImageGrab (all_screens) nên đọc được cả màn hình phụ (toạ độ âm).
 """
+import os
 import sys
-import io
-import json
-import argparse
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-# QUAN TRONG: khai bao DPI-awareness truoc khi import pyautogui, neu khong
-# toa do doc mau se bi lech tren man hinh Windows co scaling (125%/150%...).
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
 
-try:
-    import pyautogui
-except ImportError:
-    print(json.dumps({"success": False, "error": "Thieu thu vien pyautogui. Chay: pip install -r tools/requirements.txt"}))
-    sys.exit(1)
+def to_int(v):
+    return int(round(float(v)))
 
 
 def pick_color(x=None, y=None):
+    _common.dpi_aware()
     if x is None or y is None:
-        x, y = pyautogui.position()
-    try:
-        r, g, b = pyautogui.pixel(int(x), int(y))
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-    return {
-        "success": True,
-        "x": int(x),
-        "y": int(y),
-        "rgb": {"r": r, "g": g, "b": b},
-        "hex": "#{:02X}{:02X}{:02X}".format(r, g, b),
-    }
+        pg = _common.require("pyautogui")
+        x, y = pg.position()
+    from PIL import ImageGrab
+
+    x, y = int(x), int(y)
+    img = ImageGrab.grab(bbox=(x, y, x + 1, y + 1), all_screens=True).convert("RGB")
+    r, g, b = img.getpixel((0, 0))
+    return {"x": x, "y": y, "rgb": {"r": r, "g": g, "b": b}, "hex": "#{:02X}{:02X}{:02X}".format(r, g, b)}
+
+
+def build_parser():
+    p = _common.ArgParser(description="Lấy màu điểm ảnh trên màn hình")
+    p.add_argument("x", type=to_int, nargs="?", default=None)
+    p.add_argument("y", type=to_int, nargs="?", default=None)
+    return p
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Lay ma mau diem anh tren man hinh")
-    parser.add_argument("x", type=int, nargs="?", default=None)
-    parser.add_argument("y", type=int, nargs="?", default=None)
-    args = parser.parse_args()
-    print(json.dumps(pick_color(args.x, args.y)))
+    _common.ensure_utf8()
+    a = build_parser().parse_args()
+    try:
+        _common.emit(True, **pick_color(a.x, a.y))
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        _common.fail(f"Không đọc được màu: {e}")

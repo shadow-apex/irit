@@ -6,26 +6,14 @@ description: >-
 
 # System Control Skill
 
-You have the ability to control the user's hardware and settings via the `tools/sys_control.py` script.
+Control the user's hardware via `tools/sys_control.py`. Output is one JSON line; a non-zero exit code means it failed.
 
-## Commands
+- **Volume:** `--volume up|down|mute|unmute` (relative steps; `mute` is a Windows TOGGLE) or `--volume-level 0..100` (absolute).
+- **Brightness:** `--brightness 50` — laptop panels only; external monitors report "not supported".
+- **Wi-Fi:** `--wifi off` (disconnects). Turning it on is not automated — use `tools/wifi_manager.py connect "<SSID>"` for a saved network.
+- **Bluetooth / Camera:** `--bluetooth on|off`, `--camera on|off`.
 
-Run the appropriate command using the `run_command` tool (WaitMsBeforeAsync=5000 is recommended so you can see if it worked).
-
-- **Volume Control:** 
-  `python tools/sys_control.py --volume mute` (or `up`, `down`)
-  
-- **Brightness Control:**
-  `python tools/sys_control.py --brightness 50` (Replace 50 with any percentage from 0 to 100)
-  
-- **Wi-Fi Toggle:**
-  `python tools/sys_control.py --wifi off` (or `on`)
-
-- **Bluetooth Toggle:**
-  `python tools/sys_control.py --bluetooth off` (or `on`)
-
-- **Camera Toggle:**
-  `python tools/sys_control.py --camera off` (or `on`)
-
-## Important Note regarding Hardware Toggles
-When you run commands to toggle Wi-Fi, Bluetooth, or Camera, a UAC (User Account Control) prompt will appear on the user's screen asking for Administrator privileges. You MUST tell the user to click "Yes" on that prompt for the action to succeed.
+## Important
+- Bluetooth/camera changes need Administrator rights: a UAC prompt appears and the script waits for the answer. Tell the user to click **Yes**.
+- `--camera off` disables **every** camera device, including the webcam Iris itself uses for hand control and vision.
+- Iris asks for a spoken two-step confirmation before these hardware toggles.

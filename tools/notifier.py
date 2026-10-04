@@ -1,28 +1,24 @@
-import argparse
-from plyer import notification
+"""tools/notifier.py — gửi thông báo hệ thống ngay lập tức (plyer). Lỗi được báo thật, không nuốt."""
+import os
 import sys
-import io
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-def send_toast(title, message):
-    """Gửi thông báo hệ thống bằng plyer"""
-    try:
-        notification.notify(
-            title=title,
-            message=message,
-            app_name='Antigravity AI',
-            timeout=10
-        )
-        print(f"Đã gửi thông báo: '{title} - {message}'")
-    except Exception as e:
-        print(f"Lỗi khi gửi thông báo: {e}")
+
+def build_parser():
+    p = _common.ArgParser(description="Gửi thông báo hệ thống")
+    p.add_argument("--title", required=True)
+    p.add_argument("--message", required=True)
+    return p
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Công cụ Nhắc nhở & Thông báo (Notifier)")
-    parser.add_argument("--title", type=str, required=True, help="Tiêu đề thông báo")
-    parser.add_argument("--message", type=str, required=True, help="Nội dung thông báo")
-    
-    args = parser.parse_args()
-    send_toast(args.title, args.message)
+    _common.ensure_utf8()
+    a = build_parser().parse_args()
+    plyer = _common.require("plyer")
+    try:
+        plyer.notification.notify(title=a.title[:120], message=a.message[:1000], app_name="Iris", timeout=10)
+    except Exception as e:  # noqa: BLE001
+        _common.fail(f"Không gửi được thông báo: {e}")
+    _common.emit(True, message=f"Đã gửi thông báo: {a.title}")

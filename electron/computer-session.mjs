@@ -182,13 +182,13 @@ async function pressKeyCombo(rawText) {
 import { ensureOmniServer, omniAuthHeaders } from "./main/omni-server.mjs";
 import { resolveComputerUseConfig, explainComputerUseError } from "./main/computer-use-config.mjs";
 
-const OMNIPARSER_ANNOTATE_URL =
+// P-03: đọc env LƯỜI (mỗi lần dùng) — các import tĩnh được nạp TRƯỚC khi main.mjs chạy loadEnvFile(),
+// nên đọc ở cấp module sẽ bỏ qua giá trị đặt trong .env.
+const omniAnnotateUrl = () =>
   process.env.OMNIPARSER_ANNOTATE_URL || process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
-const OMNIPARSER_ENABLED = (process.env.OMNIPARSER_ENABLED ?? "true").toLowerCase() !== "false";
-// YOLO + OCR (PaddleOCR) trên CPU/GPU yếu có thể mất hàng chục giây mỗi lần
-// — main.mjs (startOmniParserTask) đã dùng sẵn 90s cho cùng một server này,
-// nên giữ cùng giá trị mặc định để không bị timeout giả trên máy yếu.
-const OMNIPARSER_TIMEOUT_MS = Number(process.env.OMNIPARSER_TIMEOUT_MS || 90000);
+const omniEnabled = () => (process.env.OMNIPARSER_ENABLED ?? "true").toLowerCase() !== "false";
+// YOLO + OCR (PaddleOCR) trên CPU/GPU yếu có thể mất hàng chục giây mỗi lần — giữ 90s như startOmniParserTask.
+const omniTimeoutMs = () => Number(process.env.OMNIPARSER_TIMEOUT_MS || 90000);
 
 /**
  * Gửi ảnh chụp màn hình (base64 JPEG) sang OmniParser để lấy về ảnh đã đánh
@@ -203,7 +203,7 @@ const OMNIPARSER_TIMEOUT_MS = Number(process.env.OMNIPARSER_TIMEOUT_MS || 90000)
  * cả tác vụ thất bại chỉ vì OmniParser offline.
  */
 async function annotateWithOmniParser(screenshotBase64, width, height, onStream) {
-  if (!OMNIPARSER_ENABLED) {
+  if (!omniEnabled()) {
     return { base64: screenshotBase64, elementsText: "", annotated: false };
   }
 
@@ -213,7 +213,7 @@ async function annotateWithOmniParser(screenshotBase64, width, height, onStream)
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OMNIPARSER_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), omniTimeoutMs());
 
   try {
     const imageBuffer = Buffer.from(screenshotBase64, "base64");
@@ -223,7 +223,7 @@ async function annotateWithOmniParser(screenshotBase64, width, height, onStream)
     // Gemini nội bộ và trả về toàn bộ danh sách khung cho Claude tự chọn.
     formData.append("file", new Blob([imageBuffer], { type: "image/jpeg" }), "screenshot.jpg");
 
-    const response = await fetch(OMNIPARSER_ANNOTATE_URL, {
+    const response = await fetch(omniAnnotateUrl(), {
       method: "POST",
       headers: omniAuthHeaders(),
       body: formData,
@@ -272,7 +272,7 @@ async function annotateWithOmniParser(screenshotBase64, width, height, onStream)
     // xảy ra với server thật, nhưng phòng hờ) — vẫn dùng ảnh gốc kèm danh sách text.
     return { base64: screenshotBase64, elementsText, annotated: elementsText.length > 0 };
   } catch (err) {
-    const reason = err?.name === "AbortError" ? `timed out after ${OMNIPARSER_TIMEOUT_MS}ms` : err.message;
+    const reason = err?.name === "AbortError" ? `timed out after ${omniTimeoutMs()}ms` : err.message;
     onStream?.({ text: `*(OmniParser không khả dụng, dùng ảnh gốc: ${reason})*` });
     return { base64: screenshotBase64, elementsText: "", annotated: false };
   } finally {

@@ -92,6 +92,7 @@ import {
   desktopManagerTool,
   searchEverythingTool,
   readNotificationsTool,
+  sysMonitorTool,
 } from "./local-tools.mjs";
 
 // S-11: xác nhận hai bước cho tool nguy hiểm (shutdown/kill/tắt wifi...). Hiện cảnh báo lên HUD/log.
@@ -233,7 +234,7 @@ export async function executeClaudeTool(name, args = {}) {
     case "write_note":
       return await writeNoteTool(args);
     case "take_ai_screenshot":
-      return await takeAiScreenshotTool();
+      return await takeAiScreenshotTool(args);
     case "read_clipboard":
       return await readClipboardTool();
     case "write_clipboard":
@@ -273,6 +274,8 @@ export async function executeClaudeTool(name, args = {}) {
     case "move_window_precise":
       return await moveWindowPreciseTool(args);
     
+    case "get_system_stats":
+      return sysMonitorTool();
     case "power_manager":
       return powerManagerTool(args.action);
     case "media_control":

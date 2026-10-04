@@ -54,6 +54,8 @@ export const GEMINI_VOICES = [
 export const GEMINI_LIVE_MODELS = ["models/gemini-3.1-flash-live-preview"];
 export const ALLOWED_CONFIG_KEYS = new Set([
   "GEMINI_API_KEY",
+  "GEMINI_VISION_API_KEY",
+  "ANTHROPIC_API_KEY",
   "GEMINI_LIVE_MODEL",
   "GEMINI_LIVE_VOICE",
   "IRIS_USER_NAME",
@@ -86,6 +88,10 @@ export function getFullConfig() {
     autoStart: String(process.env.IRIS_AUTOSTART ?? "1").trim() !== "0",
     geminiApiKeySet: Boolean((process.env.GEMINI_API_KEY || "").trim()),
     geminiApiKeyHint: (process.env.GEMINI_API_KEY || "").trim().slice(-4),
+    geminiVisionApiKeySet: Boolean((process.env.GEMINI_VISION_API_KEY || "").trim()),
+    geminiVisionApiKeyHint: (process.env.GEMINI_VISION_API_KEY || "").trim().slice(-4),
+    anthropicApiKeySet: Boolean((process.env.ANTHROPIC_API_KEY || "").trim()),
+    anthropicApiKeyHint: (process.env.ANTHROPIC_API_KEY || "").trim().slice(-4),
     geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
     geminiVoice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
     userName: process.env.IRIS_USER_NAME || "",
@@ -108,7 +114,7 @@ export function writeUserConfig(rawUpdates) {
   for (const [key, value] of Object.entries(rawUpdates || {})) {
     if (!ALLOWED_CONFIG_KEYS.has(key)) continue;
     // S-10: SetupPanel không còn nhận khoá thô; ô trống = "giữ khoá hiện tại", không xoá.
-    if (key === "GEMINI_API_KEY" && String(value ?? "").trim() === "") continue;
+    if (["GEMINI_API_KEY", "GEMINI_VISION_API_KEY", "ANTHROPIC_API_KEY"].includes(key) && String(value ?? "").trim() === "") continue;
     updates[key] = value;
   }
   if (!Object.keys(updates).length) return getFullConfig();

@@ -1,325 +1,301 @@
 """
-tools/mouse_control.py
+tools/mouse_control.py — điều khiển con trỏ chuột theo toạ độ pixel VẬT LÝ.
 
-Cong cu dieu khien con tro chuot theo toa do (x, y) tren man hinh.
-Dung chung thu vien pyautogui da co san trong tools/requirements.txt.
-
-Duong di chuyen dung thuat toan "duong cong Bezier + toc do ngau nhien"
-de con tro di chuyen tu nhien giong nguoi that.
-
-NANG CAP: Them "Fast Mode" (--fast / fast_mode=True) de bỏ qua delay
-ngau nhien khi can automation toc do cao. Fast Mode van dung Bezier
-nhung voi it diem hon (10 thay vi 30) va tong thoi gian ~0.05s de tranh
-cursor teleport giat cuc trong khi van an toan voi OS focus/repaint cycle.
-
-Vi du dung:
-    python tools/mouse_control.py move 800 400
-    python tools/mouse_control.py move 800 400 --click
-    python tools/mouse_control.py move 800 400 --click --button right
-    python tools/mouse_control.py move 800 400 --fast
-    python tools/mouse_control.py move 800 400 --linear --duration 0.1
-    python tools/mouse_control.py click 800 400
-    python tools/mouse_control.py click 800 400 --fast
-    python tools/mouse_control.py click 800 400 --button right
-    python tools/mouse_control.py click 800 400 --double
-    python tools/mouse_control.py drag 200 200 900 600
+    python tools/mouse_control.py move 800 400 [--click] [--button right] [--double] [--fast] [--linear]
+    python tools/mouse_control.py click 800 400 [--fast] [--button right] [--double]
+    python tools/mouse_control.py drag 200 200 900 600 [--fast]
     python tools/mouse_control.py scroll -500
     python tools/mouse_control.py position
+    python tools/mouse_control.py release            # nhả mọi nút chuột (dọn dẹp sau khi bị huỷ giữa chừng)
+    ... --monitor N   (toạ độ TƯƠNG ĐỐI màn hình N theo thứ tự của multi_monitor_info.py, bắt đầu từ 0)
+
+Sửa so với bản cũ:
+ * TL-04a: pyautogui.PAUSE = 0 (mặc định 0,1 s sau MỖI lệnh làm đường Bezier 31 bước mất ≥ 3 s).
+ * TL-04b/c: nút chuột luôn được nhả (kể cả khi FailSafe nổ giữa chừng); lệnh `release` để Node dọn
+   dẹp khi tiến trình bị giết (TerminateProcess không chạy `finally`); đường đi KẸP trong màn hình ảo
+   và né góc kích hoạt fail-safe.
+ * TL-04d: toạ độ thực (123.5) được làm tròn thay vì làm argparse lỗi.
+ * TL-05: kẹp theo MÀN HÌNH ẢO (mọi màn hình), không còn ép vào mép màn hình chính.
 """
-import sys
-import io
-import json
-import time
+import os
 import random
-import argparse
+import sys
+import time
 
-# Dam bao in tieng Viet khong bi loi tren Windows console
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-# QUAN TRONG: khai bao DPI-awareness cho tien trinh NAY truoc khi import
-# pyautogui. Neu khong, tren man hinh Windows co scaling (125%/150%...) toa
-# do pixel se bi lech so voi nhung gi screenshot/AI nhin thay -> click sai
-# vi tri. Phai goi truoc khi bat ky thao tac man hinh nao xay ra.
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()  # fallback cho Windows cu
-    except Exception:
-        pass
-
-try:
-    import pyautogui
-except ImportError:
-    print(json.dumps({
-        "success": False,
-        "error": "Thieu thu vien pyautogui. Chay: pip install -r tools/requirements.txt"
-    }))
-    sys.exit(1)
-
-# An toan: neu con tro bi day vao goc tren-trai man hinh, pyautogui se raise
-# FailSafeException va dung ngay lap tuc — tranh chuot chay loan khong kiem soat.
-pyautogui.FAILSAFE = True
-
-# Fast Mode constants
-_FAST_MODE_TOTAL_DURATION = 0.05   # Tong thoi gian di chuyen (giay) trong fast mode
-_FAST_MODE_N_POINTS = 10            # So diem Bezier — du de khong teleport, du it de nhanh
-_FAST_MODE_PRE_CLICK_DELAY = 0.02  # Delay truoc click (OS can xu ly focus/repaint)
-
-# Normal Mode constants
-_NORMAL_MODE_MIN = 0.35
-_NORMAL_MODE_MAX = 0.65
-_NORMAL_MODE_N_POINTS = 30
-_NORMAL_PRE_CLICK_MIN = 0.05
-_NORMAL_PRE_CLICK_MAX = 0.15
+_FAST_TOTAL, _FAST_POINTS, _FAST_PRE_CLICK = 0.05, 10, 0.02
+_NORMAL_MIN, _NORMAL_MAX, _NORMAL_POINTS = 0.35, 0.65, 30
+_PRE_CLICK_MIN, _PRE_CLICK_MAX = 0.05, 0.15
+FAILSAFE_MARGIN = 3
 
 
-def _clamp_to_screen(x, y):
-    """Gioi han toa do trong pham vi man hinh de tranh loi khi nguoi dung
-    nhap toa do ngoai man hinh (vi du am hoac lon hon do phan giai)."""
-    screen_w, screen_h = pyautogui.size()
-    cx = max(0, min(screen_w - 1, x))
-    cy = max(0, min(screen_h - 1, y))
-    return cx, cy
+# --------------------------------------------------------------------- hàm thuần (test được)
+def to_int(value):
+    """Chấp nhận '123', '123.5', '-5' ⇒ int làm tròn."""
+    return int(round(float(value)))
 
 
-def _bezier_path(start, end, n_points=30, control_offset_ratio=0.25):
-    """Duong cong Bezier bac 2 giua 2 diem, voi diem dieu khien lech ngau
-    nhien sang 1 ben — de con tro luon theo mot duong hoi cong thay vi mot
-    duong thang tuyet doi (dau hieu de nhan biet la bot). Giong het ham cung
-    ten trong api_server.py."""
+def clamp_point(x, y, bounds):
+    """bounds = (left, top, right, bottom) bao gồm biên."""
+    l, t, r, b = bounds
+    return max(l, min(r, int(x))), max(t, min(b, int(y)))
+
+
+def avoid_failsafe(x, y, bounds, margin=FAILSAFE_MARGIN):
+    """Đẩy điểm ra khỏi 4 góc của màn hình ảo và điểm (0,0) (fail-safe mặc định của pyautogui)."""
+    l, t, r, b = bounds
+    mid_x, mid_y = (l + r) / 2.0, (t + b) / 2.0
+    for cx, cy in ((l, t), (r, t), (l, b), (r, b), (0, 0)):
+        if abs(x - cx) <= margin and abs(y - cy) <= margin:
+            sx = 1 if cx <= mid_x else -1
+            sy = 1 if cy <= mid_y else -1
+            x, y = cx + sx * (margin + 1), cy + sy * (margin + 1)
+    return x, y
+
+
+def safe_point(x, y, bounds):
+    cx, cy = clamp_point(x, y, bounds)
+    return avoid_failsafe(cx, cy, bounds)
+
+
+def resolve_target(x, y, bounds, monitors=None, monitor=None):
+    """Đổi toạ độ (tương đối màn hình `monitor` nếu có) về toạ độ tuyệt đối đã kẹp/né góc.
+
+    Trả về (x, y, adjusted:bool).
+    """
+    x, y = int(x), int(y)
+    area = bounds
+    if monitor is not None:
+        if not monitors or monitor < 0 or monitor >= len(monitors):
+            raise ValueError(f"Không có màn hình số {monitor} (có {len(monitors or [])} màn hình).")
+        m = monitors[monitor]
+        x, y = m["left"] + x, m["top"] + y
+        area = (m["left"], m["top"], m["right"] - 1, m["bottom"] - 1)
+    sx, sy = clamp_point(x, y, area)
+    fx, fy = avoid_failsafe(sx, sy, area)
+    return fx, fy, (fx, fy) != (x, y)
+
+
+def bezier_path(start, end, n_points=30, control_offset_ratio=0.25, rng=random):
     sx, sy = start
     ex, ey = end
     mx, my = (sx + ex) / 2.0, (sy + ey) / 2.0
-
     dist = max(1.0, ((ex - sx) ** 2 + (ey - sy) ** 2) ** 0.5)
     dx, dy = ex - sx, ey - sy
-    perp_x, perp_y = -dy, dx
-    norm = max(1e-6, (perp_x ** 2 + perp_y ** 2) ** 0.5)
-    perp_x, perp_y = perp_x / norm, perp_y / norm
-
-    offset = dist * control_offset_ratio * random.uniform(0.3, 1.0) * random.choice([-1, 1])
-    cx, cy = mx + perp_x * offset, my + perp_y * offset
-
-    points = []
+    px, py = -dy, dx
+    norm = max(1e-6, (px ** 2 + py ** 2) ** 0.5)
+    px, py = px / norm, py / norm
+    offset = dist * control_offset_ratio * rng.uniform(0.3, 1.0) * rng.choice([-1, 1])
+    cx, cy = mx + px * offset, my + py * offset
+    pts = []
     for i in range(n_points + 1):
         t = i / n_points
-        x = (1 - t) ** 2 * sx + 2 * (1 - t) * t * cx + t ** 2 * ex
-        y = (1 - t) ** 2 * sy + 2 * (1 - t) * t * cy + t ** 2 * ey
-        points.append((x, y))
-    return points
+        pts.append(((1 - t) ** 2 * sx + 2 * (1 - t) * t * cx + t ** 2 * ex,
+                    (1 - t) ** 2 * sy + 2 * (1 - t) * t * cy + t ** 2 * ey))
+    return pts
 
 
-def _smooth_move_to(cx, cy, duration=None, fast_mode=False):
-    """Di chuyen con tro toi (cx, cy) theo duong cong Bezier.
-
-    fast_mode=False (default): tong 0.35-0.65s ngau nhien, 30 diem Bezier.
-    fast_mode=True: tong ~0.05s co dinh, 10 diem Bezier (nhanh nhung khong teleport).
-    duration=float: ghi de gia tri ngau nhien (chi ap dung khi fast_mode=False).
-    """
-    start_x, start_y = pyautogui.position()
-
-    if fast_mode:
-        n_points = _FAST_MODE_N_POINTS
-        total_duration = _FAST_MODE_TOTAL_DURATION
-    else:
-        n_points = _NORMAL_MODE_N_POINTS
-        total_duration = duration if duration is not None else random.uniform(_NORMAL_MODE_MIN, _NORMAL_MODE_MAX)
-
-    path = _bezier_path((start_x, start_y), (cx, cy), n_points=n_points)
-    step_delay = total_duration / len(path) if len(path) else 0
-
-    for px, py in path:
-        pyautogui.moveTo(px, py, duration=0)
-        if step_delay > 0:
-            time.sleep(step_delay)
+def safe_path(start, end, bounds, n_points=30, control_offset_ratio=0.25, rng=random):
+    """Đường Bezier mà MỌI điểm đều nằm trong màn hình ảo và không chạm góc fail-safe."""
+    return [safe_point(round(x), round(y), bounds) for x, y in
+            bezier_path(start, end, n_points, control_offset_ratio, rng)]
 
 
-def move(x, y, duration=None, linear=False, do_click=False, button="left", double=False, fast_mode=False):
-    """Di chuyen con tro chuot den toa do (x, y).
-
-    Mac dinh di chuyen mem (duong cong Bezier).
-    --linear: di chuyen thang, tuc thi.
-    --fast: Fast Mode — Bezier 10 diem, tong ~0.05s, khong delay ngau nhien.
-    --click: click luon tai diem den.
-    """
-    cx, cy = _clamp_to_screen(x, y)
-    if linear:
-        pyautogui.moveTo(cx, cy, duration=duration if duration is not None else 0.2)
-    else:
-        _smooth_move_to(cx, cy, duration=duration, fast_mode=fast_mode)
-
-    result = {"success": True, "action": "move", "x": cx, "y": cy, "fast_mode": fast_mode}
-
-    if do_click:
-        if fast_mode:
-            time.sleep(_FAST_MODE_PRE_CLICK_DELAY)
-        else:
-            time.sleep(random.uniform(_NORMAL_PRE_CLICK_MIN, _NORMAL_PRE_CLICK_MAX))
-
-        if double:
-            pyautogui.doubleClick(button=button)
-        else:
-            pyautogui.click(button=button)
-
-        result["clicked"] = True
-        result["button"] = button
-        result["double"] = double
-
-    print(json.dumps(result))
+# --------------------------------------------------------------------- phần dùng pyautogui (Windows)
+_pg_mod = None
 
 
-def click(x, y, button="left", double=False, linear=False, duration=None, fast_mode=False):
-    """Di chuyen mem den (x, y) roi click (trai/phai/giua), co the double-click.
-
-    --fast: Fast Mode — bỏ qua random delay, tong ~0.07s thay vi 0.5-0.8s.
-    """
-    cx, cy = _clamp_to_screen(x, y)
-    if linear:
-        pyautogui.moveTo(cx, cy, duration=duration if duration is not None else 0.2)
-    else:
-        _smooth_move_to(cx, cy, duration=duration, fast_mode=fast_mode)
-
-    if fast_mode:
-        time.sleep(_FAST_MODE_PRE_CLICK_DELAY)
-    else:
-        time.sleep(random.uniform(_NORMAL_PRE_CLICK_MIN, _NORMAL_PRE_CLICK_MAX))
-
-    if double:
-        pyautogui.doubleClick(button=button)
-    else:
-        pyautogui.click(button=button)
-
-    print(json.dumps({
-        "success": True,
-        "action": "double_click" if double else "click",
-        "button": button,
-        "x": cx,
-        "y": cy,
-        "fast_mode": fast_mode,
-    }))
+def _pg():
+    global _pg_mod
+    if _pg_mod is None:
+        _common.dpi_aware()  # phải TRƯỚC khi pyautogui đọc kích thước màn hình
+        pg = _common.require("pyautogui")
+        pg.PAUSE = 0
+        pg.MINIMUM_DURATION = 0
+        pg.MINIMUM_SLEEP = 0
+        pg.FAILSAFE = True  # vẫn giữ nút hoảng loạn: đẩy chuột vào góc (0,0) để dừng
+        _pg_mod = pg
+    return _pg_mod
 
 
-def drag(x1, y1, x2, y2, duration=0.5, button="left", fast_mode=False):
-    """Di chuyen mem den (x1, y1), nhan giu nut chuot, keo theo duong cong
-    Bezier toi (x2, y2) roi tha ra.
-
-    --fast: Fast Mode — keo nhanh, tong ~0.15s thay vi 0.8s.
-    """
-    sx, sy = _clamp_to_screen(x1, y1)
-    ex, ey = _clamp_to_screen(x2, y2)
-
-    # Di chuyen den diem bat dau truoc khi nhan giu
-    approach_duration = 0.03 if fast_mode else 0.3
-    _smooth_move_to(sx, sy, duration=approach_duration, fast_mode=fast_mode)
-    pyautogui.mouseDown(button=button)
+def virtual_bounds():
     try:
-        if fast_mode:
-            drag_duration = 0.1
-            n_points = _FAST_MODE_N_POINTS
-        else:
-            drag_duration = duration
-            n_points = _NORMAL_MODE_N_POINTS
+        import ctypes
 
-        path = _bezier_path((sx, sy), (ex, ey), n_points=n_points, control_offset_ratio=0.15)
-        step_delay = drag_duration / len(path) if len(path) else 0
-        for px, py in path:
-            pyautogui.moveTo(px, py, duration=0)
-            if step_delay > 0:
-                time.sleep(step_delay)
+        u = ctypes.windll.user32
+        l, t = u.GetSystemMetrics(76), u.GetSystemMetrics(77)      # SM_X/YVIRTUALSCREEN
+        w, h = u.GetSystemMetrics(78), u.GetSystemMetrics(79)      # SM_CX/CYVIRTUALSCREEN
+        if w > 0 and h > 0:
+            return (l, t, l + w - 1, t + h - 1)
+    except Exception:
+        pass
+    w, h = _pg().size()
+    return (0, 0, w - 1, h - 1)
+
+
+def _monitors():
+    import multi_monitor_info
+
+    return multi_monitor_info.get_monitors()["monitors"]
+
+
+def release_all():
+    """Nhả cả 3 nút (tắt fail-safe tạm thời để việc nhả không bị chặn)."""
+    pg = _pg()
+    old = pg.FAILSAFE
+    pg.FAILSAFE = False
+    try:
+        for b in ("left", "right", "middle"):
+            try:
+                pg.mouseUp(button=b)
+            except Exception:
+                pass
     finally:
-        pyautogui.mouseUp(button=button)
-
-    print(json.dumps({
-        "success": True,
-        "action": "drag",
-        "from": {"x": sx, "y": sy},
-        "to": {"x": ex, "y": ey},
-        "fast_mode": fast_mode,
-    }))
+        pg.FAILSAFE = old
 
 
-def scroll(amount):
-    """Cuon chuot tai vi tri hien tai. amount > 0: cuon len, < 0: cuon xuong."""
-    pyautogui.scroll(amount)
-    print(json.dumps({"success": True, "action": "scroll", "amount": amount}))
+def _follow(path, total_duration):
+    pg = _pg()
+    delay = total_duration / len(path) if path else 0
+    for px, py in path:
+        pg.moveTo(px, py, duration=0)
+        if delay > 0:
+            time.sleep(delay)
 
 
-def position():
-    """In ra vi tri hien tai cua con tro chuot."""
-    x, y = pyautogui.position()
-    print(json.dumps({"success": True, "action": "position", "x": x, "y": y}))
+def _move_to(cx, cy, bounds, duration=None, fast=False, linear=False):
+    pg = _pg()
+    if linear:
+        pg.moveTo(cx, cy, duration=duration if duration is not None else 0.0 if fast else 0.2)
+        return
+    start = tuple(pg.position())
+    n = _FAST_POINTS if fast else _NORMAL_POINTS
+    total = _FAST_TOTAL if fast else (duration if duration is not None else random.uniform(_NORMAL_MIN, _NORMAL_MAX))
+    _follow(safe_path(start, (cx, cy), bounds, n), total)
+
+
+def _target(args, x, y, bounds):
+    mons = _monitors() if getattr(args, "monitor", None) is not None else None
+    return resolve_target(x, y, bounds, mons, getattr(args, "monitor", None))
+
+
+def _pre_click(fast):
+    time.sleep(_FAST_PRE_CLICK if fast else random.uniform(_PRE_CLICK_MIN, _PRE_CLICK_MAX))
+
+
+def cmd_move(a):
+    bounds = virtual_bounds()
+    cx, cy, adjusted = _target(a, a.x, a.y, bounds)
+    _move_to(cx, cy, bounds, a.duration, a.fast_mode, a.linear)
+    res = {"action": "move", "x": cx, "y": cy, "fast_mode": a.fast_mode, "adjusted": adjusted}
+    if a.do_click:
+        _pre_click(a.fast_mode)
+        (_pg().doubleClick if a.double else _pg().click)(button=a.button)
+        res.update(clicked=True, button=a.button, double=a.double)
+    _common.emit(True, **res)
+
+
+def cmd_click(a):
+    bounds = virtual_bounds()
+    cx, cy, adjusted = _target(a, a.x, a.y, bounds)
+    _move_to(cx, cy, bounds, a.duration, a.fast_mode, a.linear)
+    _pre_click(a.fast_mode)
+    (_pg().doubleClick if a.double else _pg().click)(button=a.button)
+    _common.emit(True, action="double_click" if a.double else "click", button=a.button,
+                 x=cx, y=cy, fast_mode=a.fast_mode, adjusted=adjusted)
+
+
+def cmd_drag(a):
+    pg = _pg()
+    bounds = virtual_bounds()
+    sx, sy, adj1 = _target(a, a.x1, a.y1, bounds)
+    ex, ey, adj2 = _target(a, a.x2, a.y2, bounds)
+    _move_to(sx, sy, bounds, 0.03 if a.fast_mode else 0.3, a.fast_mode)
+    pg.mouseDown(button=a.button)
+    try:
+        n = _FAST_POINTS if a.fast_mode else _NORMAL_POINTS
+        _follow(safe_path((sx, sy), (ex, ey), bounds, n, 0.15), 0.1 if a.fast_mode else a.duration)
+    finally:
+        release_all()  # luôn nhả, kể cả khi FailSafe nổ giữa chừng
+    _common.emit(True, action="drag", **{"from": {"x": sx, "y": sy}, "to": {"x": ex, "y": ey}},
+                 fast_mode=a.fast_mode, adjusted=adj1 or adj2)
+
+
+def build_parser():
+    p = _common.ArgParser(description="Điều khiển con trỏ chuột theo toạ độ")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def common_opts(sp):
+        sp.add_argument("--button", choices=["left", "right", "middle"], default="left")
+        sp.add_argument("--monitor", type=to_int, default=None,
+                        help="toạ độ tương đối màn hình N (thứ tự trong multi_monitor_info)")
+        sp.add_argument("--fast", dest="fast_mode", action="store_true")
+
+    pm = sub.add_parser("move")
+    pm.add_argument("x", type=to_int)
+    pm.add_argument("y", type=to_int)
+    pm.add_argument("--duration", type=float, default=None)
+    pm.add_argument("--linear", action="store_true")
+    pm.add_argument("--click", dest="do_click", action="store_true")
+    pm.add_argument("--double", action="store_true")
+    common_opts(pm)
+
+    pc = sub.add_parser("click")
+    pc.add_argument("x", type=to_int)
+    pc.add_argument("y", type=to_int)
+    pc.add_argument("--double", action="store_true")
+    pc.add_argument("--linear", action="store_true")
+    pc.add_argument("--duration", type=float, default=None)
+    common_opts(pc)
+
+    pd = sub.add_parser("drag")
+    for n in ("x1", "y1", "x2", "y2"):
+        pd.add_argument(n, type=to_int)
+    pd.add_argument("--duration", type=float, default=0.5)
+    common_opts(pd)
+
+    ps = sub.add_parser("scroll")
+    ps.add_argument("amount", type=to_int)
+    sub.add_parser("position")
+    sub.add_parser("release")
+    return p
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
+    pg_exc = None
+    try:
+        pg = _pg()
+        pg_exc = pg.FailSafeException
+        if a.command == "move":
+            cmd_move(a)
+        elif a.command == "click":
+            cmd_click(a)
+        elif a.command == "drag":
+            cmd_drag(a)
+        elif a.command == "scroll":
+            pg.scroll(a.amount)
+            _common.emit(True, action="scroll", amount=a.amount)
+        elif a.command == "position":
+            x, y = pg.position()
+            _common.emit(True, action="position", x=x, y=y)
+        elif a.command == "release":
+            release_all()
+            _common.emit(True, action="release", message="Đã nhả mọi nút chuột.")
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        try:
+            release_all()
+        except Exception:
+            pass
+        if pg_exc is not None and isinstance(e, pg_exc):
+            _common.fail("Đã huỷ vì con trỏ bị đẩy vào góc màn hình (fail-safe của pyautogui).")
+        _common.fail(str(e))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Cong cu dieu khien con tro chuot theo toa do")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p_move = sub.add_parser("move", help="Di chuyen chuot den toa do (x, y), co the click luon")
-    p_move.add_argument("x", type=int)
-    p_move.add_argument("y", type=int)
-    p_move.add_argument("--duration", type=float, default=None,
-                        help="Thoi gian di chuyen (giay). Mac dinh: ngau nhien 0.35-0.65s (muot).")
-    p_move.add_argument("--linear", action="store_true",
-                        help="Di chuyen thang, tuc thi thay vi duong cong mem")
-    p_move.add_argument("--fast", dest="fast_mode", action="store_true",
-                        help="Fast Mode: bo qua delay ngau nhien, tong ~0.05s (automation toc do cao)")
-    p_move.add_argument("--click", dest="do_click", action="store_true",
-                        help="Click luon sau khi den noi (khong can goi lenh 'click' rieng)")
-    p_move.add_argument("--button", choices=["left", "right", "middle"], default="left",
-                        help="Dung voi --click")
-    p_move.add_argument("--double", action="store_true", help="Double click, dung voi --click")
-
-    p_click = sub.add_parser("click", help="Di chuyen mem den (x, y) va click")
-    p_click.add_argument("x", type=int)
-    p_click.add_argument("y", type=int)
-    p_click.add_argument("--button", choices=["left", "right", "middle"], default="left")
-    p_click.add_argument("--double", action="store_true", help="Double click thay vi click don")
-    p_click.add_argument("--linear", action="store_true",
-                         help="Di chuyen thang, tuc thi thay vi duong cong mem")
-    p_click.add_argument("--duration", type=float, default=None)
-    p_click.add_argument("--fast", dest="fast_mode", action="store_true",
-                         help="Fast Mode: tong ~0.07s thay vi 0.5-0.8s")
-
-    p_drag = sub.add_parser("drag", help="Keo chuot tu (x1, y1) den (x2, y2) theo duong cong mem")
-    p_drag.add_argument("x1", type=int)
-    p_drag.add_argument("y1", type=int)
-    p_drag.add_argument("x2", type=int)
-    p_drag.add_argument("y2", type=int)
-    p_drag.add_argument("--duration", type=float, default=0.5)
-    p_drag.add_argument("--button", choices=["left", "right", "middle"], default="left")
-    p_drag.add_argument("--fast", dest="fast_mode", action="store_true",
-                        help="Fast Mode: keo nhanh ~0.13s thay vi 0.8s")
-
-    p_scroll = sub.add_parser("scroll", help="Cuon chuot tai vi tri hien tai")
-    p_scroll.add_argument("amount", type=int, help="So duong: cuon len, so am: cuon xuong")
-
-    sub.add_parser("position", help="Lay toa do hien tai cua con tro chuot")
-
-    args = parser.parse_args()
-
-    try:
-        if args.command == "move":
-            move(args.x, args.y, args.duration, args.linear, args.do_click,
-                 args.button, args.double, fast_mode=args.fast_mode)
-        elif args.command == "click":
-            click(args.x, args.y, args.button, args.double, args.linear,
-                  args.duration, fast_mode=args.fast_mode)
-        elif args.command == "drag":
-            drag(args.x1, args.y1, args.x2, args.y2, args.duration, args.button,
-                 fast_mode=args.fast_mode)
-        elif args.command == "scroll":
-            scroll(args.amount)
-        elif args.command == "position":
-            position()
-    except pyautogui.FailSafeException:
-        print(json.dumps({
-            "success": False,
-            "error": "Da huy vi con tro bi day vao goc man hinh (fail-safe cua pyautogui)."
-        }))
-        sys.exit(1)
-    except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(1)
+    _common.ensure_utf8()
+    main()

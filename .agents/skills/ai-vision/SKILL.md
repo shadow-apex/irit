@@ -6,14 +6,17 @@ description: >-
 
 # AI Vision Skill
 
-You have the ability to literally look at the user's screen by taking a screenshot and analyzing it.
+Iris captures the screen **inside the Electron app** (not with a Python script): the Gemini Live tool
+`take_ai_screenshot` grabs the primary monitor, downscales it to <= 1280x720 and sends it straight to the
+model as an image frame. The image is saved to disk only when the tool is called with `save: true`
+(`<userData>/screenshots/screenshot_*.jpg`, keeping at most 20 files / 24 h).
 
-## Steps
+## When you are the Gemini Live assistant
+1. Call `take_ai_screenshot` (add `save: true` only if the user wants to keep it).
+2. Describe what you see. The result includes `frame_geometry`; if you then click something you read off the image, call
+   `mouse_control` with `space: "frame"` so Iris converts the downscaled coordinates to real screen pixels.
+3. `view_image` only shows *saved* screenshots to the **user** (floating window) — it does not give you the image.
 
-1. Run the `ai_vision.py` script located in `tools/` to take a screenshot.
-   Command: `python tools/ai_vision.py --outdir ./` (Run it synchronously or WaitMsBeforeAsync=5000 so you can capture the output).
-2. The script will output the absolute path to the saved screenshot image (e.g. `C:\...\screenshot_xxxx.png`).
-3. Use your `view_file` tool and pass the absolute path of the image to read and analyze it.
-4. Answer the user's question based on what you see in the screenshot!
-
-Always tell the user what you see after analyzing the screenshot.
+## When you are Claude Code
+There is no screenshot script. If the user already saved screenshots, read the newest file in the Iris user-data
+`screenshots` folder with your file-viewing tool; otherwise ask the user to say "take a screenshot" to Iris (voice) or to share the image.

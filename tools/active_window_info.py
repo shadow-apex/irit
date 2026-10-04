@@ -1,88 +1,45 @@
 """
-tools/active_window_info.py
+tools/active_window_info.py — thông tin cửa sổ đang focus: tiêu đề, exe, PID, vị trí/kích thước.
 
-Lay thong tin cua so dang duoc focus (dang active): tieu de, ten tien
-trinh (.exe), PID, vi tri/kich thuoc. Dung ctypes (user32) de doc
-HWND/title + psutil (da co san trong requirements.txt) de tra ten file
-thuc thi tu PID.
-
-Day la tool CHI DOC — khong dieu khien man hinh, chuot, ban phim, khong
-chup anh, khong goi OmniParser hay bat ky server nao. Vi vay no KHONG
-xung dot voi OmniParser/computer-use hay cac vong lap vision (toggle_
-screen_vision...): khong tranh chap tai nguyen, khong lock, chi doc 3 Win32
-API cuc nhe roi tra ve ngay lap tuc.
-
-Vi du dung:
-    python tools/active_window_info.py
+CHỈ ĐỌC. Lưu ý quyền riêng tư: tiêu đề và đường dẫn tiến trình được gửi lên mô hình đám mây.
+Nếu cửa sổ focus là chính Iris, kết quả có `is_iris: true`.
 """
+import os
 import sys
-import io
-import json
-import ctypes
-from ctypes import wintypes
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
-
-# QUAN TRONG: khai bao DPI-awareness de vi tri/kich thuoc cua so tra ve la
-# pixel vat ly, khong bi Windows gia lap theo ty le scaling man hinh.
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
-try:
-    import psutil
-except ImportError:
-    print(json.dumps({"success": False, "error": "Thieu thu vien psutil. Chay: pip install -r tools/requirements.txt"}))
-    sys.exit(1)
-
-
-class RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
 
 def get_active_window_info():
-    user32 = ctypes.windll.user32
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd:
-        return {"success": False, "error": "Khong tim thay cua so nao dang duoc focus."}
+    import _winutil
 
-    length = user32.GetWindowTextLengthW(hwnd)
-    buff = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(hwnd, buff, length + 1)
-    title = buff.value
-
-    pid = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-    exe_name = None
+    _common.dpi_aware()
+    win = _winutil.foreground_window()
+    if not win:
+        return None
     exe_path = None
     try:
-        proc = psutil.Process(pid.value)
-        exe_name = proc.name()
-        exe_path = proc.exe()
+        import psutil
+
+        exe_path = psutil.Process(win["pid"]).exe()
     except Exception:
         pass
-
-    rect = RECT()
-    user32.GetWindowRect(hwnd, ctypes.byref(rect))
-
+    rect = _winutil.get_rect(win["hwnd"]) or (0, 0, 0, 0)
     return {
-        "success": True,
-        "title": title,
-        "pid": pid.value,
-        "process_name": exe_name,
-        "process_path": exe_path,
-        "rect": {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom},
-        "width": rect.right - rect.left,
-        "height": rect.bottom - rect.top,
+        "title": win["title"], "pid": win["pid"], "process_name": win["exe"] or None, "process_path": exe_path,
+        "rect": {"left": rect[0], "top": rect[1], "right": rect[0] + rect[2], "bottom": rect[1] + rect[3]},
+        "width": rect[2], "height": rect[3], "is_iris": _winutil.is_self_window(win),
     }
 
 
 if __name__ == "__main__":
-    print(json.dumps(get_active_window_info(), ensure_ascii=False))
+    _common.ensure_utf8()
+    _common.require("psutil")
+    try:
+        info = get_active_window_info()
+    except Exception as e:  # noqa: BLE001
+        _common.fail(f"Không đọc được cửa sổ đang focus: {e}")
+    if info is None:
+        _common.fail("Không tìm thấy cửa sổ nào đang được focus.")
+    _common.emit(True, **info)

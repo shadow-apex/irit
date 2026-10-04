@@ -21,7 +21,7 @@ import {
   isCancelled,
 } from "../action-lane.mjs";
 import { emitEvent, emitToRenderer } from "./events.mjs";
-import { toolsDir, pythonBin } from "./paths.mjs";
+import { systemActionTool, writeNoteScriptTool } from "./local-tools.mjs";
 import { ensureOmniServer, omniAuthHeaders } from "./omni-server.mjs";
 import { mainWindow } from "./window-manager.mjs";
 import { toggleScreenVision, toggleCameraStreamVision } from "./vision.mjs";
@@ -350,108 +350,26 @@ export async function openUrlOrApp(args) {
   }
 }
 
-export async function closeAppTool(args) {
-  const { target } = args;
-  if (!target) return { status: "error", error: "Missing 'target' executable name." };
-  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(toolsDir(), "system_actions.py");
-    const child = spawn(pythonBin(), [pyPath, "close", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to close application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to close app: ${err.message}` };
-  }
+// TL-02/TL-06: các tool này chờ KẾT QUẢ THẬT của system_actions.py (trước đây spawn rồi báo "success"
+// ngay dù tiến trình chưa chạy / thất bại). closeApp mặc định đóng êm; force:true chỉ sau xác nhận hai bước.
+export async function closeAppTool(args = {}) {
+  return systemActionTool("close", args.target, args.force === true ? ["--force"] : []);
 }
 
-
-export async function hideAppTool(args) {
-  const { target } = args;
-  if (!target) return { status: "error", error: "Missing 'target' executable name." };
-  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(toolsDir(), "system_actions.py");
-    const child = spawn(pythonBin(), [pyPath, "hide", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to hide application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to hide app: ${err.message}` };
-  }
+export async function hideAppTool(args = {}) {
+  return systemActionTool("hide", args.target);
 }
 
-export async function minimizeAppTool(args) {
-  const { target } = args;
-  if (!target) return { status: "error", error: "Missing 'target' executable name." };
-  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(toolsDir(), "system_actions.py");
-    const child = spawn(pythonBin(), [pyPath, "minimize", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to minimize application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to minimize app: ${err.message}` };
-  }
+export async function minimizeAppTool(args = {}) {
+  return systemActionTool("minimize", args.target);
 }
 
-export async function restoreAppTool(args) {
-  const { target } = args;
-  if (!target) return { status: "error", error: "Missing 'target' executable name." };
-  const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  
-  try {
-    const pyPath = join(toolsDir(), "system_actions.py");
-    const child = spawn(pythonBin(), [pyPath, "restore", basename], {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to restore/maximize application: ${basename} using Python` };
-  } catch (err) {
-    return { status: "error", error: `Failed to restore app: ${err.message}` };
-  }
+export async function restoreAppTool(args = {}) {
+  return systemActionTool("restore", args.target);
 }
 
-export async function writeNoteTool(args) {
-  const { text, is_new } = args;
-  if (!text) return { status: "error", error: "Missing 'text' argument." };
-  
-  try {
-    const pyPath = join(toolsDir(), "system_actions.py");
-    const cmdArgs = [pyPath, "note", text];
-    if (is_new) cmdArgs.push("--new");
-    
-    // Do not use windowsHide: true here because we want Notepad to be visible to the user
-    const child = spawn(pythonBin(), cmdArgs, {
-      shell: false,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.unref();
-    return { status: "success", message: `Requested to write note in Notepad with text starting: ${text.substring(0, 50)}` };
-  } catch (err) {
-    return { status: "error", error: `Failed to write note: ${err.message}` };
-  }
+export async function writeNoteTool(args = {}) {
+  return writeNoteScriptTool(args.text, args.is_new === true);
 }
 
 export function laneEventLogger(label) {

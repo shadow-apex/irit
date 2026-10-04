@@ -1,37 +1,32 @@
+"""tools/desktop_manager.py — màn hình ảo (Win+Ctrl+...): new | close | left | right | boss (không tự cài thư viện)."""
+import os
 import sys
-import json
-import argparse
-import time
-try:
-    import pyautogui
-except ImportError:
-    import os
-    os.system(f'{sys.executable} -m pip install pyautogui')
-    import pyautogui
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['new', 'close', 'left', 'right', 'boss'])
-    args = parser.parse_args()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
+HOTKEYS = {
+    "new": (("win", "ctrl", "d"), "Đã tạo màn hình ảo mới."),
+    "close": (("win", "ctrl", "f4"), "Đã đóng màn hình ảo hiện tại."),
+    "left": (("win", "ctrl", "left"), "Đã chuyển sang màn hình ảo bên trái."),
+    "right": (("win", "ctrl", "right"), "Đã chuyển sang màn hình ảo bên phải."),
+    "boss": (("win", "d"), "Đã hiện màn hình nền (Boss Key)."),
+}
+
+
+def build_parser():
+    p = _common.ArgParser()
+    p.add_argument("action", choices=sorted(HOTKEYS))
+    return p
+
+
+if __name__ == "__main__":
+    _common.ensure_utf8()
+    a = build_parser().parse_args()
+    pg = _common.require("pyautogui")
+    pg.PAUSE = 0
     try:
-        if args.action == 'new':
-            pyautogui.hotkey('win', 'ctrl', 'd')
-            print(json.dumps({"status": "success", "message": "Created new virtual desktop."}))
-        elif args.action == 'close':
-            pyautogui.hotkey('win', 'ctrl', 'f4')
-            print(json.dumps({"status": "success", "message": "Closed current virtual desktop."}))
-        elif args.action == 'left':
-            pyautogui.hotkey('win', 'ctrl', 'left')
-            print(json.dumps({"status": "success", "message": "Switched to left virtual desktop."}))
-        elif args.action == 'right':
-            pyautogui.hotkey('win', 'ctrl', 'right')
-            print(json.dumps({"status": "success", "message": "Switched to right virtual desktop."}))
-        elif args.action == 'boss':
-            pyautogui.hotkey('win', 'd')
-            print(json.dumps({"status": "success", "message": "Triggered Boss Key (Show Desktop)."}))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
-
-if __name__ == '__main__':
-    main()
+        pg.hotkey(*HOTKEYS[a.action][0])
+    except Exception as e:  # noqa: BLE001
+        _common.fail(str(e))
+    _common.emit(True, message=HOTKEYS[a.action][1])

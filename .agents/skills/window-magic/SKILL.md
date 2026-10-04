@@ -1,29 +1,23 @@
 ---
 name: window-magic
 description: >-
-  Use this skill when the user asks you to move a window on their screen, animate a window, or perform window magic.
+  Use this skill when the user asks you to move a window on their screen or resize it.
 ---
 
 # Window Magic Skill
 
-You have the ability to move the user's windows on their screen using a custom Python script located at `tools/magic_move.py` within this repository.
+Windows are moved with Win32 calls (ctypes) — no PowerShell. Iris's own window is never targeted.
+Every script prints one JSON line (`success`, `message`/`error`) and exits non-zero on failure.
 
-## Commands
+## Commands (run from the repo root)
 
-When the user asks you to move a window, run the appropriate command using the `run_command` tool (WaitMsBeforeAsync=0 for background execution).
-
-1. **Move Active Window (Click to Move)**
-   If the user wants to pick the window themselves, tell them they have 5 seconds to click on a window, and run:
-   `python tools/magic_move.py --active -x <X> -y <Y>`
-
-2. **Move Window By Name**
-   If the user gives you a specific window name (e.g., "Chrome", "Zalo"):
+1. **Move the window the user focuses** (the script really counts down, then moves the focused window):
+   `python tools/magic_move.py --active --wait 5 -x <X> -y <Y>`
+   Tell the user right away: "click the window you want to move — you have 5 seconds".
+2. **Move by name** (exact exe name like `chrome`, otherwise a title fragment of >= 4 characters):
    `python tools/magic_move.py --name "<Window Name>" -x <X> -y <Y>`
+3. **Move + resize precisely:**
+   `python tools/move_window.py "<Window Name>" <X> <Y> --width <W> --height <H>`
 
-3. **Demo Mode**
-   If the user asks for a demo, or to make the window dance/animate:
-   `python tools/magic_move.py --demo`
-   (Optionally, if they specify a name to demo, add `--name "<Name>"`)
-
-Always ensure you run these commands from the root directory of the workspace.
-After running the command, let the user know what you did so they can observe their screen!
+A `--demo` animation exists only for developers (`IRIS_DEV_TOOLS=1`).
+Negative coordinates are valid (monitors left of / above the primary one).

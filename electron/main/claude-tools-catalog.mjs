@@ -147,7 +147,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "search_local_files",
-          description: "Search for a file on the user's local Windows filesystem lightning-fast using Everything. Use this when the user asks to find a file, document, or folder on their machine.",
+          description: "Search for a file on the user's local Windows filesystem using Everything (es.exe must be installed). Use this when the user asks to find a file, document, or folder. PRIVACY: the returned file paths are sent to the cloud model. The query must not start with '-' or '/'.",
           parameters: {
             type: "object",
             properties: {
@@ -159,11 +159,12 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "read_system_notifications",
-          description: "Read recent Windows toast notifications (e.g., Zalo, Telegram, Mail). Use this when the user asks if there are any new messages or notifications.",
+          description: "Read recent Windows toast notifications (e.g., Zalo, Telegram, Mail). PRIVACY: contents go to the cloud model; one-time/verification codes are MASKED (****) by default. Set reveal_otp=true ONLY if the user explicitly asks to hear the code (requires confirmation).",
           parameters: {
             type: "object",
             properties: {
-              limit: { type: "integer", description: "Max number of notifications to read (default 5)." }
+              limit: { type: "integer", description: "Max number of notifications to read (default 5)." },
+              reveal_otp: { type: "boolean", description: "Reveal verification/OTP codes instead of masking them. Only when the user explicitly asks." }
             }
           }
         },
@@ -172,33 +173,11 @@ function buildClaudeToolsRaw() {
         // .agents/skills/ (ai-vision, clipboard, window-magic, notify,
         // sys-control, sys-monitor) so Iris herself can run them directly
         // over WebRTC, without waiting for a submit_claude_task round-trip.
-        {
-          name: "search_local_files",
-          description: "Search for a file on the user's local Windows filesystem lightning-fast using Everything. Use this when the user asks to find a file, document, or folder on their machine.",
-          parameters: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "The search query (filename, extension, etc)." },
-              max: { type: "integer", description: "Max results to return (default 10)." }
-            },
-            required: ["query"]
-          }
-        },
-        {
-          name: "read_system_notifications",
-          description: "Read recent Windows toast notifications (e.g., Zalo, Telegram, Mail). Use this when the user asks if there are any new messages or notifications.",
-          parameters: {
-            type: "object",
-            properties: {
-              limit: { type: "integer", description: "Max number of notifications to read (default 5)." }
-            }
-          }
-        },
         // ---------------------------------------------------------------
         {
           name: "take_ai_screenshot",
-          description: "Instantly capture a single screenshot of the user's screen (via tools/ai_vision.py) and look at it right now. Use this for one-off questions like 'what am I looking at?', 'what error is this?', 'look at my screen'. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
-          parameters: { type: "object", properties: {} },
+          description: "Instantly capture a single screenshot of the user's PRIMARY screen (captured inside Iris, downscaled to <=1280x720 and sent to you as an image frame) and look at it right now. The screenshot is NOT saved to disk unless save=true. Use this for one-off questions like 'what am I looking at?', 'what error is this?', 'look at my screen'. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
+          parameters: { type: "object", properties: { save: { type: "boolean", description: "Also save the screenshot to disk (only when the user asks to keep it; view_image can show saved ones to the user)." } } },
         },
         {
           name: "read_clipboard",
@@ -218,15 +197,15 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "move_window_magic",
-          description: "Move (or 'magic move') a window on the user's screen using tools/magic_move.py. Use when the user asks you to move, animate, or 'do window magic' with a window.",
+          description: "Move a window on the user's screen using tools/magic_move.py. Use when the user asks you to move a window. Never targets Iris's own window.",
           parameters: {
             type: "object",
             properties: {
               mode: {
                 type: "string",
-                description: "'active' — the user will click the window themselves within 5 seconds (use when no window name is given); 'name' — move the window whose title contains the given name; 'demo' — play a short demo animation (optionally on the named window, otherwise File Explorer).",
+                description: "'active' — the script REALLY counts down 5 seconds, then moves whichever window the user focused (tell the user right away to click the target window; the call returns after ~6 s); 'name' — move the window whose exe name or title (>=4 chars) matches. (A 'demo' mode exists only when IRIS_DEV_TOOLS=1.)",
               },
-              name: { type: "string", description: "Window title (or part of it) to target. Required for mode 'name'; optional for 'demo'." },
+              name: { type: "string", description: "Window title (or part of it) to target. Required for mode 'name'." },
               x: { type: "integer", description: "Target X coordinate on screen. Defaults to 0." },
               y: { type: "integer", description: "Target Y coordinate on screen. Defaults to 0." },
             },
@@ -235,7 +214,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "move_window_precise",
-          description: "Move and optionally resize a window on the user's screen using PowerShell via tools/move_window.py. Use when the user asks you to move a specific window by name to an exact coordinate.",
+          description: "Move and optionally resize a window on the user's screen via tools/move_window.py (Win32 API, no PowerShell). Use when the user asks you to move a specific window by name to an exact coordinate.",
           parameters: {
             type: "object",
             properties: {
@@ -262,11 +241,12 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "system_control",
-          description: "Control the user's hardware/OS settings via tools/sys_control.py: volume, screen brightness, Wi-Fi, Bluetooth, or camera. Toggling wifi/bluetooth/camera triggers a Windows UAC prompt — tell the user to click 'Yes' when the tool result says so. Pass only the field(s) relevant to the request.",
+          description: "Control the user's hardware/OS settings via tools/sys_control.py: volume (relative, absolute volume_level, or mute toggle), screen brightness (laptop panels only — external monitors are not supported), Wi-Fi off (disconnect), Bluetooth, or camera. Bluetooth/camera changes need a Windows UAC prompt — tell the user to click 'Yes'; the result is only reported after they answer. WARNING: camera off disables EVERY camera device, including the webcam Iris itself uses for hand control/vision. Pass only the field(s) relevant to the request.",
           parameters: {
             type: "object",
             properties: {
-              volume: { type: "string", description: "One of: mute, up, down." },
+              volume: { type: "string", description: "One of: mute (this is a TOGGLE in Windows), unmute, up, down." },
+              volume_level: { type: "integer", description: "Set the ABSOLUTE volume, 0-100." },
               brightness: { type: "integer", description: "Screen brightness percentage, 0-100." },
               wifi: { type: "string", description: "One of: on, off." },
               bluetooth: { type: "string", description: "One of: on, off." },
@@ -276,11 +256,14 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "mouse_control",
-          description: "Control the mouse cursor by screen coordinates via tools/mouse_control.py: move it (optionally clicking on arrival), click (left/right/middle, single/double), drag from one point to another, scroll, or read its current position. Movement follows a smooth curved (Bezier) path by default — the same natural, human-like motion used by the OmniParser auto-click flow — rather than a robotic straight line. Use when the user gives explicit x/y coordinates or asks you to move/click/drag the mouse pointer somewhere on screen (e.g. 'di chuyen chuot den toa do 500 300', 'click vao diem 800, 400', 'keo tu diem A den diem B').",
+          description: "Control the mouse cursor by screen coordinates via tools/mouse_control.py: move it (optionally clicking on arrival), click (left/right/middle, single/double), drag from one point to another, scroll, or read its current position. Movement is FAST by default (a short curved path, ~0.1 s); set human_like=true only if a slower human-like curve is wanted. Coordinates are PHYSICAL screen pixels (space:'screen'); if you read coordinates off a screenshot/vision frame (which is downscaled), pass space:'frame' and Iris converts them. Out-of-range points are clamped to the virtual desktop (all monitors) and kept away from the corner fail-safe. action 'release' lets go of all mouse buttons (recovery after a failed drag). Use when the user gives explicit x/y coordinates or asks you to move/click/drag the mouse pointer somewhere on screen (e.g. 'di chuyen chuot den toa do 500 300', 'click vao diem 800, 400', 'keo tu diem A den diem B').",
           parameters: {
             type: "object",
             properties: {
-              action: { type: "string", description: "One of: move, click, drag, scroll, position." },
+              action: { type: "string", description: "One of: move, click, drag, scroll, position, release." },
+              space: { type: "string", description: "'screen' (default): x/y are physical screen pixels. 'frame': x/y were read from the downscaled vision/screenshot frame." },
+              monitor: { type: "integer", description: "Optional: treat x/y as relative to monitor N (0-based order from multi_monitor_info)." },
+              human_like: { type: "boolean", description: "Use the slower human-like Bezier motion instead of the default fast move." },
               x: { type: "integer", description: "Target X coordinate (move/click/drag start point)." },
               y: { type: "integer", description: "Target Y coordinate (move/click/drag start point)." },
               x2: { type: "integer", description: "Drag end X coordinate (drag only)." },
@@ -309,7 +292,7 @@ function buildClaudeToolsRaw() {
               top: { type: "integer", description: "Top edge of the region to OCR." },
               width: { type: "integer", description: "Width of the region to OCR." },
               height: { type: "integer", description: "Height of the region to OCR." },
-              lang: { type: "string", description: "Tesseract language code, e.g. 'eng' or 'vie'. Defaults to 'eng'." },
+              lang: { type: "string", description: "Tesseract language code, e.g. 'eng', 'vie' or 'vie+eng'. Omit to auto-pick (IRIS_OCR_LANG, else vie+eng when the Vietnamese pack is installed, else eng with a warning)." },
             },
           },
         },
@@ -331,11 +314,11 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "clipboard_history",
-          description: "Manages a rolling history of clipboard entries (not just the current one) via tools/clipboard_history.py: start/stop a background watcher, list recent entries, re-copy an old entry, or clear the history. Use 'watch' once to start tracking, then 'list'/'use' later — without 'watch' running, history stays empty.",
+          description: "PRIVACY-SENSITIVE and OFF by default (the user must enable IRIS_CLIPBOARD_HISTORY=1). Short-lived clipboard history via tools/clipboard_history.py: 'start' a background watcher (keeps entries ~10 minutes, max 20, skips passwords/OTP/card numbers), 'list'/'use' entries, 'stop' (also wipes), 'clear'. Listed text is sent to the cloud model. Tell the user when you start it.",
           parameters: {
             type: "object",
             properties: {
-              action: { type: "string", description: "One of: watch, stop, list, use, clear." },
+              action: { type: "string", description: "One of: start, stop, list, use, clear." },
               limit: { type: "integer", description: "Max entries to return for 'list'. Defaults to 10." },
               index: { type: "integer", description: "Entry index to re-copy to the clipboard, required for 'use'." },
             },
@@ -344,7 +327,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "quick_reminder",
-          description: "Schedules a one-off reminder that fires N minutes from now as a desktop notification, via tools/quick_reminder.py — unlike send_desktop_notification, this doesn't fire immediately. Also lists or cancels pending reminders.",
+          description: "Schedules a one-off reminder that fires N minutes from now as a desktop notification, (managed inside Iris, saved to disk, survives restarts; reminders more than 1 hour overdue at startup are dropped) — unlike send_desktop_notification, this doesn't fire immediately. Also lists or cancels pending reminders. Max 7 days.",
           parameters: {
             type: "object",
             properties: {
@@ -376,14 +359,15 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "process_manager",
-          description: "Lists running processes by top CPU or RAM usage, or force-kills one by name, via tools/process_manager.py. Complements system_control's app-closing, which only closes by window name without a preview.",
+          description: "Lists running processes by top CPU or RAM usage, or CLOSES every instance of one executable by exact name (e.g. 'chrome.exe'), via tools/process_manager.py. Kill is GRACEFUL by default (window-close request; unsaved-data prompts still appear); set force=true only if the user accepts losing unsaved data. Wildcards, paths, system processes and Iris itself are refused. Always list first so you kill the right name.",
           parameters: {
             type: "object",
             properties: {
               action: { type: "string", description: "One of: list, kill." },
               sort: { type: "string", description: "For 'list': 'cpu' or 'ram'. Defaults to 'ram'." },
               top: { type: "integer", description: "For 'list': how many processes to return. Defaults to 10." },
-              name: { type: "string", description: "Process/executable name to kill, e.g. 'chrome.exe'. Required for 'kill'." },
+              name: { type: "string", description: "Exact process/executable name to close, e.g. 'chrome.exe'. Required for 'kill'. No wildcards." },
+              force: { type: "boolean", description: "For 'kill': force-terminate (may lose unsaved data). Only after the user explicitly agrees." },
             },
             required: ["action"],
           },
@@ -815,7 +799,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "view_image",
-          description: "Open and view images/screenshots taken by Iris on the screen in a dedicated floating window. Use this when the user asks to see the image, switch to the previous/next image, or close the image viewer.",
+          description: "Show the user (NOT you) screenshots that were SAVED to disk (take_ai_screenshot with save=true) in a small floating window. It does not give you the image — use take_ai_screenshot to see the screen yourself. Reports an error if there are no saved screenshots or the viewer cannot start (needs Pillow + tkinter).",
           parameters: {
             type: "object",
             properties: {
@@ -828,6 +812,11 @@ function buildClaudeToolsRaw() {
           }
         },
         {
+          name: "get_system_stats",
+          description: "Read-only system health via tools/sys_monitor.py: CPU %, RAM used/total, system-drive usage and battery (laptops). Use for 'how is my computer doing', 'how much battery is left'. Warn the user if RAM or disk is above 90%.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
           name: "go_to_sleep",
           description:
             "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
@@ -838,7 +827,7 @@ function buildClaudeToolsRaw() {
   
         {
           name: "power_manager",
-          description: "Manages system power states (sleep, shutdown, restart) via tools/power_manager.py.",
+          description: "Manages system power states via tools/power_manager.py. shutdown/restart start after a 5 s delay (cancelable with `shutdown /a`). sleep may become hibernate if Windows hibernation is enabled (the result says so).",
           input_schema: {
             type: "object",
             properties: {

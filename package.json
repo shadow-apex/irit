@@ -32,7 +32,8 @@
     "electron": "node scripts/run-electron.mjs",
     "test": "node --test scripts/tests/*.test.mjs",
     "setup:mediapipe": "node scripts/prepare-mediapipe.mjs",
-    "setup:ort": "node scripts/prepare-ort.mjs"
+    "setup:ort": "node scripts/prepare-ort.mjs",
+    "test:py": "python -m unittest discover -s tools/tests"
   },
   "dependencies": {
     "3d-force-graph": "1.80.0",

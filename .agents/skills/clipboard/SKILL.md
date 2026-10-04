@@ -6,14 +6,12 @@ description: >-
 
 # Clipboard Skill
 
-You can interact with the user's system clipboard using `clipboard_manager.py`.
+Output is one JSON line: `{"success": true, "text": "..."}` or `{"success": false, "error": "..."}` (exit code != 0).
 
-## Commands
+- **Read:** `python tools/clipboard_manager.py --action read`
+- **Write (short text):** `python tools/clipboard_manager.py --action write --text=<text>`
+- **Write (long or sensitive text — keeps it out of the command line):** pipe it in:
+  `python tools/clipboard_manager.py --action write --stdin`
 
-- **Read Clipboard:**
-  `python tools/clipboard_manager.py --action read`
-  Use this when the user says "what did I just copy?" or "read my clipboard". The tool will print the text.
-
-- **Write to Clipboard:**
-  `python tools/clipboard_manager.py --action write --text "your text here"`
-  Use this when the user asks you to copy a long password, some code, or text into their clipboard so they can paste it elsewhere.
+Clipboard **history** (`tools/clipboard_history.py`) is OFF by default for privacy: the user must set
+`IRIS_CLIPBOARD_HISTORY=1`. It keeps ~10 minutes / 20 entries and skips anything that looks like a password, OTP or card number.

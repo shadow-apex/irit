@@ -1,262 +1,183 @@
-import sys
+"""
+tools/system_actions.py — đóng / ẩn / thu nhỏ / khôi phục ứng dụng và ghi chú nhanh.
+
+    python tools/system_actions.py close <app> [--force]
+    python tools/system_actions.py hide|minimize|restore <app>
+    python tools/system_actions.py note --text=<nội dung> [--new]
+
+TL-02: `close` dùng chung validate_process_name + danh sách bảo vệ + đóng êm (xem _procutil).
+TL-06: `hide` ghi sổ cửa sổ đã ẩn (hwnd/pid/tiêu đề) ⇒ `restore` khôi phục được cả cửa sổ đã ẩn;
+chọn cửa sổ theo tên exe CHÍNH XÁC trước, theo tiêu đề chỉ khi không có kết quả và độ dài ≥ 4;
+cửa sổ của chính Iris luôn bị loại; báo số cửa sổ bị tác động.
+"""
+import json
 import os
 import subprocess
+import sys
 import tempfile
-import ctypes
 import time
 
-def close_app(target):
-    if not target.lower().endswith('.exe'):
-        target += '.exe'
-    
-    print(f"Closing {target}...")
-    result = subprocess.run(["taskkill", "/IM", target, "/F"], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("Success")
-        sys.exit(0)
-    else:
-        print(f"Failed: {result.stderr}")
-        sys.exit(1)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common  # noqa: E402
 
-def write_note(text, mode="a"):
-    temp_path = os.path.join(tempfile.gettempdir(), "iris_quick_note.txt")
-    
-    # Ghi noi dung (Append hoac Overwrite tuy mode)
-    with open(temp_path, mode, encoding="utf-8") as f:
-        f.write("- " + text + "\n")
-    
-    # Tim cua so Notepad dang mo file nay (neu co)
-    EnumWindows = ctypes.windll.user32.EnumWindows
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    GetWindowText = ctypes.windll.user32.GetWindowTextW
-    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-    PostMessage = ctypes.windll.user32.PostMessageW
-    FindWindowExW = ctypes.windll.user32.FindWindowExW
-    SendMessageW = ctypes.windll.user32.SendMessageW
-    SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
-    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
+LEDGER_NAME = "hidden_windows.json"
 
-    FindWindowExW.restype = ctypes.c_void_p
-    SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_wchar_p]
-    SendMessageW.restype = ctypes.c_void_p
 
-    WM_SETTEXT = 0x000C
-    EM_SETSEL = 0x00B1
-    EM_SCROLLCARET = 0x00B7
-    SW_RESTORE = 9
+# ----------------------------------------------------------------- sổ cửa sổ đã ẩn
+def _ledger_path():
+    return os.path.join(_common.user_data_dir(), LEDGER_NAME)
 
-    existing_hwnd = [None]
 
-    def find_old_note(hwnd, lParam):
-        length = GetWindowTextLength(hwnd)
-        buff = ctypes.create_unicode_buffer(length + 1)
-        GetWindowText(hwnd, buff, length + 1)
-        if "iris_quick_note" in buff.value.lower():
-            existing_hwnd[0] = hwnd
-            return False  # da tim thay, dung enum som cho nhanh
-        return True
+def load_ledger(path=None):
+    path = path or _ledger_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
 
-    EnumWindows(EnumWindowsProc(find_old_note), 0)
 
-    if existing_hwnd[0]:
-        hwnd = existing_hwnd[0]
-        # Cua so dang mo san: cap nhat truc tiep vao control chua text thay vi
-        # dong roi mo lai (cach cu gay chop/giat man hinh moi lan ghi chu).
-        # Notepad co dien (Win10 tro xuong) dung class "Edit"; Notepad moi cua
-        # Win11 dung "RichEditD2DPT" — thu ca hai.
-        hEdit = FindWindowExW(hwnd, None, "Edit", None)
-        if not hEdit:
-            hEdit = FindWindowExW(hwnd, None, "RichEditD2DPT", None)
+def save_ledger(items, path=None):
+    path = path or _ledger_path()
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    _common.private_chmod(path)
 
-        if hEdit:
-            with open(temp_path, "r", encoding="utf-8") as f:
-                full_text = f.read()
-            SendMessageW(hEdit, WM_SETTEXT, 0, full_text)
-            # Dua con tro ve cuoi de dong moi nhat luon hien ra, khong can cuon tay
-            SendMessageW(hEdit, EM_SETSEL, len(full_text), len(full_text))
-            SendMessageW(hEdit, EM_SCROLLCARET, 0, 0)
-            ShowWindowAsync(hwnd, SW_RESTORE)
-            SetForegroundWindow(hwnd)
-            print("Success (updated existing Notepad window)")
-            sys.exit(0)
 
-        # Khong nhan dien duoc control text (phien ban Notepad la) -> fallback
-        # ve cach cu: dong cua so roi mo lai.
-        PostMessage(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-        time.sleep(0.5)
+# ----------------------------------------------------------------- hành động
+def close_app(target, force=False):
+    import _procutil
 
-    # Chua co cua so nao dang mo -> mo Notepad moi
-    subprocess.Popen(["notepad.exe", temp_path])
-    print("Success")
-    sys.exit(0)
+    res = _procutil.close_processes(target, force=force)
+    ok = res.pop("success")
+    return ok, res
+
 
 def minimize_app(target):
-    target = target.lower().replace('.exe', '')
-    
-    EnumWindows = ctypes.windll.user32.EnumWindows
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    GetWindowText = ctypes.windll.user32.GetWindowTextW
-    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
-    
-    # Get PIDs of target app
-    pids = []
-    try:
-        output = subprocess.check_output(["tasklist", "/FI", f"IMAGENAME eq {target}.exe", "/NH", "/FO", "CSV"], text=True)
-        for line in output.strip().split('\n'):
-            parts = line.split('","')
-            if len(parts) > 1:
-                pid = parts[1].replace('"', '')
-                if pid.isdigit():
-                    pids.append(int(pid))
-    except Exception:
-        pass
+    import _winutil
 
-    found = False
-
-    def foreach_window(hwnd, lParam):
-        nonlocal found
-        if IsWindowVisible(hwnd):
-            pid = ctypes.c_uint(0)
-            GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            
-            length = GetWindowTextLength(hwnd)
-            buff = ctypes.create_unicode_buffer(length + 1)
-            GetWindowText(hwnd, buff, length + 1)
-            title = buff.value.lower()
-            
-            # Match by PID or by title containing the target name
-            if (pid.value in pids) or (target in title and len(target) > 2):
-                ShowWindowAsync(hwnd, 2) # SW_SHOWMINIMIZED
-                found = True
-        return True
-
-    EnumWindows(EnumWindowsProc(foreach_window), 0)
-    
-    if found:
-        print("Success")
-        sys.exit(0)
-    else:
-        print("No visible window found.")
-        sys.exit(1)
-
-def restore_app(target):
-    target = target.lower().replace('.exe', '')
-    
-    EnumWindows = ctypes.windll.user32.EnumWindows
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    GetWindowText = ctypes.windll.user32.GetWindowTextW
-    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
-    SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
-    
-    pids = []
-    try:
-        output = subprocess.check_output(["tasklist", "/FI", f"IMAGENAME eq {target}.exe", "/NH", "/FO", "CSV"], text=True)
-        for line in output.strip().split('\n'):
-            parts = line.split('","')
-            if len(parts) > 1:
-                pid = parts[1].replace('"', '')
-                if pid.isdigit():
-                    pids.append(int(pid))
-    except Exception:
-        pass
-
-    found = False
-
-    def foreach_window(hwnd, lParam):
-        nonlocal found
-        if IsWindowVisible(hwnd):
-            pid = ctypes.c_uint(0)
-            GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            
-            length = GetWindowTextLength(hwnd)
-            buff = ctypes.create_unicode_buffer(length + 1)
-            GetWindowText(hwnd, buff, length + 1)
-            title = buff.value.lower()
-            
-            if (pid.value in pids) or (target in title and len(target) > 2):
-                ShowWindowAsync(hwnd, 9) # SW_RESTORE
-                SetForegroundWindow(hwnd)
-                found = True
-        return True
-
-    EnumWindows(EnumWindowsProc(foreach_window), 0)
-    
-    if found:
-        print("Success")
-        sys.exit(0)
-    else:
-        print("No visible window found.")
-        sys.exit(1)
+    wins = _winutil.select_windows(_winutil.enum_windows(), target)
+    for w in wins:
+        _winutil.show_window(w["hwnd"], 6)  # SW_MINIMIZE
+    if not wins:
+        return False, {"error": f"Không thấy cửa sổ nào khớp '{target}' (cửa sổ của Iris bị loại)."}
+    return True, {"message": f"Đã thu nhỏ {len(wins)} cửa sổ.", "affected": len(wins)}
 
 
 def hide_app(target):
-    target = target.lower().replace('.exe', '')
-    
-    EnumWindows = ctypes.windll.user32.EnumWindows
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    GetWindowText = ctypes.windll.user32.GetWindowTextW
-    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-    ShowWindowAsync = ctypes.windll.user32.ShowWindowAsync
-    
-    import wmi
-    c = wmi.WMI()
-    pids = [p.ProcessId for p in c.Win32_Process(name=f"{target}.exe")]
-    
-    found = False
-    
-    def foreach_window(hwnd, lParam):
-        nonlocal found
-        if IsWindowVisible(hwnd):
-            pid = ctypes.c_uint(0)
-            GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            
-            length = GetWindowTextLength(hwnd)
-            buff = ctypes.create_unicode_buffer(length + 1)
-            GetWindowText(hwnd, buff, length + 1)
-            title = buff.value.lower()
-            
-            # Match by PID or by title containing the target name
-            if (pid.value in pids) or (target in title and len(target) > 2):
-                ShowWindowAsync(hwnd, 0) # SW_HIDE
-                found = True
-        return True
+    import _winutil
 
-    EnumWindows(EnumWindowsProc(foreach_window), 0)
-    
-    if found:
-        print("Success")
-        sys.exit(0)
+    wins = _winutil.select_windows(_winutil.enum_windows(), target)
+    if not wins:
+        return False, {"error": f"Không thấy cửa sổ nào khớp '{target}' (cửa sổ của Iris bị loại)."}
+    ledger = load_ledger()
+    known = {e.get("hwnd") for e in ledger}
+    for w in wins:
+        if w["hwnd"] not in known:
+            ledger.append({"hwnd": w["hwnd"], "pid": w["pid"], "title": w["title"], "exe": w["exe"],
+                           "hidden_at": time.time()})
+        _winutil.show_window(w["hwnd"], 0)  # SW_HIDE
+    save_ledger(ledger)
+    return True, {"message": f"Đã ẩn {len(wins)} cửa sổ. Dùng restore_app để hiện lại.", "affected": len(wins)}
+
+
+def restore_app(target):
+    import _winutil
+
+    ledger = load_ledger()
+    # Chỉ giữ mục còn hợp lệ: cửa sổ còn tồn tại VÀ vẫn thuộc đúng PID đã ghi (tránh HWND tái sử dụng).
+    alive = [e for e in ledger if _winutil.is_window(e["hwnd"]) and _winutil.window_pid(e["hwnd"]) == e.get("pid")]
+    matched = _winutil.select_windows(alive, target)
+    restored = 0
+    for e in matched:
+        _winutil.show_window(e["hwnd"], 9)  # SW_RESTORE
+        _winutil.foreground(e["hwnd"])
+        restored += 1
+    if matched:
+        gone = {e["hwnd"] for e in matched}
+        save_ledger([e for e in alive if e["hwnd"] not in gone])
     else:
-        print("No visible window found.")
-        sys.exit(1)
+        save_ledger(alive)
+        # Không có trong sổ ⇒ thử cửa sổ đang thu nhỏ/hiển thị.
+        for w in _winutil.select_windows(_winutil.enum_windows(), target):
+            _winutil.show_window(w["hwnd"], 9)
+            _winutil.foreground(w["hwnd"])
+            restored += 1
+    if restored == 0:
+        return False, {"error": f"Không có cửa sổ nào khớp '{target}' để khôi phục (cả trong sổ cửa sổ đã ẩn)."}
+    return True, {"message": f"Đã khôi phục {restored} cửa sổ.", "affected": restored}
+
+
+def write_note(text, new=False):
+    import ctypes
+
+    temp_path = os.path.join(tempfile.gettempdir(), "iris_quick_note.txt")
+    with open(temp_path, "w" if new else "a", encoding="utf-8") as f:
+        f.write("- " + text + "\n")
+
+    import _winutil
+
+    existing = [w for w in _winutil.enum_windows() if "iris_quick_note" in w["title"].lower()]
+    if existing:
+        hwnd = existing[0]["hwnd"]
+        u = ctypes.windll.user32
+        from ctypes import wintypes
+
+        u.FindWindowExW.restype = wintypes.HWND
+        u.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+        u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        u.SendMessageW.restype = ctypes.c_ssize_t
+        h_edit = u.FindWindowExW(hwnd, None, "Edit", None) or u.FindWindowExW(hwnd, None, "RichEditD2DPT", None)
+        if h_edit:
+            with open(temp_path, "r", encoding="utf-8") as f:
+                full = f.read()
+            buf = ctypes.create_unicode_buffer(full)
+            u.SendMessageW(h_edit, 0x000C, 0, ctypes.addressof(buf))  # WM_SETTEXT
+            u.SendMessageW(h_edit, 0x00B1, len(full), len(full))      # EM_SETSEL
+            u.SendMessageW(h_edit, 0x00B7, 0, 0)                       # EM_SCROLLCARET
+            _winutil.show_window(hwnd, 9)
+            _winutil.foreground(hwnd)
+            return True, {"message": "Đã cập nhật cửa sổ Notepad đang mở.", "path": temp_path}
+        u.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE — Notepad lạ, mở lại
+        time.sleep(0.5)
+    subprocess.Popen(["notepad.exe", temp_path])
+    return True, {"message": "Đã mở Notepad với ghi chú.", "path": temp_path}
+
+
+def build_parser():
+    p = _common.ArgParser(description="Đóng/ẩn/thu nhỏ/khôi phục ứng dụng, ghi chú")
+    sub = p.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("close")
+    c.add_argument("target")
+    c.add_argument("--force", action="store_true")
+    for name in ("hide", "minimize", "restore"):
+        sp = sub.add_parser(name)
+        sp.add_argument("target")
+    n = sub.add_parser("note")
+    n.add_argument("--text", required=True)
+    n.add_argument("--new", action="store_true")
+    return p
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python system_actions.py <action> <args...>")
-        sys.exit(1)
-        
-    action = sys.argv[1]
-    
-    if action == "close":
-        close_app(sys.argv[2])
-    elif action == "hide":
-        hide_app(sys.argv[2])
-    elif action == "minimize":
-        minimize_app(sys.argv[2])
-    elif action == "restore":
-        restore_app(sys.argv[2])
-    elif action == "note":
-        # Check if --new flag is passed
-        mode = "w" if len(sys.argv) > 3 and sys.argv[3] == "--new" else "a"
-        write_note(sys.argv[2], mode)
-    else:
-        print("Unknown action")
-        sys.exit(1)
+    _common.ensure_utf8()
+    _common.dpi_aware()
+    a = build_parser().parse_args()
+    try:
+        if a.command == "close":
+            _common.require("psutil")
+            ok, fields = close_app(a.target, a.force)
+        elif a.command == "hide":
+            ok, fields = hide_app(a.target)
+        elif a.command == "minimize":
+            ok, fields = minimize_app(a.target)
+        elif a.command == "restore":
+            ok, fields = restore_app(a.target)
+        else:
+            ok, fields = write_note(a.text, a.new)
+    except ValueError as e:
+        _common.fail(str(e))
+    _common.emit(ok, **fields)

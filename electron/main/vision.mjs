@@ -55,7 +55,30 @@ export let isVisionEnabled = false;
 export let visionInterval = null; // { id, stop }
 
 // Chụp nhỏ + chất lượng thấp cho vòng lặp (~30-80 KB/frame). Full-res dành cho Computer Use.
-export async function captureScreenForVision() {
+/**
+ * Hình học của khung vision so với màn hình chính (pixel VẬT LÝ). Gemini chỉ "thấy" khung đã thu nhỏ
+ * (≤ 1280×720), còn mouse_control dùng pixel vật lý ⇒ cần tỉ lệ này để đổi toạ độ (TL-05).
+ * @returns {{frame_w:number,frame_h:number,screen_w:number,screen_h:number,origin_x:number,origin_y:number,scale:number}}
+ */
+export function visionFrameGeometry() {
+  const primary = screen.getPrimaryDisplay();
+  const sf = primary.scaleFactor || 1;
+  const pxW = Math.max(1, Math.round(primary.size.width * sf));
+  const pxH = Math.max(1, Math.round(primary.size.height * sf));
+  const scale = Math.min(1280 / pxW, 720 / pxH, 1);
+  return {
+    frame_w: Math.max(1, Math.round(pxW * scale)),
+    frame_h: Math.max(1, Math.round(pxH * scale)),
+    screen_w: pxW,
+    screen_h: pxH,
+    origin_x: Math.round(primary.bounds.x * sf),
+    origin_y: Math.round(primary.bounds.y * sf),
+    scale,
+  };
+}
+
+/** Chụp màn hình chính → { buffer: JPEG, geometry }. Dùng chung cho vòng lặp vision và take_ai_screenshot. */
+export async function grabPrimaryScreenJpeg(quality = 50) {
   const { desktopCapturer, systemPreferences } = electron;
   if (process.platform === "darwin" && systemPreferences?.getMediaAccessStatus) {
     const st = systemPreferences.getMediaAccessStatus("screen");
@@ -64,20 +87,21 @@ export async function captureScreenForVision() {
     }
   }
   const primary = screen.getPrimaryDisplay();
-  const sf = primary.scaleFactor || 1;
-  const pxW = Math.max(1, Math.round(primary.size.width * sf));
-  const pxH = Math.max(1, Math.round(primary.size.height * sf));
-  const scale = Math.min(1280 / pxW, 720 / pxH, 1);
+  const geometry = visionFrameGeometry();
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
-    thumbnailSize: { width: Math.round(pxW * scale), height: Math.round(pxH * scale) },
+    thumbnailSize: { width: geometry.frame_w, height: geometry.frame_h },
   });
   // Đa màn hình: chọn đúng màn hình chính theo display_id (sources[0] không đảm bảo).
   const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
   if (!src) throw new Error("Không có nguồn màn hình (macOS: cấp quyền Screen Recording).");
-  const jpegBuffer = src.thumbnail.toJPEG(50);
+  const buffer = src.thumbnail.toJPEG(quality);
   sources.length = 0; // giải phóng NativeImage — vòng lặp chạy liên tục
-  return jpegBuffer;
+  return { buffer, geometry };
+}
+
+export async function captureScreenForVision() {
+  return (await grabPrimaryScreenJpeg(50)).buffer;
 }
 
 export function stopVisionLoop() {
@@ -108,7 +132,13 @@ export function toggleScreenVision() {
     onStop: stopVisionLoop,
   });
   emitEvent({ type: "vision_state", enabled: true });
-  return { status: "enabled", message: "Live screen vision enabled. I can now see your screen." };
+  return {
+    status: "enabled",
+    message: "Live screen vision enabled. I can now see your screen.",
+    frame_geometry: visionFrameGeometry(),
+    coordinate_hint:
+      "Ảnh bạn thấy đã được thu nhỏ. Khi gọi mouse_control với toạ độ đọc TỪ ẢNH, đặt space:\"frame\" để Iris đổi sang pixel thật; toạ độ chuột thật (từ multi_monitor_info/OCR) dùng space:\"screen\".",
+  };
 }
 
 // ---------------------------------------------------------------------------

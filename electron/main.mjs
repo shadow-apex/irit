@@ -124,6 +124,7 @@ import {
   sendPhoneCommand,
 } from "./main/po-questions.mjs";
 import { initMusicWidget, stopMusicWidget } from "./main/music-widget.mjs";
+import { initReminders, disposeReminders, stopClipboardWatcher } from "./main/local-tools.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -176,6 +177,14 @@ app.whenReady().then(() => {
   // elevated and the target window is. Ask for the standard UAC prompt and
   // hand off to the elevated relaunch before creating any windows.
   if (relaunchElevatedIfNeeded()) return;
+
+  // TL-09: nạp lại nhắc việc đã lưu (còn hạn thì đặt lại timer; quá hạn > 1 giờ thì bỏ).
+  try {
+    const r = initReminders();
+    if (r.restored || r.fired || r.dropped) console.log("[reminders]", JSON.stringify(r));
+  } catch (e) {
+    console.error("[reminders] không nạp được:", e.message);
+  }
 
   if (appIcon && process.platform === "darwin" && app.dock) {
     app.dock.setIcon(appIcon);
@@ -510,6 +519,9 @@ async function cleanupAll() {
     if (liveTranscriber?.proc && liveTranscriber.state !== "dead") killTree(liveTranscriber.proc);
   });
   await withTimeout("mouse release", () => handGestures.releaseGrabIfHeld());
+  // TL-08/TL-09: dừng theo dõi clipboard (riêng tư) và các timer nhắc việc (dữ liệu đã lưu, nạp lại lần sau).
+  await withTimeout("clipboard watcher", () => stopClipboardWatcher());
+  await withTimeout("reminders", () => disposeReminders());
   await withTimeout("claude runs", () => {
     for (const run of runQueue.list()) if (run.child) killTree(run.child);
   });
