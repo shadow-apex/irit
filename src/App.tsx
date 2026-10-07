@@ -39,7 +39,6 @@ import { videoToJpegDataUrl } from "./lib/frameCapture";
 import { createGestureLatch } from "./lib/gestureLatch";
 import { claimKeyCapture, isEditableTarget, keyCaptureOwner } from "./lib/keyCapture";
 import { companionStream } from "./lib/companionStream";
-import SciFiScanReveal from "./components/SciFiScanReveal";
 import { MusicWidget } from "./components/MusicWidget";
 
 const MAX_LOGS = 80;
@@ -63,7 +62,6 @@ function loadCameraDeviceId(): string {
 }
 
 export default function App() {
-  const [hasPlayedIntro, setHasPlayedIntro] = useState(false);
   const [sidecarRunning, setSidecarRunning] = useState(false);
   // Drives the WebGL backdrop/orb render loops: paused (0 GPU) whenever the
   // window is unfocused, independent of awake/asleep.
@@ -236,7 +234,6 @@ export default function App() {
     if (window.iris.onResetToBoot) {
       cleanupReset = window.iris.onResetToBoot(() => {
         // B-02: "boot" không thuộc kiểu setup -> thực sự quay về màn boot.
-        setHasPlayedIntro(false);
         setSetup(null);
       });
     }
@@ -1765,18 +1762,7 @@ export default function App() {
           ? "warn"
           : "on";
 
-  if (!hasPlayedIntro) {
-    return (
-      <SciFiScanReveal 
-        onComplete={() => {
-          setHasPlayedIntro(true);
-          // G-07: không tự mở mic + phiên Gemini nếu chưa có API key (sẽ báo `fatal` ngay). Người dùng
-          // cũng có thể tắt hẳn tự khởi động bằng IRIS_AUTOSTART=0 trong .env (hoặc đặt phím tắt thủ công).
-          if (!sidecarRunning && fullConfig?.geminiApiKeySet && fullConfig?.autoStart !== false) start();
-        }} 
-      />
-    );
-  }
+  
 
   return (
     <>
@@ -2042,3 +2028,4 @@ export default function App() {
     </>
   );
 }
+

@@ -153,11 +153,41 @@ function drawHudScan(
   const base = Math.min(w, h) * 0.45 * extraScale; // Adjusted base scale to fit beautifully
 
   // 0. Background radial glow matching the reference image's deep void
+
+  const PI = Math.PI;
   const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.7);
-  bgGrad.addColorStop(0, `rgba(2, 20, 55, ${extraAlpha})`);
+  bgGrad.addColorStop(0, `rgba(5, 10, 15, ${extraAlpha})`);
   bgGrad.addColorStop(1, `rgba(0, 0, 0, ${extraAlpha})`);
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, w, h);
+  // Cyberpunk Hex Grid
+  ctx.save();
+  ctx.globalAlpha = extraAlpha * 0.15;
+  ctx.strokeStyle = "#00d2ff";
+  ctx.lineWidth = 1.5;
+  const hexSize = 25;
+  const hexHeight = Math.sqrt(3) * hexSize;
+  const hexWidth = 2 * hexSize;
+  const xOffset = hexWidth * 0.75;
+  const cols = Math.ceil(w / xOffset);
+  const rows = Math.ceil(h / hexHeight);
+  ctx.beginPath();
+  for (let c = -1; c < cols + 1; c++) {
+    for (let r = -1; r < rows + 1; r++) {
+      const x = c * xOffset;
+      const y = r * hexHeight + (c % 2 === 1 ? hexHeight / 2 : 0);
+      for (let i = 0; i < 6; i++) {
+        const angle = PI / 3 * i;
+        const px = x + hexSize * Math.cos(angle);
+        const py = y + hexSize * Math.sin(angle);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
 
   ctx.save();
   ctx.globalAlpha = extraAlpha;
@@ -165,18 +195,19 @@ function drawHudScan(
 
   const cyan = "rgba(0, 210, 255, ";
   const cyanBright = "rgba(160, 245, 255, ";
-  const PI = Math.PI;
-
-  const drawArc = (r: number, width: number, dash: number[], alpha: number, speed: number, dir: number, isGlow: boolean = false, startAng = 0, endAng = PI * 2) => {
+  
+  const drawArc = (r: number, width: number, dash: number[], alpha: number, speed: number, dir: number, isGlow: boolean = false, startAng = 0, endAng = PI * 2, colorStyle: "cyan" | "amber" = "cyan") => {
     ctx.save();
     ctx.rotate(t * speed * dir);
     ctx.beginPath();
     ctx.arc(0, 0, base * r, startAng, endAng);
     if (dash.length > 0) ctx.setLineDash(dash);
     ctx.lineWidth = width;
-    ctx.strokeStyle = (isGlow ? cyanBright : cyan) + alpha + ")";
+    const colorBase = colorStyle === "amber" ? "rgba(255, 170, 0, " : cyan;
+    const colorBright = colorStyle === "amber" ? "rgba(255, 200, 50, " : cyanBright;
+    ctx.strokeStyle = (isGlow ? colorBright : colorBase) + alpha + ")";
     if (isGlow) {
-      ctx.shadowColor = "#00d2ff";
+      ctx.shadowColor = colorStyle === "amber" ? "#ffaa00" : "#00d2ff";
       ctx.shadowBlur = width > 5 ? 25 : 12;
     }
     ctx.stroke();
@@ -203,13 +234,13 @@ function drawHudScan(
   };
 
   // 1. Innermost thin solid ring
-  drawArc(0.25, 1.5, [], 0.9, 0.1, 1);
+  drawArc(0.25, 2.5, [], 0.9, 0.1, 1, true, 0, PI * 2, "amber");
 
   // 2. Inner gauge (thick band made of fine radial dashes)
-  drawArc(0.30, 10, [1.5, 4], 0.8, 0.15, 1);
+  drawArc(0.30, 10, [1.5, 4], 0.8, 0.15, 1, false, 0, PI * 2, "cyan");
 
   // 3. Second thin solid ring bounding the gauge
-  drawArc(0.35, 1.5, [], 0.9, 0.1, 1);
+  drawArc(0.35, 2.5, [], 0.9, 0.1, 1, true, 0, PI * 2, "amber");
 
   // 4. MAIN COMPLEX TRACK (Radius 0.45 to 0.61)
   ctx.save();
@@ -223,8 +254,8 @@ function drawHudScan(
   const trackMid = 0.53;
   const trackWidth = 0.16 * base;
 
-  // Segment A: Left solid glowing block (170° to 270°)
-  drawArc(trackMid, trackWidth, [], 1.0, 0, 1, true, 170 * PI / 180, 270 * PI / 180);
+  // Segment A: Left segmented glowing block (170 degrees to 270 degrees)
+  drawArc(trackMid, trackWidth, [8, 4], 0.85, 0, 1, true, 170 * PI / 180, 270 * PI / 180, "amber");
 
   // Segment B: Bottom text arc (70° to 160°)
   const textSpan = 90 * PI / 180;
@@ -1051,3 +1082,9 @@ export default function SciFiScanReveal({
     </div>
   );
 }
+
+
+
+
+
+
