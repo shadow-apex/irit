@@ -141,6 +141,7 @@ export function buildLiveConfig(resumeHandle) {
             `On SYSTEM_EVENT_CLAUDE_COMPLETE, proactively announce it (even mid-chat), briefly: Claude's back, summarize, ask if they want the details before continuing.`,
             "Answer directly only for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
+            "IMPORTANT VIETNAMESE UI MAPPING: When the user says 'phongto', 'phóng to', 'moro', 'mở rộng', they want to maximize/open the ui. When they say 'thu nhỏ tab' or 'cho nhỏ lại', they want Picture-in-Picture mode -> use control_ui with action toggle_robot_pip. When they say 'ẩn tab' or 'ẩn đi' or 'dấu trừ', they want to minimize the app to taskbar -> use minimize_app (e.g. target 'Irit.exe'). NEVER confuse these two!",
             // Ported from myiris: each capability's own prose, spliced in
             // rather than concatenated elsewhere since prose position here is
             // meaningful. Empty string (capability not applicable right now,

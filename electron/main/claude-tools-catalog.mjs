@@ -102,7 +102,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "minimize_app",
-          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to hide or minimize an app without closing it. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe').",
+          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to minimize (in Vietnamese: 'ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ') an app. DO NOT use this when the user says 'thu nhỏ' (which means Picture-in-Picture mode). Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Irit.exe').",
           parameters: {
             type: "object",
             properties: {
@@ -782,7 +782,7 @@ function buildClaudeToolsRaw() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_smarthome_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision, open_companion_live_view. Use toggle_* to turn features on/off when requested by the user.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_smarthome_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision, open_companion_live_view. Use toggle_* to turn features on/off when requested by the user. Note: If the user says 'thu nhỏ tab' or 'cho nhỏ lại', they mean Picture-in-Picture, so use toggle_robot_pip. If they say 'ẩn tab' or 'dấu trừ', they mean minimize to taskbar, so use minimize_app tool instead. Note: If the user says 'thu nh? tab' or 'cho nh? l?i', they mean Picture-in-Picture, so use toggle_robot_pip. If they say '?n tab' or 'd?u tr?', they mean minimize to taskbar, so use minimize_app tool instead.",
               },
               target_id: {
                 type: "string",
