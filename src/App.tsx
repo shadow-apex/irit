@@ -39,6 +39,7 @@ import { videoToJpegDataUrl } from "./lib/frameCapture";
 import { createGestureLatch } from "./lib/gestureLatch";
 import { claimKeyCapture, isEditableTarget, keyCaptureOwner } from "./lib/keyCapture";
 import { companionStream } from "./lib/companionStream";
+import SciFiScanReveal from "./components/SciFiScanReveal";
 import { MusicWidget } from "./components/MusicWidget";
 
 const MAX_LOGS = 80;
@@ -62,6 +63,7 @@ function loadCameraDeviceId(): string {
 }
 
 export default function App() {
+  const [hasPlayedIntro, setHasPlayedIntro] = useState(false);
   const [sidecarRunning, setSidecarRunning] = useState(false);
   // Drives the WebGL backdrop/orb render loops: paused (0 GPU) whenever the
   // window is unfocused, independent of awake/asleep.
@@ -546,6 +548,12 @@ export default function App() {
     function onKey(event: KeyboardEvent) {
       const key = event.key.toLowerCase();
       // V-11: đã bỏ Alt/Ctrl+R cục bộ — trùng phím toàn cục Alt+R (main gửi ui:toggle-robot-pip).
+      if (key === "r" && event.ctrlKey) {
+        event.preventDefault();
+        setHasPlayedIntro(false);
+        return;
+      }
+
       if (key === "q" && (event.altKey || event.ctrlKey)) {
         event.preventDefault();
         setShowCompanionQR((v) => !v);
@@ -1761,6 +1769,17 @@ export default function App() {
         : audioState === "idle"
           ? "warn"
           : "on";
+  if (!hasPlayedIntro) {
+    return (
+      <SciFiScanReveal 
+        onComplete={() => {
+          setHasPlayedIntro(true);
+          if (!sidecarRunning) start();
+        }} 
+      />
+    );
+  }
+
 
   
 
@@ -2028,4 +2047,7 @@ export default function App() {
     </>
   );
 }
+
+
+
 

@@ -140,8 +140,8 @@ function drawHudScan(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  t: number,
-  progress: number,
+  t: number, // seconds elapsed since hud_scan phase started (continues into flash for zoom)
+  progress: number, // 0..1 overall hud "charge" progress
   particles: ReturnType<typeof makeParticles>,
   binaryRing: ReturnType<typeof makeBinaryRing>,
   extraScale: number,
@@ -150,136 +150,89 @@ function drawHudScan(
 ) {
   const cx = w / 2;
   const cy = h / 2;
-  const base = Math.min(w, h) * 0.45 * extraScale; // Adjusted base scale to fit beautifully
-
-  // 0. Background radial glow matching the reference image's deep void
-
-  const PI = Math.PI;
-  const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.7);
-  bgGrad.addColorStop(0, `rgba(5, 10, 15, ${extraAlpha})`);
-  bgGrad.addColorStop(1, `rgba(0, 0, 0, ${extraAlpha})`);
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, w, h);
-  // Cyberpunk Hex Grid
-  ctx.save();
-  ctx.globalAlpha = extraAlpha * 0.15;
-  ctx.strokeStyle = "#00d2ff";
-  ctx.lineWidth = 1.5;
-  const hexSize = 25;
-  const hexHeight = Math.sqrt(3) * hexSize;
-  const hexWidth = 2 * hexSize;
-  const xOffset = hexWidth * 0.75;
-  const cols = Math.ceil(w / xOffset);
-  const rows = Math.ceil(h / hexHeight);
-  ctx.beginPath();
-  for (let c = -1; c < cols + 1; c++) {
-    for (let r = -1; r < rows + 1; r++) {
-      const x = c * xOffset;
-      const y = r * hexHeight + (c % 2 === 1 ? hexHeight / 2 : 0);
-      for (let i = 0; i < 6; i++) {
-        const angle = PI / 3 * i;
-        const px = x + hexSize * Math.cos(angle);
-        const py = y + hexSize * Math.sin(angle);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-    }
-  }
-  ctx.stroke();
-  ctx.restore();
+  const base = Math.min(w, h) * 0.34 * extraScale;
 
   ctx.save();
   ctx.globalAlpha = extraAlpha;
   ctx.translate(cx, cy);
 
-  const cyan = "rgba(0, 210, 255, ";
-  const cyanBright = "rgba(160, 245, 255, ";
-  
-  const drawArc = (r: number, width: number, dash: number[], alpha: number, speed: number, dir: number, isGlow: boolean = false, startAng = 0, endAng = PI * 2, colorStyle: "cyan" | "amber" = "cyan") => {
-    ctx.save();
-    ctx.rotate(t * speed * dir);
+  const cyan = "rgba(62,232,255,";
+  const cyanBright = "rgba(160,255,255,";
+
+  // outer particles
+  particles.forEach((p) => {
+    const a = p.angle + t * 0.15 * p.speed;
+    const r = base * p.radius;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    const tw = 0.4 + 0.6 * Math.abs(Math.sin(t * p.speed + p.phase));
     ctx.beginPath();
-    ctx.arc(0, 0, base * r, startAng, endAng);
-    if (dash.length > 0) ctx.setLineDash(dash);
-    ctx.lineWidth = width;
-    const colorBase = colorStyle === "amber" ? "rgba(255, 170, 0, " : cyan;
-    const colorBright = colorStyle === "amber" ? "rgba(255, 200, 50, " : cyanBright;
-    ctx.strokeStyle = (isGlow ? colorBright : colorBase) + alpha + ")";
-    if (isGlow) {
-      ctx.shadowColor = colorStyle === "amber" ? "#ffaa00" : "#00d2ff";
-      ctx.shadowBlur = width > 5 ? 25 : 12;
-    }
+    ctx.fillStyle = cyanBright + tw * 0.9 + ")";
+    ctx.shadowColor = "#7FFFFF";
+    ctx.shadowBlur = 8;
+    ctx.arc(x, y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.shadowBlur = 0;
+
+  // binary ring characters
+  ctx.font = `${Math.max(9, base * 0.045)}px "JetBrains Mono", "Courier New", monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  binaryRing.forEach((b) => {
+    const a = b.angle - t * 0.25;
+    const r = base * (0.98 + (b.radius - 0.5) * 0.3);
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    ctx.fillStyle = cyan + (0.35 + 0.35 * Math.sin(t * 2 + a * 3)) + ")";
+    ctx.fillText(b.char, x, y);
+  });
+
+  // dashed arc segments, rotating opposite directions, several radii
+  const arcSpecs = [
+    { r: 0.62, dash: [26, 14], w: 2, dir: 1, speed: 0.55, alpha: 0.55 },
+    { r: 0.78, dash: [10, 18], w: 1.5, dir: -1, speed: 0.35, alpha: 0.4 },
+    { r: 0.92, dash: [4, 10], w: 1, dir: 1, speed: 0.2, alpha: 0.3 },
+  ];
+  arcSpecs.forEach((s) => {
+    ctx.save();
+    ctx.rotate(t * s.speed * s.dir);
+    ctx.setLineDash(s.dash);
+    ctx.lineWidth = s.w;
+    ctx.strokeStyle = cyan + s.alpha + ")";
+    ctx.beginPath();
+    ctx.arc(0, 0, base * s.r, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
-  };
+  });
 
-  const drawCurvedText = (text: string, r: number, startAngle: number, charSpacing: number, alpha: number, speed: number, dir: number) => {
-    ctx.save();
-    ctx.rotate(t * speed * dir);
-    ctx.font = `bold ${Math.max(10, base * 0.028)}px "Courier New", monospace`;
-    ctx.fillStyle = cyanBright + alpha + ")";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    for (let i = 0; i < text.length; i++) {
-      ctx.save();
-      const angle = startAngle + i * charSpacing;
-      ctx.rotate(angle);
-      ctx.translate(base * r, 0);
-      ctx.rotate(PI / 2); // Orient text tangentially (curving around)
-      ctx.fillText(text[i], 0, 0);
-      ctx.restore();
-    }
-    ctx.restore();
-  };
-
-  // 1. Innermost thin solid ring
-  drawArc(0.25, 2.5, [], 0.9, 0.1, 1, true, 0, PI * 2, "amber");
-
-  // 2. Inner gauge (thick band made of fine radial dashes)
-  drawArc(0.30, 10, [1.5, 4], 0.8, 0.15, 1, false, 0, PI * 2, "cyan");
-
-  // 3. Second thin solid ring bounding the gauge
-  drawArc(0.35, 2.5, [], 0.9, 0.1, 1, true, 0, PI * 2, "amber");
-
-  // 4. MAIN COMPLEX TRACK (Radius 0.45 to 0.61)
+  // solid thin outer ring
   ctx.save();
-  ctx.rotate(t * 0.15); // The entire main track rotates together
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = cyan + "0.5)";
+  ctx.beginPath();
+  ctx.arc(0, 0, base * 1.02, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 
-  // Inner border of the main track
-  drawArc(0.45, 1.5, [], 0.6, 0, 1);
-  // Outer border of the main track
-  drawArc(0.61, 1.5, [], 0.6, 0, 1);
+  // chevrons N/E/S/W removed as requested
 
-  const trackMid = 0.53;
-  const trackWidth = 0.16 * base;
+  // inner rotating ring
+  ctx.save();
+  ctx.rotate(-t * 0.5);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = cyan + "0.6)";
+  ctx.setLineDash([2, 6]);
+  ctx.beginPath();
+  ctx.arc(0, 0, base * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 
-  // Segment A: Left segmented glowing block (170 degrees to 270 degrees)
-  drawArc(trackMid, trackWidth, [8, 4], 0.85, 0, 1, true, 170 * PI / 180, 270 * PI / 180, "amber");
-
-  // Segment B: Bottom text arc (70° to 160°)
-  const textSpan = 90 * PI / 180;
-  const numChars = 38;
-  const txt = "000000000000000000000000000000000000000000000";
-  drawCurvedText(txt.substring(0, numChars), trackMid, 73 * PI / 180, textSpan / numChars, 0.95, 0, 1);
-
-  // Segment C: Top-Right dotted gauge (280° to 50°) - Note: 280° is equivalent to -80°
-  drawArc(trackMid, trackWidth, [2, 6], 0.75, 0, 1, false, -80 * PI / 180, 50 * PI / 180);
-
-  ctx.restore(); // End main track group
-
-  // 5. Middle dashed ring (smooth slow counter-rotation)
-  const c5 = 2 * PI * (base * 0.72);
-  drawArc(0.72, 2.5, [c5 * 0.05, c5 * 0.02], 0.7, 0.12, -1, true);
-
-  // 6. Outermost thin circle with 4 crosshair ticks
-  drawArc(0.85, 1.5, [], 0.5, 0.05, 1);
-  // 4 ticks (thick line, large gap)
-  const c6 = 2 * PI * (base * 0.85);
-  drawArc(0.85, 10, [2, c6 / 4 - 2], 0.9, 0.05, 1, true);
+  // glowing central identity glyph and energy glow removed
+  // ReactorCore is rendered in the DOM instead.
 
   ctx.restore();
-};
+}
 
 function drawFlash(
   ctx: CanvasRenderingContext2D,
@@ -412,30 +365,23 @@ export default function SciFiScanReveal({
   }, [started, speed]);
 
   useEffect(() => {
-    if (autoStart) beginTimeline();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Enter") {
+    const skip = (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " " || e.key === "Escape") {
         if (!started) {
           beginTimeline();
-        } else if (phaseRef.current !== "done") {
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current.currentTime = 0;
-          }
-          phaseRef.current = "done";
-          setPhase("done");
-          if (onComplete) onComplete();
+        } else {
+          onComplete?.();
         }
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [started, beginTimeline, onComplete]);
+    window.addEventListener("keydown", skip);
+    return () => window.removeEventListener("keydown", skip);
+  }, [started, onComplete]);
+
+  useEffect(() => {
+    if (autoStart) beginTimeline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart]);
 
   // main animation loop
   useEffect(() => {
@@ -1082,9 +1028,4 @@ export default function SciFiScanReveal({
     </div>
   );
 }
-
-
-
-
-
 
