@@ -64,7 +64,7 @@ def minimize_app(target):
         _winutil.show_window(w["hwnd"], 6)  # SW_MINIMIZE
     if not wins:
         return False, {"error": f"Không thấy cửa sổ nào khớp '{target}' (cửa sổ của Iris bị loại)."}
-    return True, {"message": f"Đã thu nhỏ {len(wins)} cửa sổ.", "affected": len(wins)}
+    return True, {"message": f"Đã đưa {len(wins)} cửa sổ xuống thanh tác vụ.", "affected": len(wins)}
 
 
 def hide_app(target):

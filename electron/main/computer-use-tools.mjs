@@ -93,6 +93,18 @@ export function controlUi({ action, target_id = undefined, query = undefined } =
     case "open_companion_live_view":
       if (mainWindow) mainWindow.webContents.send("companion:open-live-view");
       return { status: "success", message: "Opened Companion Live View." };
+    // Cửa sổ của CHÍNH Iris không thể điều khiển qua minimize_app/hide_app (system_actions.py loại nó) — dùng hai action này.
+    // Giống nút "—" trên thanh tiêu đề (win:control). backgroundThrottling=false nên Gemini Live vẫn nghe/nói khi đang thu xuống.
+    case "minimize_iris":
+      if (!mainWindow || mainWindow.isDestroyed()) return { status: "error", error: "Không có cửa sổ Iris." };
+      mainWindow.minimize();
+      return { status: "success", message: "Đã đưa cửa sổ Iris xuống thanh tác vụ. Nói 'mở lại Iris' hoặc bấm biểu tượng Iris trên thanh tác vụ để hiện lại." };
+    case "restore_iris":
+      if (!mainWindow || mainWindow.isDestroyed()) return { status: "error", error: "Không có cửa sổ Iris." };
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      return { status: "success", message: "Đã hiện lại cửa sổ Iris." };
   }
 
   if (!UI_ACTIONS.has(action)) {
