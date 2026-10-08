@@ -484,6 +484,12 @@ export default function SciFiScanReveal({
               const img = radarImgRefs.current[i];
               if (img) {
                 img.style.transform = `rotate(${(hudT * l.speed * l.dir * 180) / Math.PI}deg)`;
+                  if (i === 2) {
+                    const angle = Math.min(90, hudT * 50); 
+                    const maskStr = `repeating-conic-gradient(from -15deg, black 0deg, black ${angle}deg, transparent ${angle}deg, transparent 90deg)`;
+                    img.style.WebkitMaskImage = maskStr;
+                    img.style.maskImage = maskStr;
+                  }
               }
             });
           }
