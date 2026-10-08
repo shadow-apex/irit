@@ -92,6 +92,30 @@ const RADAR_LAYERS = [
 // old solid outer ring was (radius = base * 1.02, base = min(w,h) * 0.34).
 const RADAR_SIZE_FACTOR = 0.806;
 
+
+function playMechSound() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  const ctx = new AudioCtx();
+  const playThud = (time, freq, dur) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, time);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(10, freq / 4), time + dur * 0.8);
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(0.3, time + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, time + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(time);
+    osc.stop(time + dur);
+  };
+  // "Ka-CHUNK" heavy mechanical UI snap
+  playThud(ctx.currentTime, 400, 0.15); 
+  playThud(ctx.currentTime + 0.1, 150, 0.35); 
+}
+
 function phaseAt(tScaled: number): Phase {
   if (tScaled < 0) return "idle";
   if (tScaled >= TOTAL_DURATION) return "done";
@@ -320,6 +344,7 @@ export default function SciFiScanReveal({
   const radarRef = useRef<HTMLDivElement | null>(null);
   const radarImgRefs = useRef<Array<HTMLImageElement | null>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mechSoundRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -339,6 +364,7 @@ export default function SciFiScanReveal({
   const beginTimeline = useCallback(() => {
     if (started) return;
     setStarted(true);
+    mechSoundRef.current = false;
     const audio = audioRef.current;
     if (audio) {
       audio.currentTime = 0;
@@ -481,17 +507,42 @@ export default function SciFiScanReveal({
             radarLayer.style.opacity = extraAlpha.toString();
             radarLayer.style.transform = `translate(-50%, -50%) scale(${extraScale})`;
             RADAR_LAYERS.forEach((l, i) => {
-              const img = radarImgRefs.current[i];
-              if (img) {
-                img.style.transform = `rotate(${(hudT * l.speed * l.dir * 180) / Math.PI}deg)`;
-                  if (i === 2) {
-                    const angle = Math.min(90, hudT * 50); 
-                    const maskStr = `repeating-conic-gradient(from -15deg, black 0deg, black ${angle}deg, transparent ${angle}deg, transparent 90deg)`;
-                    img.style.WebkitMaskImage = maskStr;
-                    img.style.maskImage = maskStr;
+                  const img = radarImgRefs.current[i];
+                  if (img) {
+                    let imgScale = 1;
+                    let imgOpacity = 1;
+                    
+                    if (i === 1) { 
+                      // part2 slams in slowly from 0.6 to 1.1s
+                      if (hudT < 0.6) {
+                        imgOpacity = 0;
+                      } else {
+                        if (!mechSoundRef.current) {
+                           mechSoundRef.current = true;
+                           playMechSound();
+                        }
+                        const p = Math.min(1, (hudT - 0.6) / 0.5); // 0.5s duration makes it slower
+                        imgOpacity = p;
+                        imgScale = 1 + (1 - p) * 1.5; // From 2.5 down to 1
+                      }
+                    } else if (i === 3) { 
+                      // part4 fades in
+                      imgOpacity = Math.min(1, hudT / 0.5);
+                    }
+  
+                    const baseRot = (hudT * l.speed * l.dir * 180) / Math.PI;
+                    img.style.transform = `scale(${imgScale}) rotate(${baseRot}deg)`;
+                    img.style.opacity = imgOpacity.toString();
+  
+                    if (i === 2) {
+                      // part3 wipes in ONLY AFTER part2 lands (at 1.1s)
+                      const angle = Math.max(0, Math.min(90, (hudT - 1.1) * 60)); 
+                      const maskStr = `repeating-conic-gradient(from -15deg, black 0deg, black ${angle}deg, transparent ${angle}deg, transparent 90deg)`;
+                      img.style.WebkitMaskImage = maskStr;
+                      img.style.maskImage = maskStr;
+                    }
                   }
-              }
-            });
+                });
           }
         } else {
           // If not in hud_scan or flash_transition, make sure it's hidden
