@@ -1,0 +1,3 @@
+﻿@echo off
+echo Dang khoi dong may chu xem truoc Irit Startup...
+npm run dev -- --open
