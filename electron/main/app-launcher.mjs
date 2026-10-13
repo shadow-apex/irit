@@ -15,6 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execFile } from "node:child_process";
 
 export const ALLOWED_APP_EXT = new Set([".lnk", ".url", ".exe"]);
@@ -48,23 +49,45 @@ function isInside(dir, file) {
  * Kiểm tra `target` là file .lnk/.url/.exe nằm trực tiếp/lồng trong Desktop.
  * @returns {{ok:true, path:string}|{ok:false, error:string}}
  */
+export function getCandidateDesktopDirs(desktopDir) {
+  const dirs = new Set();
+  if (desktopDir) dirs.add(path.resolve(desktopDir));
+  if (process.platform === "win32") {
+    dirs.add(path.resolve("C:\\Users\\Public\\Desktop"));
+    try {
+      dirs.add(path.resolve(path.join(os.homedir(), "Desktop")));
+      dirs.add(path.resolve(path.join(os.homedir(), "OneDrive", "Desktop")));
+    } catch {}
+  }
+  return Array.from(dirs).filter((d) => {
+    try {
+      return fs.existsSync(d);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Kiểm tra `target` là file .lnk/.url/.exe nằm trong Desktop (User, OneDrive hoặc Public).
+ * @returns {{ok:true, path:string}|{ok:false, error:string}}
+ */
 export function resolveDesktopTarget(target, desktopDir) {
   if (typeof target !== "string" || !target.trim() || target.length > 1024 || target.includes("\0")) {
     return { ok: false, error: "Đường dẫn không hợp lệ" };
   }
-  if (!desktopDir) return { ok: false, error: "Không xác định được thư mục Desktop" };
   const ext = path.extname(target).toLowerCase();
   if (!ALLOWED_APP_EXT.has(ext)) return { ok: false, error: "Loại file không được phép" };
   let resolved = path.resolve(target);
-  let root = path.resolve(desktopDir);
   try {
     resolved = fs.realpathSync(resolved);
-    root = fs.realpathSync(root);
   } catch {
     return { ok: false, error: "Ứng dụng không tồn tại trên Desktop" };
   }
   const norm = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
-  if (!isInside(norm(root), norm(resolved))) {
+  const candidates = getCandidateDesktopDirs(desktopDir);
+  const insideAny = candidates.some((dir) => isInside(norm(dir), norm(resolved)));
+  if (!insideAny) {
     return { ok: false, error: "Chỉ được mở/đóng ứng dụng nằm trên Desktop" };
   }
   return { ok: true, path: resolved };
@@ -84,9 +107,20 @@ export function isProtectedProcess(name) {
   return PROTECTED_PROCESSES.has(String(name || "").toLowerCase());
 }
 
+const SAFE_SYSTEM_TOOLS = new Set(["cmd.exe", "powershell.exe", "calc.exe", "notepad.exe", "explorer.exe"]);
+
 /** @param {{desktopDir:string, openExternal:(u:string)=>Promise<void>, openPath:(p:string)=>Promise<string>}} deps */
 export async function openAppTarget(target, deps) {
   try {
+    if (typeof target === "string" && SAFE_SYSTEM_TOOLS.has(target.toLowerCase())) {
+      if (process.platform === "win32") {
+        const sysPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", target.toLowerCase());
+        if (fs.existsSync(sysPath)) {
+          const err = await deps.openPath(sysPath);
+          return err ? { success: false, error: err } : { success: true };
+        }
+      }
+    }
     if (typeof target === "string" && /^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:[\\/]/i.test(target)) {
       if (!isSafeExternalUrl(target)) return { success: false, error: "Chỉ cho phép URL http/https/vscode" };
       await deps.openExternal(target);

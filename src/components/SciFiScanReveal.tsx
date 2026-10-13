@@ -93,29 +93,6 @@ const RADAR_LAYERS = [
 const RADAR_SIZE_FACTOR = 0.806;
 
 
-function playMechSound() {
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtx) return;
-  const ctx = new AudioCtx();
-  const playThud = (time, freq, dur) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(freq, time);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(10, freq / 4), time + dur * 0.8);
-    gain.gain.setValueAtTime(0, time);
-    gain.gain.linearRampToValueAtTime(0.3, time + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.01, time + dur);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + dur);
-  };
-  // "Ka-CHUNK" heavy mechanical UI snap
-  playThud(ctx.currentTime, 400, 0.15); 
-  playThud(ctx.currentTime + 0.1, 150, 0.35); 
-}
-
 function phaseAt(tScaled: number): Phase {
   if (tScaled < 0) return "idle";
   if (tScaled >= TOTAL_DURATION) return "done";
@@ -332,6 +309,7 @@ export default function SciFiScanReveal({
   className,
 }: SciFiScanRevealProps) {
   const [started, setStarted] = useState(autoStart);
+  const startedRef = useRef(autoStart);
   const [phase, setPhase] = useState<Phase>("idle");
   const [inputTyped, setInputTyped] = useState("");
   const [identifyTitleTyped, setIdentifyTitleTyped] = useState("");
@@ -344,7 +322,6 @@ export default function SciFiScanReveal({
   const radarRef = useRef<HTMLDivElement | null>(null);
   const radarImgRefs = useRef<Array<HTMLImageElement | null>>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const mechSoundRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -362,9 +339,9 @@ export default function SciFiScanReveal({
   const PASSWORD_DOTS_MAX = 16;
 
   const beginTimeline = useCallback(() => {
-    if (started) return;
+    if (startedRef.current) return;
+    startedRef.current = true;
     setStarted(true);
-    mechSoundRef.current = false;
     const audio = audioRef.current;
     if (audio) {
       audio.currentTime = 0;
@@ -373,7 +350,53 @@ export default function SciFiScanReveal({
         /* autoplay blocked — visuals still run */
       });
     }
-  }, [started, speed]);
+  }, [speed]);
+
+  const skipIntro = useCallback(() => {
+    if (phaseRef.current === "done") return;
+    phaseRef.current = "done";
+    setPhase("done");
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    onComplete?.();
+  }, [onComplete]);
+
+  // Keyboard navigation: Enter to start -> Enter again to skip immediately
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!startedRef.current || phaseRef.current === "idle") {
+          beginTimeline();
+        } else if (phaseRef.current !== "done") {
+          skipIntro();
+        }
+      } else if (e.key === "Escape") {
+        if (startedRef.current && phaseRef.current !== "done") {
+          e.preventDefault();
+          e.stopPropagation();
+          skipIntro();
+        }
+      } else if (e.key === " " || e.code === "Space") {
+        if (!startedRef.current || phaseRef.current === "idle") {
+          e.preventDefault();
+          e.stopPropagation();
+          beginTimeline();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [beginTimeline, skipIntro]);
 
   useEffect(() => {
     if (autoStart) beginTimeline();
@@ -517,10 +540,7 @@ export default function SciFiScanReveal({
                       if (hudT < 0.6) {
                         imgOpacity = 0;
                       } else {
-                        if (!mechSoundRef.current) {
-                           mechSoundRef.current = true;
-                           playMechSound();
-                        }
+                        
                         const p = Math.min(1, (hudT - 0.6) / 0.5); // 0.5s duration makes it slower
                         imgOpacity = p;
                         imgScale = 1 + (1 - p) * 1.5; // From 2.5 down to 1
@@ -587,11 +607,10 @@ export default function SciFiScanReveal({
       <style>{`
         .ssr-root {
           position: relative;
-          width: 100%;
-          aspect-ratio: 654 / 368;
+          width: 100vw;
+          height: 100vh;
           background: radial-gradient(ellipse at center, #0a1420 0%, #000814 75%);
           overflow: hidden;
-          border-radius: 6px;
           font-family: "JetBrains Mono", "Courier New", monospace;
           color: #3EE8FF;
           isolation: isolate;

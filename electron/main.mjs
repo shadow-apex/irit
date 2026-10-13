@@ -57,6 +57,8 @@ import {
   hudHotkey,
   installAppMenu,
   stopHudStatsInterval,
+  toggleDeckFullscreen,
+  isDeckFullscreen,
 } from "./main/window-manager.mjs";
 import {
   liveSession,
@@ -233,16 +235,65 @@ app.whenReady().then(() => {
 
   ipcMain.handle("desktop:apps", async () => {
     try {
-      const desktopPath = app.getPath("desktop");
-      const files = await fs.promises.readdir(desktopPath);
-      const apps = files
-        .filter(f => f.endsWith(".lnk") || f.endsWith(".url") || f.endsWith(".exe"))
-        .map(f => ({
-          name: f.replace(/\.(lnk|url|exe)$/i, ""),
-          target: path.join(desktopPath, f)
-        }));
-      // Sort alphabetically
-      return apps.sort((a, b) => a.name.localeCompare(b.name));
+      const desktopDirs = [
+        app.getPath("desktop"),
+        path.join(os.homedir(), "Desktop"),
+        path.join(os.homedir(), "OneDrive", "Desktop"),
+        "C:\\Users\\Public\\Desktop",
+      ];
+      const rawApps = [];
+      const seenNames = new Set();
+      for (const dir of desktopDirs) {
+        if (!dir) continue;
+        try {
+          if (!fs.existsSync(dir)) continue;
+          const files = await fs.promises.readdir(dir);
+          for (const f of files) {
+            if (f.endsWith(".lnk") || f.endsWith(".url") || f.endsWith(".exe")) {
+              const name = f.replace(/\.(lnk|url|exe)$/i, "");
+              if (!seenNames.has(name.toLowerCase()) && !name.toLowerCase().includes("desktop.ini")) {
+                seenNames.add(name.toLowerCase());
+                rawApps.push({
+                  name,
+                  target: path.join(dir, f),
+                });
+              }
+            }
+          }
+        } catch {}
+      }
+      rawApps.sort((a, b) => a.name.localeCompare(b.name));
+
+      // Trích xuất icon native thực tế của từng ứng dụng từ Windows Shell
+      const apps = await Promise.all(
+        rawApps.map(async (item) => {
+          let iconData = null;
+          try {
+            if (item.target.endsWith(".lnk")) {
+              try {
+                const sc = shell.readShortcutLink(item.target);
+                if (sc.icon && fs.existsSync(sc.icon)) {
+                  const ico = await app.getFileIcon(sc.icon, { size: "normal" });
+                  if (ico && !ico.isEmpty()) iconData = ico.toDataURL();
+                } else if (sc.target && fs.existsSync(sc.target)) {
+                  const ico = await app.getFileIcon(sc.target, { size: "normal" });
+                  if (ico && !ico.isEmpty()) iconData = ico.toDataURL();
+                }
+              } catch {}
+            }
+            if (!iconData) {
+              const directIcon = await app.getFileIcon(item.target, { size: "normal" });
+              if (directIcon && !directIcon.isEmpty()) iconData = directIcon.toDataURL();
+            }
+          } catch {}
+          return {
+            ...item,
+            icon: iconData,
+          };
+        })
+      );
+
+      return apps;
     } catch (e) {
       console.error("Failed to read desktop apps:", e);
       return [];
@@ -326,7 +377,10 @@ app.whenReady().then(() => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();
     else if (action === "minimize") mainWindow.minimize();
+    else if (action === "toggle-fullscreen" || action === "fullscreen") toggleDeckFullscreen();
   });
+  ipcMain.handle("win:toggle-fullscreen", () => toggleDeckFullscreen());
+  ipcMain.handle("win:is-fullscreen", () => isDeckFullscreen);
   ipcMain.handle("config:get", () => getFullConfig());
   ipcMain.handle("config:save", (_event, updates) => {
     try {
@@ -416,6 +470,11 @@ app.whenReady().then(() => {
   if (!registered) {
     emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
   }
+
+  // Phím tắt Ctrl + Space để tràn toàn màn hình (phủ cả taskbar)
+  globalShortcut.register("CommandOrControl+Space", () => {
+    toggleDeckFullscreen();
+  });
 
   // G-05: phím tắt toàn cục cấu hình được qua IRIS_HOTKEYS (xem main/hotkeys.mjs). Đặt giá trị rỗng để
   // tắt một phím. Mặc định giữ nguyên như trước; Alt+<chữ> chiếm phím của mọi app khác nên nếu bị

@@ -32,6 +32,13 @@ contextBridge.exposeInMainWorld("iris", {
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
   windowControl: (action) => ipcRenderer.send("win:control", action),
+  toggleFullscreen: () => ipcRenderer.invoke("win:toggle-fullscreen"),
+  isFullscreen: () => ipcRenderer.invoke("win:is-fullscreen"),
+  onFullscreenChange: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("win:fullscreen-change", handler);
+    return () => ipcRenderer.removeListener("win:fullscreen-change", handler);
+  },
   onHudMode: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("hud:mode", handler);

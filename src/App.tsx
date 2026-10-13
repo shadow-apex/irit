@@ -134,6 +134,15 @@ export default function App() {
   const [uiMode, setUiMode] = useState<UiMode>("deck");
   const [modeTransition, setModeTransition] = useState<"to-hud" | "to-deck" | null>(null);
   const modeTimerRef = useRef<number | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (window.iris?.onFullscreenChange) {
+      return window.iris.onFullscreenChange((payload: { fullscreen: boolean }) => {
+        setIsFullscreen(payload.fullscreen);
+      });
+    }
+  }, []);
 
   // Orb micro-expressions + sound cues.
   const [orbThinking, setOrbThinking] = useState(false);
@@ -559,6 +568,20 @@ export default function App() {
         setShowCompanionQR((v) => !v);
         return;
       }
+
+      // Ctrl + Space: Bật / Tắt tràn toàn màn hình (phủ cả thanh taskbar Windows)
+      if ((event.ctrlKey || event.metaKey) && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        window.iris?.toggleFullscreen?.();
+        return;
+      }
+
+      // Escape: Thoát tràn toàn màn hình
+      if (key === "escape" && isFullscreen) {
+        event.preventDefault();
+        window.iris?.toggleFullscreen?.();
+        return;
+      }
       
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
       // V-11: gõ chữ (input/textarea/select/contenteditable) hoặc có thành phần đang chiếm bàn phím
@@ -588,7 +611,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sidecarRunning, hasBridge, secondBrainActive]);
+  }, [sidecarRunning, hasBridge, secondBrainActive, isFullscreen]);
 
   // Scoped autoscroll: scrollIntoView would also scroll every scrollable
   // ancestor (the rounded deck clips with overflow:hidden), shifting the whole
@@ -1846,8 +1869,16 @@ export default function App() {
       ) : (
       <div
         className={`deck ${sidecarRunning ? "awake" : "asleep"} ${
-          modeTransition === "to-hud" ? "deck-leaving" : ""
-        } ${modeTransition === "to-deck" ? "deck-entering" : ""}`}
+          isFullscreen ? "fullscreen" : ""
+        } ${modeTransition === "to-hud" ? "deck-leaving" : ""} ${
+          modeTransition === "to-deck" ? "deck-entering" : ""
+        }`}
+        style={{
+          backgroundImage: `radial-gradient(ellipse at center, rgba(10, 20, 32, 0.15) 0%, rgba(0, 8, 20, 0.6) 100%), url(${import.meta.env.BASE_URL}img/bg.jpg)`,
+          backgroundPosition: "center center",
+          backgroundSize: "cover",
+          backgroundRepeat: "no-repeat",
+        }}
       >
         <div className="hud-nebula" />
         <div className="hud-glow" />

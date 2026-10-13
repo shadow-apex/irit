@@ -49,6 +49,12 @@ export default function TopBar({
             title="Minimize"
             aria-label="Minimize window"
           />
+          <button
+            className="win-dot max"
+            onClick={() => window.iris?.toggleFullscreen?.()}
+            title="Toàn màn hình (Ctrl + Space)"
+            aria-label="Toggle Fullscreen"
+          />
         </div>
         <div className="deck-status">
           <StatusDot tone="gemini" state={geminiDot} label="Gemini" />

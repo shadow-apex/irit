@@ -46,10 +46,10 @@ export function createWindow() {
   // creation. The deck paints its own rounded background in CSS; TopBar's
   // custom win-controls replace the native traffic lights this gives up.
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 860,
-    minWidth: 980,
-    minHeight: 800,
+    width: 980,
+    height: 640,
+    minWidth: 780,
+    minHeight: 520,
     show: false,
     frame: false,
     transparent: true,
@@ -154,7 +154,7 @@ export function exitHud() {
     mainWindow.setAlwaysOnTop(false);
     mainWindow.setVisibleOnAllWorkspaces(false);
     mainWindow.setHasShadow(true);
-    mainWindow.setMinimumSize(980, 800);
+    mainWindow.setMinimumSize(780, 520);
     if (deckBounds) mainWindow.setBounds(deckBounds);
     mainWindow.show();
     mainWindow.focus();
@@ -168,6 +168,38 @@ export function toggleHud() {
   }
   if (uiMode === "hud") exitHud();
   else enterHud();
+}
+
+// ===== Fullscreen Deck (Ctrl + Space) =====
+export let isDeckFullscreen = false;
+let normalDeckBounds = null;
+
+export function toggleDeckFullscreen() {
+  if (!mainWindow) return false;
+  if (uiMode !== "deck") return false;
+
+  isDeckFullscreen = !isDeckFullscreen;
+  if (isDeckFullscreen) {
+    normalDeckBounds = mainWindow.getBounds();
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    mainWindow.setHasShadow(false);
+    mainWindow.setMinimumSize(1, 1);
+    // display.bounds trùm toàn bộ màn hình kể cả thanh taskbar Windows
+    mainWindow.setBounds(display.bounds);
+    mainWindow.setAlwaysOnTop(true);
+  } else {
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setHasShadow(true);
+    mainWindow.setMinimumSize(780, 520);
+    if (normalDeckBounds) {
+      mainWindow.setBounds(normalDeckBounds);
+    } else {
+      mainWindow.setSize(980, 640);
+      mainWindow.center();
+    }
+  }
+  emitToRenderer("win:fullscreen-change", { fullscreen: isDeckFullscreen });
+  return isDeckFullscreen;
 }
 
 // ===== Tray (menu-bar presence) =====

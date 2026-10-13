@@ -15,6 +15,7 @@ import {
 type Mode = "onboarding" | "settings";
 type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
 type PermState = "idle" | "granted" | "denied";
+type Lang = "en" | "vi";
 
 type Draft = {
   GEMINI_API_KEY: string;
@@ -25,21 +26,173 @@ type Draft = {
   IRIS_USER_NAME: string;
   IRIS_LOAD_TEST_DATA: string;
   IRIS_WAKE_WORD: string;
-  // Ported from myiris (prompt-review-gate).
   IRIS_PROMPT_REVIEW_MODE: string;
-  // Claude Brain toggle.
   IRIS_CLAUDE_ENABLED: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
-
 const SYSTEM_DEFAULT_CAMERA = "default";
 
-// Ported from myiris: a tiny self-contained field for the second-brain
-// capability's vendored wiki-* skills — install status + one-click install,
-// independent of the rest of the (Gemini/Claude key) form's save/draft
-// lifecycle since it writes straight to ~/.claude/skills, not the .env.
-function NotesSkillsField() {
+const I18N = {
+  en: {
+    settings: "Settings",
+    tabAi: "AI & Keys",
+    tabVoice: "Voice & Persona",
+    tabSystem: "System & Controls",
+    language: "Language / Ngôn ngữ",
+    langEn: "English (Default)",
+    langVi: "Tiếng Việt",
+    geminiTitle: "Gemini API Keys",
+    geminiHint: "Powers Iris's realtime voice. Get one free at Google AI Studio.",
+    apiKey: "Gemini API Key",
+    apiKeySaved: "•••• Stored (enter new to change)",
+    apiKeyPlaceholder: "AI… paste your key",
+    apiKeyNote: "Get a free key from Google AI Studio. Stored locally only.",
+    visionKey: "Vision API Key (Optional)",
+    visionKeySaved: "•••• Stored (enter new to change)",
+    visionKeyPlaceholder: "For vision/image analysis (avoids live quota)",
+    visionKeyNote: "Separate key for image processing. Uses Live key if empty.",
+    testGemini: "Test Gemini",
+    keyWorks: "Key works",
+    claudeTitle: "Claude Brain",
+    claudeHint: "Worker brain — PO/DEV pipeline runs on Claude Code CLI.",
+    claudeBrain: "Claude Brain",
+    claudeBrainNote: "When off, Gemini handles tasks locally without Claude.",
+    anthropicKey: "Anthropic API Key (Optional)",
+    anthropicKeySaved: "•••• Stored (enter new to change)",
+    anthropicKeyPlaceholder: "Used for Computer Use & OmniParser",
+    anthropicKeyNote: "Grants Claude permission for desktop control.",
+    checkClaude: "Check Claude",
+    ready: "Ready",
+    on: "On",
+    off: "Off",
+    youTitle: "Voice & Persona",
+    youHint: "Personalize how Iris speaks and addresses you.",
+    displayName: "Display Name",
+    displayNamePlaceholder: "Your name",
+    displayNameNote: "What Iris calls you out loud.",
+    voice: "Voice",
+    voiceNote: "Iris's speaking voice. Tap Preview to hear a sample.",
+    preview: "Preview",
+    previewDisabledTitle: "Add your Gemini key first",
+    model: "Model",
+    modelNote: "Gemini Live model that powers realtime voice.",
+    sounds: "Interface Sounds",
+    soundsNote: "Subtle audio cues for wake, sleep, and tasks.",
+    permsTitle: "Permissions & Devices",
+    permsHint: "Required for voice conversation and optional camera gestures.",
+    mic: "Microphone",
+    camera: "Camera (Gestures)",
+    gestureCam: "Gesture Camera Device",
+    grantCamFirst: "Grant Camera permission above to choose a device.",
+    sysDefault: "System Default",
+    wakeWord: "Wake Word — “Hey Iris”",
+    wakeWordNote: "Listens locally on-device for “Hey Iris” (same as pressing W).",
+    reviewGate: "Review Gate (Prompt Approval)",
+    reviewGateNote: "Review and approve Claude prompts before sending.",
+    notesSkills: "Personal Notes / Second Brain",
+    notesInstalling: "Installing…",
+    notesInstalled: "Installed",
+    notesInstallMissing: "Install missing",
+    notesMissing: "Missing: ",
+    notesSkillsNote: "Installs wiki-* skills for note retrieval in ~/iris-second-brain.",
+    advancedTitle: "Advanced & Testing",
+    advancedHint: "Demo data lets you explore Iris without real Claude work.",
+    demoData: "Load Demo / Test Data",
+    demoDataNote: "Fills Work Stream with sample task cards.",
+    savedTo: "Saved to",
+    runWizard: "Run setup wizard",
+    cancel: "Cancel",
+    save: "Save",
+    saveError: "Could not save configuration: ",
+    close: "Close",
+    granted: "Granted",
+    required: "required",
+    optional: "optional",
+    allow: "Allow",
+    retry: "Retry",
+  },
+  vi: {
+    settings: "Cài Đặt",
+    tabAi: "AI & Khoá API",
+    tabVoice: "Giọng Nói & Ngôn Ngữ",
+    tabSystem: "Hệ Thống & Điều Khiển",
+    language: "Ngôn Ngữ Giao Diện",
+    langEn: "Tiếng Anh (Mặc định)",
+    langVi: "Tiếng Việt",
+    geminiTitle: "Khoá Gemini API",
+    geminiHint: "Cung cấp giọng nói thời gian thực. Lấy miễn phí tại Google AI Studio.",
+    apiKey: "Khoá Gemini API",
+    apiKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
+    apiKeyPlaceholder: "AI… dán khoá của bạn",
+    apiKeyNote: "Lấy khoá miễn phí tại Google AI Studio. Chỉ lưu trữ trên máy.",
+    visionKey: "Khoá Vision API (Tuỳ chọn)",
+    visionKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
+    visionKeyPlaceholder: "Dùng xử lý ảnh (tránh đụng quota)",
+    visionKeyNote: "Tách riêng quota xử lý ảnh. Nếu bỏ trống sẽ dùng chung khoá trên.",
+    testGemini: "Kiểm tra Gemini",
+    keyWorks: "Kết nối tốt",
+    claudeTitle: "Bộ Não Claude",
+    claudeHint: "Não xử lý tác vụ — luồng PO/DEV chạy qua Claude Code CLI.",
+    claudeBrain: "Chế Độ Claude Brain",
+    claudeBrainNote: "Khi tắt, Gemini sẽ xử lý cục bộ không cần Claude.",
+    anthropicKey: "Khoá Anthropic API (Tuỳ chọn)",
+    anthropicKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
+    anthropicKeyPlaceholder: "Dùng cho Computer Use & OmniParser",
+    anthropicKeyNote: "Dùng để cấp quyền cho Claude điều khiển máy tính.",
+    checkClaude: "Kiểm tra Claude",
+    ready: "Sẵn sàng",
+    on: "Bật",
+    off: "Tắt",
+    youTitle: "Giọng Nói & Cá Nhân Hóa",
+    youHint: "Tuỳ chỉnh cách Iris xưng hô và giọng đọc trả lời.",
+    displayName: "Tên hiển thị",
+    displayNamePlaceholder: "Tên của bạn (vd: Hùng, Alex)",
+    displayNameNote: "Tên Iris sẽ gọi bạn khi trò chuyện.",
+    voice: "Giọng nói",
+    voiceNote: "Chọn giọng đọc của Iris. Bấm Nghe thử để kiểm tra.",
+    preview: "Nghe thử",
+    previewDisabledTitle: "Cần lưu khoá Gemini trước",
+    model: "Mô hình Live",
+    modelNote: "Mô hình Gemini Live xử lý giọng nói thời gian thực.",
+    sounds: "Âm thanh giao diện",
+    soundsNote: "Âm thanh báo thức, ngủ và hoàn thành tác vụ.",
+    permsTitle: "Quyền Truy Cập & Thiết Bị",
+    permsHint: "Cần Micro để nói chuyện. Camera là tuỳ chọn cho cử chỉ tay.",
+    mic: "Microphone",
+    camera: "Camera (Cử chỉ tay)",
+    gestureCam: "Thiết Bị Camera Cử Chỉ",
+    grantCamFirst: "Cần cấp quyền Camera ở trên để chọn thiết bị.",
+    sysDefault: "Mặc định hệ thống",
+    wakeWord: "Đánh thức bằng giọng nói — “Hey Iris”",
+    wakeWordNote: "Nhận diện “Hey Iris” trên máy (tương đương nhấn phím W).",
+    reviewGate: "Duyệt lệnh trước khi gửi (Review Gate)",
+    reviewGateNote: "Xem và duyệt lệnh trước khi gửi cho Claude để tiết kiệm token.",
+    notesSkills: "Ghi chú cá nhân / Second Brain",
+    notesInstalling: "Đang cài…",
+    notesInstalled: "Đã cài đặt",
+    notesInstallMissing: "Cài đặt còn thiếu",
+    notesMissing: "Thiếu: ",
+    notesSkillsNote: "Cài kỹ năng wiki-* để lưu và tra cứu ghi chú (~/iris-second-brain).",
+    advancedTitle: "Dữ Liệu Thử Nghiệm",
+    advancedHint: "Dữ liệu mẫu giúp khám phá Iris mà không tốn token thật.",
+    demoData: "Nạp dữ liệu mẫu (Demo Data)",
+    demoDataNote: "Tạo các thẻ công việc mẫu để thử nghiệm giao diện.",
+    savedTo: "Lưu vào",
+    runWizard: "Chạy hướng dẫn cài đặt",
+    cancel: "Huỷ bỏ",
+    save: "Lưu cài đặt",
+    saveError: "Không lưu được cấu hình: ",
+    close: "Đóng",
+    granted: "Đã cấp quyền",
+    required: "bắt buộc",
+    optional: "tuỳ chọn",
+    allow: "Cho phép",
+    retry: "Thử lại",
+  },
+};
+
+function NotesSkillsField({ t }: { t: typeof I18N.en }) {
   const [status, setStatus] = useState<{ ok: boolean; missing: string[] } | null>(null);
   const [installing, setInstalling] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -73,18 +226,15 @@ function NotesSkillsField() {
   }
 
   return (
-    <label className="setup-field">
-      <span>Personal notes / second brain</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <label className="setup-field compact">
+      <span>{t.notesSkills}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button type="button" className="setup-btn" onClick={install} disabled={installing || Boolean(status?.ok)}>
-          {installing ? "Installing…" : status?.ok ? "Installed" : "Install missing"}
+          {installing ? t.notesInstalling : status?.ok ? t.notesInstalled : t.notesInstallMissing}
         </button>
-        {status && !status.ok ? <small className="setup-note">Missing: {status.missing.join(", ")}</small> : null}
+        {status && !status.ok ? <small className="setup-note">{t.notesMissing}{status.missing.join(", ")}</small> : null}
       </div>
-      <small className="setup-note">
-        Installs the wiki-* skills Claude needs to capture and retrieve notes in your personal knowledge vault
-        (~/iris-second-brain). One-time setup; safe to run again.
-      </small>
+      <small className="setup-note">{t.notesSkillsNote}</small>
       {result ? <small className="setup-note">{result}</small> : null}
     </label>
   );
@@ -113,8 +263,26 @@ export default function SetupPanel({
   onStart?: () => void;
   onRunWizard?: () => void;
 }) {
+  const [lang, setLang] = useState<Lang>(() => {
+    try {
+      return (window.localStorage.getItem("iris.language") as Lang) || "en";
+    } catch {
+      return "en";
+    }
+  });
+  const [activeTab, setActiveTab] = useState<"ai" | "voice" | "system">("ai");
+
+  const handleSetLang = (newLang: Lang) => {
+    setLang(newLang);
+    try {
+      window.localStorage.setItem("iris.language", newLang);
+    } catch {}
+  };
+
+  const t = I18N[lang];
+
   const [draft, setDraft] = useState<Draft>({
-    GEMINI_API_KEY: "", // S-10: khoá đã lưu không bao giờ được gửi lại cho renderer; chỉ nhập khi muốn thay
+    GEMINI_API_KEY: "",
     GEMINI_VISION_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     GEMINI_LIVE_MODEL: config.geminiModel,
@@ -136,8 +304,6 @@ export default function SetupPanel({
 
   const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
-  // Reflect the OS/browser's actual permission state so previously-granted mic or
-  // camera shows as "Granted" instead of asking again every time Settings opens.
   useEffect(() => {
     if (!navigator.permissions?.query) return;
     let cancelled = false;
@@ -150,9 +316,7 @@ export default function SetupPanel({
         if (cancelled) return;
         setter(toState(status.state));
         status.onchange = () => setter(toState(status.state));
-      } catch {
-        // Some platforms don't support querying these names; leave as idle.
-      }
+      } catch {}
     };
 
     watch("microphone", setMic);
@@ -162,10 +326,6 @@ export default function SetupPanel({
     };
   }, []);
 
-  // Device labels only come through once camera permission is granted, so the
-  // picker stays empty/hidden until then. While granted, keep the list live so
-  // a device that appears or disappears at runtime (e.g. starting OBS Virtual
-  // Camera) shows up without reopening Settings.
   useEffect(() => {
     if (cam !== "granted") {
       setCamDevices([]);
@@ -176,9 +336,7 @@ export default function SetupPanel({
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         if (!cancelled) setCamDevices(devices.filter((device) => device.kind === "videoinput"));
-      } catch {
-        // Leave the list as-is; enumeration can fail transiently.
-      }
+      } catch {}
     };
     refresh();
     navigator.mediaDevices.addEventListener?.("devicechange", refresh);
@@ -188,8 +346,6 @@ export default function SetupPanel({
     };
   }, [cam]);
 
-  // Run the Claude CLI + subscription-billing check once when the panel opens
-  // so Settings mode shows current status without an extra click.
   useEffect(() => {
     checkClaude();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,7 +354,7 @@ export default function SetupPanel({
   async function testGemini() {
     setGemini({ status: "testing" });
     const result = await window.iris.testGemini(draft.GEMINI_API_KEY.trim());
-    setGemini(result.ok ? { status: "ok", message: "Key works (Live kết nối được)." } : { status: "error", message: result.error });
+    setGemini(result.ok ? { status: "ok", message: t.keyWorks } : { status: "error", message: result.error });
   }
 
   async function checkClaude() {
@@ -208,7 +364,7 @@ export default function SetupPanel({
       ? "Subscription token found — PO bills against your Claude subscription."
       : health.billingError || "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.";
     if (health.reachable) {
-      setClaude({ status: "ok", message: health.version ? `Ready · ${health.version}` : "Ready", billing });
+      setClaude({ status: "ok", message: health.version ? `${t.ready} · ${health.version}` : t.ready, billing });
     } else {
       setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
     }
@@ -247,7 +403,7 @@ export default function SetupPanel({
     setSaving(true);
     const updated = await window.iris.saveConfig({ ...draft });
     setSaving(false);
-    if (updated.saveError) window.alert(`Không lưu được cấu hình: ${updated.saveError}`);
+    if (updated.saveError) window.alert(`${t.saveError}${updated.saveError}`);
     onSaved(updated);
     return updated;
   }
@@ -260,197 +416,177 @@ export default function SetupPanel({
 
   const keyReady = draft.GEMINI_API_KEY.trim().length > 0 || config.geminiApiKeySet;
 
-  // ---- Section renderers (shared between wizard steps and settings) ----
+  // ---- Section renderers ----
   const geminiSection = (
-    <Section title="Gemini API key" hint="Powers Iris's realtime voice. Get one free at Google AI Studio.">
-      <label className="setup-field">
-        <span>API key</span>
-        <input
-          type="password"
-          value={draft.GEMINI_API_KEY}
-          placeholder={config.geminiApiKeySet ? `•••• ${config.geminiApiKeyHint} — đã lưu (nhập khoá mới để thay)` : "AI… paste your key"}
-          onChange={(event) => {
-            set("GEMINI_API_KEY", event.target.value);
-            setGemini({ status: "idle" });
-          }}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Get a free key from{" "}
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-            Google AI Studio
-          </a>
-          , then paste the whole thing. Stored locally only.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>Vision API key (Tuỳ chọn)</span>
-        <input
-          type="password"
-          value={draft.GEMINI_VISION_API_KEY}
-          placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — đã lưu (nhập khoá mới để thay)` : "Dùng xử lý ảnh (tránh đụng quota)"}
-          onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Khoá thứ 2 để tách riêng xử lý ảnh. Nếu bỏ trống, Iris sẽ dùng chung khoá Live ở trên.
-        </small>
-      </label>
-      <div className="setup-actions">
+    <Section title={t.geminiTitle} hint={t.geminiHint} compact>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.apiKey}</span>
+          <input
+            type="password"
+            value={draft.GEMINI_API_KEY}
+            placeholder={config.geminiApiKeySet ? `•••• ${config.geminiApiKeyHint} — ${t.apiKeySaved}` : t.apiKeyPlaceholder}
+            onChange={(event) => {
+              set("GEMINI_API_KEY", event.target.value);
+              setGemini({ status: "idle" });
+            }}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <small className="setup-note">
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              Google AI Studio
+            </a>
+            . {t.apiKeyNote}
+          </small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.visionKey}</span>
+          <input
+            type="password"
+            value={draft.GEMINI_VISION_API_KEY}
+            placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — ${t.visionKeySaved}` : t.visionKeyPlaceholder}
+            onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <small className="setup-note">{t.visionKeyNote}</small>
+        </label>
+      </div>
+      <div className="setup-actions compact">
         <button className="setup-btn" onClick={testGemini} disabled={!keyReady || gemini.status === "testing"}>
-          {gemini.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
-          Test Gemini
+          {gemini.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
+          {t.testGemini}
         </button>
-        <TestBadge state={gemini} okLabel="Key works" />
+        <TestBadge state={gemini} okLabel={t.keyWorks} />
       </div>
     </Section>
   );
 
   const claudeSection = (
-    <Section title="Claude" hint="Claude is Iris's worker brain — the PO/DEV pipeline runs on the Claude Code CLI.">
-      <label className="setup-field">
-        <span>Claude Brain</span>
-        <ThemedSelect
-          ariaLabel="Claude Brain"
-          value={draft.IRIS_CLAUDE_ENABLED}
-          options={[
-            { value: "true", label: "On" },
-            { value: "false", label: "Off" },
-          ]}
-          onChange={(value) => set("IRIS_CLAUDE_ENABLED", value)}
-        />
-        <small className="setup-note">
-          When off, Gemini handles everything locally without needing a Claude API key. If a task requires Claude, Iris will apologize and remind you to enable it here.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>Anthropic API key</span>
-        <input
-          type="password"
-          value={draft.ANTHROPIC_API_KEY}
-          placeholder={config.anthropicApiKeySet ? `•••• ${config.anthropicApiKeyHint} — đã lưu (nhập khoá mới để thay)` : "Dùng cho Computer Use và OmniParser"}
-          onChange={(event) => set("ANTHROPIC_API_KEY", event.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Dùng để cấp quyền cho Claude điều khiển máy tính. (PO/STUDY agent vẫn dùng token từ claude setup-token).
-        </small>
-      </label>
-      <div className="setup-actions">
-        <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
-          {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
-          Check Claude
-        </button>
-        <TestBadge state={claude} okLabel="Ready" />
+    <Section title={t.claudeTitle} hint={t.claudeHint} compact>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.claudeBrain}</span>
+          <ThemedSelect
+            ariaLabel={t.claudeBrain}
+            value={draft.IRIS_CLAUDE_ENABLED}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_CLAUDE_ENABLED", value)}
+          />
+          <small className="setup-note">{t.claudeBrainNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.anthropicKey}</span>
+          <input
+            type="password"
+            value={draft.ANTHROPIC_API_KEY}
+            placeholder={config.anthropicApiKeySet ? `•••• ${config.anthropicApiKeyHint} — ${t.anthropicKeySaved}` : t.anthropicKeyPlaceholder}
+            onChange={(event) => set("ANTHROPIC_API_KEY", event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <small className="setup-note">{t.anthropicKeyNote}</small>
+        </label>
       </div>
-      {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
+      <div className="setup-actions compact">
+        <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
+          {claude.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
+          {t.checkClaude}
+        </button>
+        <TestBadge state={claude} okLabel={t.ready} />
+      </div>
+      {claude.billing ? <p className="setup-note" style={{ margin: "2px 0 6px" }}>{claude.billing}</p> : null}
     </Section>
   );
 
   const youSection = (
-    <Section title="You & voice" hint="How Iris addresses you and which voice it speaks with.">
-      <label className="setup-field">
-        <span>Display name</span>
-        <input
-          value={draft.IRIS_USER_NAME}
-          placeholder="Your name"
-          onChange={(event) => set("IRIS_USER_NAME", event.target.value)}
-          spellCheck={false}
-        />
-        <small className="setup-note">What Iris calls you out loud, e.g. “Alex”.</small>
-      </label>
-      <label className="setup-field">
-        <span>Voice</span>
-        <div className="setup-inline">
+    <Section title={t.youTitle} hint={t.youHint} compact>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.displayName}</span>
+          <input
+            value={draft.IRIS_USER_NAME}
+            placeholder={t.displayNamePlaceholder}
+            onChange={(event) => set("IRIS_USER_NAME", event.target.value)}
+            spellCheck={false}
+          />
+          <small className="setup-note">{t.displayNameNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.sounds}</span>
           <ThemedSelect
-            ariaLabel="Voice"
-            value={draft.GEMINI_LIVE_VOICE}
-            options={config.voices.map((voice) => ({ value: voice, label: voice }))}
+            ariaLabel={t.sounds}
+            value={soundsEnabled ? "true" : "false"}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
             onChange={(value) => {
-              set("GEMINI_LIVE_VOICE", value);
-              setPreview({ status: "idle" });
+              if ((value === "true") !== soundsEnabled) onToggleSounds();
             }}
           />
-          <button
-            className="setup-btn ghost"
-            onClick={doPreview}
-            disabled={!keyReady || preview.status === "testing"}
-            title={keyReady ? "Preview this voice" : "Add your Gemini key first"}
-          >
-            {preview.status === "testing" ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
-            Preview
-          </button>
-        </div>
-        <small className="setup-note">Iris's speaking voice. Tap Preview to hear a sample (needs a saved Gemini key).</small>
-      </label>
+          <small className="setup-note">{t.soundsNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.voice}</span>
+          <div className="setup-inline">
+            <ThemedSelect
+              ariaLabel={t.voice}
+              value={draft.GEMINI_LIVE_VOICE}
+              options={config.voices.map((voice) => ({ value: voice, label: voice }))}
+              onChange={(value) => {
+                set("GEMINI_LIVE_VOICE", value);
+                setPreview({ status: "idle" });
+              }}
+            />
+            <button
+              className="setup-btn ghost"
+              onClick={doPreview}
+              disabled={!keyReady || preview.status === "testing"}
+              title={keyReady ? t.preview : t.previewDisabledTitle}
+            >
+              {preview.status === "testing" ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
+              {t.preview}
+            </button>
+          </div>
+          <small className="setup-note">{t.voiceNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.model}</span>
+          <ThemedSelect
+            ariaLabel={t.model}
+            value={draft.GEMINI_LIVE_MODEL}
+            options={config.models.map((model) => ({ value: model, label: model.replace(/^models\//, "") }))}
+            onChange={(value) => set("GEMINI_LIVE_MODEL", value)}
+          />
+          <small className="setup-note">{t.modelNote}</small>
+        </label>
+      </div>
       {preview.status === "error" ? <p className="setup-error">{preview.message}</p> : null}
-      <label className="setup-field">
-        <span>Model</span>
-        <ThemedSelect
-          ariaLabel="Model"
-          value={draft.GEMINI_LIVE_MODEL}
-          options={config.models.map((model) => ({ value: model, label: model.replace(/^models\//, "") }))}
-          onChange={(value) => set("GEMINI_LIVE_MODEL", value)}
-        />
-        <small className="setup-note">Gemini Live model that powers realtime voice. Keep the default unless you have a reason to change it.</small>
-      </label>
-      <label className="setup-field">
-        <span>Wake word — “Hey Iris”</span>
-        <ThemedSelect
-          ariaLabel="Wake word"
-          value={draft.IRIS_WAKE_WORD}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_WAKE_WORD", value)}
-        />
-        <small className="setup-note">
-          When on, Iris listens locally for “Hey Iris” and wakes hands-free (same as pressing W). Runs fully on-device —
-          no audio leaves your machine. Needs microphone permission.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>Review before sending — “review gate”</span>
-        <ThemedSelect
-          ariaLabel="Review gate"
-          value={draft.IRIS_PROMPT_REVIEW_MODE}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_PROMPT_REVIEW_MODE", value)}
-        />
-        <small className="setup-note">
-          When on, every brief Claude would receive is parked for your Approve/Edit/Cancel first — nothing is sent, and
-          zero tokens are spent, until you approve it.
-        </small>
-      </label>
-      <NotesSkillsField />
-      <label className="setup-field">
-        <span>Interface sounds</span>
-        <ThemedSelect
-          ariaLabel="Interface sounds"
-          value={soundsEnabled ? "true" : "false"}
-          options={[
-            { value: "true", label: "On" },
-            { value: "false", label: "Off" },
-          ]}
-          onChange={(value) => {
-            if ((value === "true") !== soundsEnabled) onToggleSounds();
-          }}
-        />
-        <small className="setup-note">
-          Subtle audio cues for wake, sleep, task sent, and task done. Synthesized locally — quiet by design.
-        </small>
-      </label>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
+        <label className="setup-field compact">
+          <span>{t.language}</span>
+          <ThemedSelect
+            ariaLabel={t.language}
+            value={lang}
+            options={[
+              { value: "en", label: "English (Default)" },
+              { value: "vi", label: "Tiếng Việt" },
+            ]}
+            onChange={(value) => handleSetLang(value as Lang)}
+          />
+        </label>
+      </div>
     </Section>
   );
 
-  const cameraOptions: Option[] = [{ value: SYSTEM_DEFAULT_CAMERA, label: "System Default" }].concat(
+  const cameraOptions: Option[] = [{ value: SYSTEM_DEFAULT_CAMERA, label: t.sysDefault }].concat(
     camDevices.map((device, index) => ({
       value: device.deviceId,
       label: device.label || `Camera ${index + 1}`,
@@ -459,80 +595,161 @@ export default function SetupPanel({
   const cameraSelectionMissing =
     cameraDeviceId !== SYSTEM_DEFAULT_CAMERA && !camDevices.some((device) => device.deviceId === cameraDeviceId);
   if (cameraSelectionMissing) {
-    cameraOptions.push({ value: cameraDeviceId, label: "Previously selected camera (unavailable)" });
+    cameraOptions.push({ value: cameraDeviceId, label: "Unavailable Camera" });
   }
 
   const permissionsSection = (
-    <Section title="Permissions" hint="Iris needs your mic to hear you. Camera is optional (hand gestures).">
+    <Section title={t.permsTitle} hint={t.permsHint} compact>
       <div className="setup-perms">
-        <PermRow icon={<Mic size={16} />} label="Microphone" required state={mic} onRequest={requestMic} />
-        <PermRow icon={<Camera size={16} />} label="Camera (gestures)" state={cam} onRequest={requestCam} />
+        <PermRow icon={<Mic size={15} />} label={t.mic} required state={mic} onRequest={requestMic} t={t} />
+        <PermRow icon={<Camera size={15} />} label={t.camera} state={cam} onRequest={requestCam} t={t} />
       </div>
-      <label className="setup-field">
-        <span>Gesture camera</span>
+      <label className="setup-field compact" style={{ marginTop: 8 }}>
+        <span>{t.gestureCam}</span>
         {cam === "granted" ? (
           <ThemedSelect
-            ariaLabel="Gesture camera"
+            ariaLabel={t.gestureCam}
             value={cameraDeviceId}
             options={cameraOptions}
             onChange={onChangeCameraDevice}
           />
         ) : (
-          <p className="setup-note">Grant Camera permission above to choose a specific device.</p>
+          <p className="setup-note">{t.grantCamFirst}</p>
         )}
-        <small className="setup-note">
-          Which camera gesture control reads from — pick a specific device (e.g. OBS Virtual Camera) instead of the
-          system default. Applies immediately, including while gesture control is running.
-        </small>
       </label>
     </Section>
   );
 
   const advancedSection = (
-    <Section title="Advanced" hint="Demo data lets you explore Iris without dispatching real Claude work.">
-      <label className="setup-field">
-        <span>Load demo / test data</span>
-        <ThemedSelect
-          ariaLabel="Load demo data"
-          value={draft.IRIS_LOAD_TEST_DATA}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_LOAD_TEST_DATA", value)}
-        />
-        <small className="setup-note">Fills the Work Stream with sample task cards for exploring the UI. Turn off for normal use.</small>
-      </label>
+    <Section title={t.advancedTitle} hint={t.advancedHint} compact>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.wakeWord}</span>
+          <ThemedSelect
+            ariaLabel={t.wakeWord}
+            value={draft.IRIS_WAKE_WORD}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_WAKE_WORD", value)}
+          />
+          <small className="setup-note">{t.wakeWordNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.reviewGate}</span>
+          <ThemedSelect
+            ariaLabel={t.reviewGate}
+            value={draft.IRIS_PROMPT_REVIEW_MODE}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_PROMPT_REVIEW_MODE", value)}
+          />
+          <small className="setup-note">{t.reviewGateNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
+        <NotesSkillsField t={t} />
+        <label className="setup-field compact">
+          <span>{t.demoData}</span>
+          <ThemedSelect
+            ariaLabel={t.demoData}
+            value={draft.IRIS_LOAD_TEST_DATA}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_LOAD_TEST_DATA", value)}
+          />
+          <small className="setup-note">{t.demoDataNote}</small>
+        </label>
+      </div>
     </Section>
   );
 
-  // ---- Settings mode: everything in one scroll ----
+  // ---- Settings mode: organized in tabs with compact grid ----
   if (mode === "settings") {
     return (
       <div className="setup-backdrop" onPointerDown={(event) => event.target === event.currentTarget && onClose()}>
         <div className="setup-card settings">
           <header className="setup-head">
-            <span>Settings</span>
-            <button className="reader-close" onClick={onClose} title="Close">
+            <div className="setup-head-left">
+              <span>{t.settings}</span>
+              <div className="setup-lang-switch">
+                <button
+                  type="button"
+                  className={`lang-btn ${lang === "en" ? "active" : ""}`}
+                  onClick={() => handleSetLang("en")}
+                  title="English (Default)"
+                >
+                  EN
+                </button>
+                <button
+                  type="button"
+                  className={`lang-btn ${lang === "vi" ? "active" : ""}`}
+                  onClick={() => handleSetLang("vi")}
+                  title="Tiếng Việt"
+                >
+                  VI
+                </button>
+              </div>
+            </div>
+            <button className="reader-close" onClick={onClose} title={t.close}>
               <X size={16} />
             </button>
           </header>
+
+          <nav className="setup-tabs">
+            <button
+              type="button"
+              className={`setup-tab-btn ${activeTab === "ai" ? "active" : ""}`}
+              onClick={() => setActiveTab("ai")}
+            >
+              {t.tabAi}
+            </button>
+            <button
+              type="button"
+              className={`setup-tab-btn ${activeTab === "voice" ? "active" : ""}`}
+              onClick={() => setActiveTab("voice")}
+            >
+              {t.tabVoice}
+            </button>
+            <button
+              type="button"
+              className={`setup-tab-btn ${activeTab === "system" ? "active" : ""}`}
+              onClick={() => setActiveTab("system")}
+            >
+              {t.tabSystem}
+            </button>
+          </nav>
+
           <div className="setup-scroll">
-            {geminiSection}
-            {claudeSection}
-            {youSection}
-            {permissionsSection}
-            {advancedSection}
-            <p className="setup-path">Saved to {config.configPath}</p>
+            {activeTab === "ai" && (
+              <>
+                {geminiSection}
+                {claudeSection}
+              </>
+            )}
+            {activeTab === "voice" && youSection}
+            {activeTab === "system" && (
+              <>
+                {permissionsSection}
+                {advancedSection}
+              </>
+            )}
+            <p className="setup-path">{t.savedTo} {config.configPath}</p>
           </div>
+
           <footer className="setup-foot">
             <button className="setup-btn ghost" onClick={() => onRunWizard?.()}>
               <Wand2 size={14} />
-              Run setup wizard
+              {t.runWizard}
             </button>
             <div className="setup-foot-right">
               <button className="setup-btn ghost" onClick={onClose}>
-                Cancel
+                {t.cancel}
               </button>
               <button
                 className="setup-btn primary"
@@ -543,7 +760,7 @@ export default function SetupPanel({
                 disabled={saving}
               >
                 {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-                Save
+                {t.save}
               </button>
             </div>
           </footer>
@@ -558,10 +775,11 @@ export default function SetupPanel({
   if (current === "welcome") {
     body = (
       <div className="setup-welcome">
-        <h2>Welcome to Iris</h2>
+        <h2>{lang === "vi" ? "Chào mừng đến với Iris" : "Welcome to Iris"}</h2>
         <p>
-          Iris is a hands-free voice command layer. Gemini Live handles the conversation and delegates real
-          work to Claude's PO/DEV pipeline. Let's get you set up in under a minute.
+          {lang === "vi"
+            ? "Iris là trợ lý điều khiển bằng giọng nói rảnh tay. Gemini Live xử lý hội thoại và điều phối tác vụ thực tế cho Claude. Hãy thiết lập trong vòng chưa đầy 1 phút."
+            : "Iris is a hands-free voice command layer. Gemini Live handles the conversation and delegates real work to Claude's PO/DEV pipeline. Let's get you set up in under a minute."}
         </p>
       </div>
     );
@@ -576,8 +794,12 @@ export default function SetupPanel({
   } else {
     body = (
       <div className="setup-welcome">
-        <h2>You're all set</h2>
-        <p>Iris will save your settings and wake up. Press W any time to wake, S to sleep.</p>
+        <h2>{lang === "vi" ? "Đã sẵn sàng" : "You're all set"}</h2>
+        <p>
+          {lang === "vi"
+            ? "Iris sẽ lưu cài đặt và khởi động. Nhấn phím W bất cứ lúc nào để đánh thức, phím S để ngủ."
+            : "Iris will save your settings and wake up. Press W any time to wake, S to sleep."}
+        </p>
         <ul className="setup-summary">
           <li>
             Gemini key {gemini.status === "ok" ? <Check size={13} className="ok" /> : keyReady ? "added" : "missing"}
@@ -604,7 +826,7 @@ export default function SetupPanel({
               <i key={name} className={index <= step ? "on" : ""} />
             ))}
           </div>
-          <button className="reader-close" onClick={onClose} title="Close (configure later)">
+          <button className="reader-close" onClick={onClose} title={t.close}>
             <X size={16} />
           </button>
         </header>
@@ -612,12 +834,12 @@ export default function SetupPanel({
         <footer className="setup-foot">
           <button className="setup-btn ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={isFirst}>
             <ChevronLeft size={14} />
-            Back
+            {lang === "vi" ? "Quay lại" : "Back"}
           </button>
           {isLast ? (
             <button className="setup-btn primary" onClick={finishWizard} disabled={saving || !keyReady}>
               {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-              Save &amp; Start Iris
+              {lang === "vi" ? "Lưu & Khởi Động Iris" : "Save & Start Iris"}
             </button>
           ) : (
             <button
@@ -625,7 +847,7 @@ export default function SetupPanel({
               onClick={() => setStep((s) => Math.min(WIZARD_STEPS.length - 1, s + 1))}
               disabled={!canNext}
             >
-              {isFirst ? "Get started" : "Next"}
+              {isFirst ? (lang === "vi" ? "Bắt đầu" : "Get started") : (lang === "vi" ? "Tiếp theo" : "Next")}
               <ChevronRight size={14} />
             </button>
           )}
@@ -637,9 +859,6 @@ export default function SetupPanel({
 
 type Option = { value: string; label: string };
 
-// Fully themed dropdown (native <select> popups can't be styled to match on macOS).
-// The menu is position:fixed off the trigger rect so the panel's scroll/overflow
-// never clips it.
 function ThemedSelect({
   value,
   options,
@@ -667,7 +886,6 @@ function ThemedSelect({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
-    // Close when the page/panel scrolls, but NOT when scrolling inside the menu.
     const onScroll = (event: Event) => {
       const target = event.target as HTMLElement | null;
       if (target && typeof target.closest === "function" && target.closest(".ts-menu")) return;
@@ -746,9 +964,19 @@ function ThemedSelect({
   );
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+function Section({
+  title,
+  hint,
+  children,
+  compact,
+}: {
+  title: string;
+  hint?: string;
+  children: ReactNode;
+  compact?: boolean;
+}) {
   return (
-    <section className="setup-section">
+    <section className={`setup-section ${compact ? "compact" : ""}`}>
       <h3>{title}</h3>
       {hint ? <p className="setup-hint">{hint}</p> : null}
       {children}
@@ -782,28 +1010,30 @@ function PermRow({
   required,
   state,
   onRequest,
+  t,
 }: {
   icon: ReactNode;
   label: string;
   required?: boolean;
   state: PermState;
   onRequest: () => void;
+  t?: typeof I18N.en;
 }) {
   return (
     <div className={`setup-perm ${state}`}>
       <span className="perm-icon">{icon}</span>
       <span className="perm-label">
         {label}
-        {required ? <em>required</em> : <em>optional</em>}
+        {required ? <em>{t ? t.required : "required"}</em> : <em>{t ? t.optional : "optional"}</em>}
       </span>
       {state === "granted" ? (
         <span className="setup-result ok">
           <Check size={13} />
-          Granted
+          {t ? t.granted : "Granted"}
         </span>
       ) : (
         <button className="setup-btn ghost" onClick={onRequest}>
-          {state === "denied" ? "Retry" : "Allow"}
+          {state === "denied" ? (t ? t.retry : "Retry") : (t ? t.allow : "Allow")}
         </button>
       )}
     </div>

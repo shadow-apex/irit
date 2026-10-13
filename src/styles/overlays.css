@@ -454,6 +454,136 @@
   animation: overlay-pop 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.setup-card.settings {
+  width: min(680px, 94vw);
+  max-height: 84vh;
+}
+
+.setup-card.settings .setup-scroll {
+  padding: 14px 18px;
+  gap: 12px;
+}
+
+.setup-head-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.setup-lang-switch {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.lang-btn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lang-btn:hover {
+  color: var(--text);
+}
+
+.lang-btn.active {
+  color: #030810;
+  background: var(--cyan);
+  box-shadow: 0 0 8px rgba(var(--cyan-rgb), 0.4);
+}
+
+.setup-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 18px 0;
+  border-bottom: 1px solid var(--hairline);
+  background: rgba(3, 8, 16, 0.4);
+}
+
+.setup-tab-btn {
+  padding: 8px 14px;
+  border-radius: 8px 8px 0 0;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.setup-tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.setup-tab-btn.active {
+  color: var(--cyan-bright);
+  background: rgba(34, 211, 238, 0.07);
+  border-color: rgba(var(--cyan-rgb), 0.25);
+  border-bottom: 2px solid var(--cyan);
+}
+
+.setup-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 580px) {
+  .setup-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+.setup-field.compact {
+  margin-bottom: 8px;
+  gap: 4px;
+}
+
+.setup-field.compact input,
+.setup-field.compact .ts-trigger {
+  padding: 8px 11px;
+  font-size: 12.5px;
+}
+
+.setup-field.compact .setup-note {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.setup-section.compact h3 {
+  font-size: 13.5px;
+  margin-bottom: 2px;
+}
+
+.setup-section.compact .setup-hint {
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.setup-actions.compact {
+  margin: 2px 0 8px;
+  gap: 8px;
+}
+
 .setup-head {
   display: flex;
   align-items: center;

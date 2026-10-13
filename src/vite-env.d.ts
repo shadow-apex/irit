@@ -338,7 +338,11 @@ type IrisApi = {
     params?: Record<string, unknown>;
   }) => Promise<{ status: string; message?: string; error?: string }>;
   openApp?: (target: string) => Promise<{ success: boolean; error?: string }>;
-  getDesktopApps?: () => Promise<Array<{ name: string; target: string }>>;
+  closeApp?: (target: string) => Promise<{ success: boolean; error?: string }>;
+  getDesktopApps?: () => Promise<Array<{ name: string; target: string; icon?: string | null }>>;
+  toggleFullscreen?: () => Promise<boolean>;
+  isFullscreen?: () => Promise<boolean>;
+  onFullscreenChange?: (callback: (payload: { fullscreen: boolean }) => void) => () => void;
 };
 interface Window {
   iris: IrisApi;
