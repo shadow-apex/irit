@@ -91,8 +91,6 @@ import {
   powerManagerTool,
   mediaControlTool,
   desktopManagerTool,
-  searchEverythingTool,
-  readNotificationsTool,
   sysMonitorTool,
   fileExplorerTool,
   irisShowcaseTool,

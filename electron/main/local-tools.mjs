@@ -509,13 +509,14 @@ export async function lockScreenTool() {
 // -----------------------------------------------------------------------
 // view_image — chỉ hiển thị cho NGƯỜI DÙNG (TL-11)
 // -----------------------------------------------------------------------
-export async function viewImageTool(args) {
-  if (!args || !args.action) return { status: "error", error: "Thiếu tham số 'action' (latest, prev, next, close)." };
-  if (!["latest", "prev", "next", "close"].includes(args.action)) {
-    return { status: "error", error: `Action '${args.action}' không hợp lệ. Dùng: latest, prev, next, close.` };
+export async function viewImageTool(args = {}) {
+  const act = typeof args === "string" ? args : args?.action;
+  if (!act) return { status: "error", error: "Thiếu tham số 'action' (latest, prev, next, close)." };
+  if (!["latest", "prev", "next", "close"].includes(act)) {
+    return { status: "error", error: `Action '${act}' không hợp lệ. Dùng: latest, prev, next, close.` };
   }
   const dir = join(userDataDir(), "screenshots");
-  return runJsonTool("image_viewer.py", [optArg("action", args.action), optArg("dir", dir)], { timeoutMs: 12000 }, "image_viewer.py thất bại.");
+  return runJsonTool("image_viewer.py", [optArg("action", act), optArg("dir", dir)], { timeoutMs: 12000 }, "image_viewer.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
@@ -536,18 +537,21 @@ export async function moveWindowPreciseTool(args = {}) {
 // power / media / desktop
 // -----------------------------------------------------------------------
 export async function powerManagerTool(action) {
-  if (!["sleep", "shutdown", "restart"].includes(action)) return { status: "error", error: "action phải là sleep, shutdown hoặc restart." };
-  return runJsonTool("power_manager.py", [action], { timeoutMs: 12000 }, "power_manager.py thất bại.");
+  const act = typeof action === "object" && action !== null ? action.action : action;
+  if (!["sleep", "shutdown", "restart"].includes(act)) return { status: "error", error: "action phải là sleep, shutdown hoặc restart." };
+  return runJsonTool("power_manager.py", [act], { timeoutMs: 12000 }, "power_manager.py thất bại.");
 }
 
 export async function mediaControlTool(action) {
-  if (!["playpause", "next", "prev"].includes(action)) return { status: "error", error: "action phải là playpause, next hoặc prev." };
-  return runJsonTool("media_control.py", [action], { timeoutMs: 8000 }, "media_control.py thất bại.");
+  const act = typeof action === "object" && action !== null ? action.action : action;
+  if (!["playpause", "next", "prev"].includes(act)) return { status: "error", error: "action phải là playpause, next hoặc prev." };
+  return runJsonTool("media_control.py", [act], { timeoutMs: 8000 }, "media_control.py thất bại.");
 }
 
 export async function desktopManagerTool(action) {
-  if (!["new", "close", "left", "right", "boss"].includes(action)) return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
-  return runJsonTool("desktop_manager.py", [action], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
+  const act = typeof action === "object" && action !== null ? action.action : action;
+  if (!["new", "close", "left", "right", "boss"].includes(act)) return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
+  return runJsonTool("desktop_manager.py", [act], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
@@ -603,7 +607,7 @@ export async function fileExplorerTool(args = {}) {
 // -----------------------------------------------------------------------
 // iris_showcase.py: trình diễn trực tiếp các khả năng của Iris
 // -----------------------------------------------------------------------
-export async function irisShowcaseTool() {
+export async function irisShowcaseTool(_args = {}) {
   const { enterHud } = await import("./window-manager.mjs");
   const { emitEvent } = await import("./events.mjs");
 
@@ -638,4 +642,3 @@ export async function irisShowcaseTool() {
 
   return res;
 }
-
