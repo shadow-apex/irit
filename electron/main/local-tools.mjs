@@ -52,7 +52,7 @@ export function pythonEnv(extra = {}) {
  * @param {{timeoutMs?:number, detach?:boolean, stdin?:string, onTimeout?:()=>Promise<void>|void}} [opts]
  * @returns {Promise<{ok:boolean,code?:number,stdout:string,stderr:string,error?:string,timedOut?:boolean,detached?:boolean}>}
  */
-export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false, stdin = undefined, onTimeout } = {}) {
+export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false, stdin = undefined, onTimeout, onLine = undefined } = {}) {
   if (process.platform !== "win32" && WINDOWS_ONLY_TOOLS.has(script)) {
     return Promise.resolve({
       ok: false, stdout: "", stderr: "",
@@ -80,6 +80,7 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = f
     let settled = false;
     let child;
     let truncated = false;
+    let lineBuf = "";
 
     const finish = (res) => {
       if (settled) return;
@@ -113,6 +114,18 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = f
         stdout += d.slice(0, Math.max(0, MAX_STDOUT_BYTES - stdout.length));
         try { killTree(child); } catch { /* bỏ qua */ }
       } else stdout += d;
+
+      if (typeof onLine === "function") {
+        lineBuf += d;
+        let idx;
+        while ((idx = lineBuf.indexOf("\n")) >= 0) {
+          const l = lineBuf.slice(0, idx).trim();
+          lineBuf = lineBuf.slice(idx + 1);
+          if (l) {
+            try { onLine(l); } catch { /* bỏ qua */ }
+          }
+        }
+      }
     });
     child.stderr.on("data", (d) => { if (stderr.length < 64_000) stderr += d; });
     child.stdin.on("error", () => {});
@@ -130,6 +143,9 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = f
       }),
     );
     child.on("close", (code) => {
+      if (typeof onLine === "function" && lineBuf.trim()) {
+        try { onLine(lineBuf.trim()); } catch { /* bỏ qua */ }
+      }
       let hint;
       if (code === 9009) hint = `"${py}" chỉ là alias Microsoft Store, Python chưa được cài thật. ${pyHint}`;
       else if (code !== 0) {
@@ -588,6 +604,50 @@ export async function fileExplorerTool(args = {}) {
 // iris_showcase.py: trình diễn trực tiếp các khả năng của Iris
 // -----------------------------------------------------------------------
 export async function irisShowcaseTool() {
-  return runJsonTool("iris_showcase.py", [], { timeoutMs: 40000 }, "iris_showcase.py thất bại.");
+  const { enterHud } = await import("./window-manager.mjs");
+  const { emitEvent, emitToRenderer } = await import("./events.mjs");
+
+  // Vào chế độ Glass HUD (Alt + Space) trước khi trình diễn
+  enterHud();
+  await new Promise((r) => setTimeout(r, 350));
+
+  emitEvent({ type: "audio_state", state: "speaking" });
+  emitEvent({ type: "transcript", speaker: "iris", text: "Xin chào! Sau đây là màn trình diễn trực tiếp khả năng điều khiển hệ thống của Iris." });
+  emitToRenderer("hud:message", {
+    title: "IRIS LIVE SHOWCASE",
+    content: "Đang mở Notepad và trực tiếp trình diễn các tính năng điều khiển hệ thống...",
+  });
+
+  const onLine = (line) => {
+    if (line.startsWith("IRIS_SHOWCASE_STEP:")) {
+      try {
+        const payload = JSON.parse(line.slice("IRIS_SHOWCASE_STEP:".length));
+        emitEvent({ type: "audio_state", state: "speaking" });
+        emitEvent({ type: "transcript", speaker: "iris", text: `[${payload.step}/6] ${payload.speech}` });
+        emitToRenderer("hud:message", {
+          title: `IRIS SHOWCASE [${payload.step}/6]`,
+          content: `${payload.title}: ${payload.speech}`,
+        });
+      } catch {
+        // bỏ qua nếu lỗi parse
+      }
+    }
+  };
+
+  const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 50000, onLine });
+  const res = buildToolResponse(run, "iris_showcase.py thất bại.");
+
+  emitEvent({ type: "audio_state", state: "idle" });
+  emitEvent({
+    type: "transcript",
+    speaker: "iris",
+    text: "Đã hoàn thành toàn bộ màn trình diễn trực tiếp!",
+  });
+  emitToRenderer("hud:message", {
+    title: "IRIS SHOWCASE HOÀN TẤT",
+    content: "Đã biểu diễn thành công 6 tính năng điều khiển trực tiếp trên máy tính!",
+  });
+
+  return res;
 }
 

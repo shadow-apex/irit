@@ -10,6 +10,7 @@ tools/iris_showcase.py — Trình diễn trực tiếp (Live Showcase) các kh�
 """
 import ctypes
 from ctypes import wintypes
+import json
 import math
 import os
 import subprocess
@@ -21,6 +22,12 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
 import _winutil  # noqa: E402
+
+def report_step(step_num, title, speech):
+    """Báo cáo bước ra stdout để quả cầu năng lượng Iris phát sáng và hiển thị."""
+    msg = json.dumps({"step": step_num, "title": title, "speech": speech}, ensure_ascii=False)
+    sys.stdout.write(f"IRIS_SHOWCASE_STEP:{msg}\n")
+    sys.stdout.flush()
 
 VK_VOLUME_DOWN, VK_VOLUME_UP = 0xAE, 0xAF
 KEYEVENTF_KEYUP = 2
@@ -128,6 +135,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 1. TĂNG ÂM LƯỢNG
     # -------------------------------------------------------------
+    report_step(1, "Tăng âm lượng", "Tôi có thể tăng âm lượng")
     content += "\n[1/6] ĐIỀU KHIỂN ÂM LƯỢNG: Tăng âm lượng hệ thống..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể tăng âm lượng")
@@ -140,6 +148,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 2. GIẢM ÂM LƯỢNG
     # -------------------------------------------------------------
+    report_step(2, "Giảm âm lượng", "Tôi có thể giảm âm lượng")
     content += "\n[2/6] ĐIỀU KHIỂN ÂM LƯỢNG: Giảm âm lượng hệ thống..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể giảm âm lượng")
@@ -152,6 +161,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 3. MỞ TAB MỚI
     # -------------------------------------------------------------
+    report_step(3, "Mở tab", "Tôi có thể mở tab mới")
     content += "\n[3/6] TRÌNH DUYỆT: Tự động mở một tab trình duyệt mới..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể mở tab mới")
@@ -165,6 +175,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 4. ĐÓNG TAB
     # -------------------------------------------------------------
+    report_step(4, "Đóng tab", "Tôi có thể đóng tab")
     content += "\n[4/6] TRÌNH DUYỆT: Tự động đóng tab trình duyệt..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể đóng tab")
@@ -175,6 +186,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 5. DI CHUYỂN CON TRỎ CHUỘT
     # -------------------------------------------------------------
+    report_step(5, "Di chuyển con trỏ", "Tôi có thể di chuyển con trỏ chuột")
     content += "\n[5/6] ĐIỀU KHIỂN CHUỘT: Tự động di chuyển con trỏ chuột trên màn hình..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể di chuyển con trỏ")
@@ -193,6 +205,7 @@ def run_showcase():
     # -------------------------------------------------------------
     # 6. DI CHUYỂN CỬA SỔ
     # -------------------------------------------------------------
+    report_step(6, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ")
     content += "\n[6/6] QUẢN LÝ CỬA SỔ: Di chuyển vị trí cửa sổ Notepad trên màn hình..."
     update_notepad(hedit, content)
     speak_phrase("Tôi có thể di chuyển cửa sổ")
