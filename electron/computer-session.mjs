@@ -181,6 +181,22 @@ export async function typeTextNative(text) {
   await keyboard.type(text);
 }
 
+/**
+ * Di chuyển chuột và click native tại toạ độ (x, y) trên màn hình để đặt con trỏ
+ * trước khi gõ chữ hoặc chỉnh sửa dòng.
+ */
+export async function clickMouseNative(x, y, button = "left") {
+  if (x === undefined || y === undefined || x === null || y === null) return;
+  await mouse.setPosition(new Point(Math.round(x), Math.round(y)));
+  if (button === "right") {
+    await mouse.rightClick();
+  } else if (button === "middle") {
+    await mouse.click(Button.MIDDLE);
+  } else {
+    await mouse.leftClick();
+  }
+}
+
 // ============================================================================
 // Tích hợp OmniParser (microsoft/OmniParser, bản thật đọc từ
 // reponew/toado/api_server.py) để tăng độ chính xác click chuột cho

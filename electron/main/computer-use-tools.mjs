@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import electron from "electron";
 const { shell } = electron;
-import { runComputerSession, pressKeyCombo, typeTextNative } from "../computer-session.mjs";
+import { runComputerSession, pressKeyCombo, typeTextNative, clickMouseNative } from "../computer-session.mjs";
 import * as browserAgent from "../browser-agent.mjs";
 import {
   submitAction,
@@ -243,15 +243,40 @@ export async function startOmniParserTask(args) {
   }
 }
 
-export async function startComputerUseType(args) {
-  const { text, key } = args || {};
-  if (!text && !key) {
-    return { status: "error", message: "Missing 'text' or 'key' to type." };
-  }
-  emitEvent({ type: "log", level: "info", message: `Typing - text: '${text || ""}', key: '${key || ""}'` });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // 1. Thử qua OmniParser nếu server OmniParser được cấu hình và đang hoạt động
-  if (process.env.OMNIPARSER_TYPE_URL || process.env.OMNIPARSER_ENABLED === "true") {
+export async function startComputerUseType(args) {
+  const {
+    text,
+    key,
+    action,
+    line_number,
+    line_offset,
+    char_offset,
+    repeat = 1,
+    click_x,
+    click_y,
+    button = "left",
+  } = args || {};
+
+  const hasPos = (typeof click_x === "number" && typeof click_y === "number") || typeof line_number === "number" || typeof line_offset === "number" || typeof char_offset === "number";
+  const hasAction = Boolean(action);
+  const hasKey = Boolean(key);
+  const hasText = Boolean(text);
+
+  if (!hasPos && !hasAction && !hasKey && !hasText) {
+    return { status: "error", message: "Thiếu nội dung, phím hoặc thao tác cần thực hiện." };
+  }
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `ComputerUseType - text: '${text || ""}', key: '${key || ""}', action: '${action || ""}', line_num: ${line_number ?? "none"}, line_off: ${line_offset ?? "none"}`,
+  });
+
+  // 1. Thử qua OmniParser nếu server OmniParser được cấu hình và đang hoạt động,
+  // nhưng CHỈ KHI là tác vụ text/key đơn giản (OmniParser API chỉ nhận {text, key}).
+  if (!hasPos && !hasAction && Number(repeat || 1) <= 1 && (process.env.OMNIPARSER_TYPE_URL || process.env.OMNIPARSER_ENABLED === "true")) {
     const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
     try {
       const controller = new AbortController();
@@ -273,16 +298,171 @@ export async function startComputerUseType(args) {
     }
   }
 
-  // 2. Nhập trực tiếp qua hệ thống (Nut.js + Clipboard) — hoạt động độc lập, không cần server
+  // 2. Thực hiện trực tiếp trên Windows bằng Nut.js keyboard & mouse
   try {
+    const countRepeat = Math.max(1, Math.min(Number(repeat) || 1, 100));
+
+    // Bước A: Click chuột để đặt con trỏ (nếu có click_x và click_y)
+    if (typeof click_x === "number" && typeof click_y === "number") {
+      await clickMouseNative(click_x, click_y, button);
+      await sleep(60);
+    }
+
+    // Bước B: Nhảy đến số dòng tuyệt đối (1-indexed: line_number 1 là dòng đầu)
+    if (typeof line_number === "number" && line_number >= 1) {
+      // Nhảy về đầu văn bản (Ctrl+Home)
+      await pressKeyCombo("ctrl+home");
+      await sleep(40);
+      const targetDown = Math.floor(line_number) - 1;
+      for (let i = 0; i < targetDown; i++) {
+        await pressKeyCombo("down");
+        await sleep(20);
+      }
+    }
+
+    // Bước C: Di chuyển dòng tương đối (line_offset: âm = lên, dương = xuống)
+    if (typeof line_offset === "number" && line_offset !== 0) {
+      const count = Math.min(Math.abs(Math.round(line_offset)), 200);
+      const keyName = line_offset < 0 ? "up" : "down";
+      for (let i = 0; i < count; i++) {
+        await pressKeyCombo(keyName);
+        await sleep(20);
+      }
+    }
+
+    // Bước D: Di chuyển ký tự tương đối (char_offset: âm = trái, dương = phải)
+    if (typeof char_offset === "number" && char_offset !== 0) {
+      const count = Math.min(Math.abs(Math.round(char_offset)), 500);
+      const keyName = char_offset < 0 ? "left" : "right";
+      for (let i = 0; i < count; i++) {
+        await pressKeyCombo(keyName);
+        await sleep(15);
+      }
+    }
+
+    // Bước E: Thực hiện action chỉnh sửa văn bản nâng cao
+    if (action) {
+      switch (action) {
+        case "delete_line": {
+          // Xóa hoàn toàn dòng hiện tại: End -> Shift+Home -> Backspace -> Delete
+          // Không đụng đến bất kỳ dòng nào khác trong văn bản
+          await pressKeyCombo("end");
+          await sleep(20);
+          await pressKeyCombo("shift+home");
+          await sleep(20);
+          await pressKeyCombo("backspace");
+          await sleep(20);
+          await pressKeyCombo("delete");
+          await sleep(20);
+          break;
+        }
+        case "clear_line": {
+          // Xóa trắng dòng hiện tại (giữ nguyên ngắt dòng), chuẩn bị ghi đè text mới nếu có
+          await pressKeyCombo("end");
+          await sleep(20);
+          await pressKeyCombo("shift+home");
+          await sleep(20);
+          await pressKeyCombo("backspace");
+          await sleep(20);
+          break;
+        }
+        case "delete_word": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("ctrl+backspace");
+            await sleep(20);
+          }
+          break;
+        }
+        case "delete_forward_word": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("ctrl+delete");
+            await sleep(20);
+          }
+          break;
+        }
+        case "delete_char": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("backspace");
+            await sleep(15);
+          }
+          break;
+        }
+        case "delete_forward_char": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("delete");
+            await sleep(15);
+          }
+          break;
+        }
+        case "select_line": {
+          await pressKeyCombo("end");
+          await sleep(20);
+          await pressKeyCombo("shift+home");
+          await sleep(20);
+          break;
+        }
+        case "select_all": {
+          await pressKeyCombo("ctrl+a");
+          await sleep(20);
+          break;
+        }
+        case "copy": {
+          await pressKeyCombo("ctrl+c");
+          await sleep(20);
+          break;
+        }
+        case "paste": {
+          await pressKeyCombo("ctrl+v");
+          await sleep(20);
+          break;
+        }
+        case "cut": {
+          await pressKeyCombo("ctrl+x");
+          await sleep(20);
+          break;
+        }
+        case "undo": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("ctrl+z");
+            await sleep(20);
+          }
+          break;
+        }
+        case "redo": {
+          for (let i = 0; i < countRepeat; i++) {
+            await pressKeyCombo("ctrl+y");
+            await sleep(20);
+          }
+          break;
+        }
+      }
+    }
+
+    // Bước F: Bấm phím đơn hoặc tổ hợp phím (nếu có)
+    if (key) {
+      for (let i = 0; i < countRepeat; i++) {
+        await pressKeyCombo(key);
+        if (i < countRepeat - 1) await sleep(20);
+      }
+    }
+
+    // Bước G: Gõ nội dung văn bản (nếu có)
     if (text) {
       await typeTextNative(text);
     }
-    if (key) {
-      await pressKeyCombo(key);
-    }
-    emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success via native keyboard` });
-    return { status: "success", message: `Đã nhập xong: ${text ? `"${text}"` : key}` };
+
+    emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success via native keyboard control` });
+
+    let summary = "Đã thực hiện xong thao tác bàn phím.";
+    if (action === "delete_line") summary = "Đã di chuyển con trỏ và xóa dòng thành công.";
+    else if (action === "clear_line" && text) summary = `Đã xóa dòng cũ và viết lại: "${text}".`;
+    else if (action === "clear_line") summary = "Đã xóa trắng dòng hiện tại.";
+    else if (action === "delete_word") summary = `Đã xóa ${countRepeat} từ.`;
+    else if (action === "delete_char") summary = `Đã xóa ${countRepeat} ký tự.`;
+    else if (text) summary = `Đã gõ xong: "${text}".`;
+    else if (key) summary = `Đã bấm phím: ${key}${countRepeat > 1 ? ` (${countRepeat} lần)` : ""}.`;
+
+    return { status: "success", message: summary };
   } catch (nativeErr) {
     emitEvent({ type: "log", level: "error", message: `[Keyboard Error] ${nativeErr.message}` });
     return { status: "error", message: `Không thể thực hiện thao tác bàn phím: ${nativeErr.message}` };

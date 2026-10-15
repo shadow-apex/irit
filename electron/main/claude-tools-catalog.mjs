@@ -62,7 +62,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "computer_use_type",
-          description: "Directly type text or press a key/hotkey using the keyboard into the currently focused application/window at the cursor position. ALWAYS invoke this when the user asks you to type, write, or enter text on the computer screen (in Vietnamese: 'gõ chữ ...', 'gõ ...', 'ghi ...', 'viết ...', 'nhập ...', 'nhập chữ ...', 'type ...', 'nhấn enter', 'bấm phím ...'). DO NOT call write_clipboard when the user asks to type/write text.",
+          description: "Directly type text, navigate lines, or edit/delete text using the keyboard in the currently focused application/window at the cursor position. Supports smart line navigation, line clearing/deletion without wiping the entire document, word deletion, and character deletion. ALWAYS invoke this when the user asks you to type, write, enter text, or delete/fix text on a line (in Vietnamese: 'gõ ...', 'ghi ...', 'viết ...', 'nhập ...', 'xóa dòng ...', 'sửa dòng ...', 'xóa chữ ...', 'xóa từ ...'). NEVER delete all text (Ctrl+A Backspace) when the user only wants to delete or edit a specific line or word.",
           parameters: {
             type: "object",
             properties: {
@@ -72,7 +72,39 @@ function buildClaudeToolsRaw() {
               },
               key: {
                 type: "string",
-                description: "The name of a specific key or hotkey to press (e.g. 'enter', 'esc', 'tab', 'backspace', 'ctrl+a', 'ctrl+c', 'ctrl+v')."
+                description: "The name of a specific key or hotkey to press (e.g. 'enter', 'esc', 'tab', 'backspace', 'delete', 'up', 'down', 'home', 'end', 'ctrl+a', 'ctrl+z')."
+              },
+              action: {
+                type: "string",
+                description: "High-level editing action: 'delete_line' (delete current line completely), 'clear_line' (erase line content, keeps line; pair with 'text' to replace the line), 'delete_word' (delete word backward via Ctrl+Backspace), 'delete_char' (Backspace), 'delete_forward_char' (Delete), 'select_line' (highlight line), 'select_all' (Ctrl+A), 'undo' (Ctrl+Z), 'redo' (Ctrl+Y), 'copy' (Ctrl+C), 'paste' (Ctrl+V), 'cut' (Ctrl+X)."
+              },
+              line_number: {
+                type: "integer",
+                description: "1-indexed target line number in document to navigate to (e.g. 1 for line 1, 3 for line 3) before editing. Moves to top of document then down."
+              },
+              line_offset: {
+                type: "integer",
+                description: "Relative line movement from current cursor before editing: negative for lines up (e.g. -1 for line above), positive for lines down (e.g. 1 for line below)."
+              },
+              char_offset: {
+                type: "integer",
+                description: "Relative character movement from current cursor: negative for left, positive for right."
+              },
+              repeat: {
+                type: "integer",
+                description: "Number of times to repeat the key press, deletion, or action (default 1, e.g. repeat: 5 with key: 'backspace' deletes 5 characters)."
+              },
+              click_x: {
+                type: "number",
+                description: "Optional screen X coordinate to click once to place cursor before editing."
+              },
+              click_y: {
+                type: "number",
+                description: "Optional screen Y coordinate to click once to place cursor before editing."
+              },
+              button: {
+                type: "string",
+                description: "Mouse button for click_x/click_y: 'left' (default), 'right', 'middle'."
               }
             }
           }
