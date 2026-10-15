@@ -146,11 +146,24 @@ export async function pressKeyCombo(rawText) {
 }
 
 /**
- * Gõ văn bản native trên Windows: ưu tiên paste qua Clipboard + Ctrl+V để hỗ trợ 100%
- * ký tự Unicode / tiếng Việt có dấu mà không bị bộ gõ Unikey/EVKey làm sai dấu.
+ * Gõ văn bản native trên Windows:
+ * - Chuỗi ASCII thuần (như "hello world", "abc", số, code): dùng keyboard.type() gõ phím trực tiếp
+ *   từng ký tự để người dùng thấy máy tự gõ thật sự.
+ * - Chuỗi có ký tự Unicode / tiếng Việt có dấu: paste qua Clipboard + Ctrl+V để tránh bộ gõ
+ *   Unikey/EVKey làm sai dấu hay nhảy phím.
  */
 export async function typeTextNative(text) {
   if (!text) return;
+  const isAscii = /^[\x20-\x7E\r\n\t]+$/.test(text);
+  if (isAscii) {
+    try {
+      await keyboard.type(text);
+      return;
+    } catch {
+      // Fallback xuống clipboard paste nếu keyboard.type bị lỗi
+    }
+  }
+
   try {
     if (clipboard && typeof clipboard.writeText === "function") {
       const original = typeof clipboard.readText === "function" ? clipboard.readText() : "";

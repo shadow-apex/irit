@@ -62,17 +62,17 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "computer_use_type",
-          description: "Take control of the user's keyboard to type text or press a specific key. Invoke this when the user asks you to type something, press Enter, etc.",
+          description: "Directly type text or press a key/hotkey using the keyboard into the currently focused application/window at the cursor position. ALWAYS invoke this when the user asks you to type, write, or enter text on the computer screen (in Vietnamese: 'gõ chữ ...', 'gõ ...', 'ghi ...', 'viết ...', 'nhập ...', 'nhập chữ ...', 'type ...', 'nhấn enter', 'bấm phím ...'). DO NOT call write_clipboard when the user asks to type/write text.",
           parameters: {
             type: "object",
             properties: {
               text: {
                 type: "string",
-                description: "The text to type out using the keyboard (e.g. 'hello world')."
+                description: "The text to type out directly into the focused window/cursor (e.g. 'hello world')."
               },
               key: {
                 type: "string",
-                description: "The name of a specific key or hotkey to press (e.g. 'enter', 'esc', 'tab', 'backspace', 'ctrl+a', 'ctrl+c')."
+                description: "The name of a specific key or hotkey to press (e.g. 'enter', 'esc', 'tab', 'backspace', 'ctrl+a', 'ctrl+c', 'ctrl+v')."
               }
             }
           }
@@ -208,7 +208,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "write_clipboard",
-          description: "Copy text onto the user's clipboard so they can paste it elsewhere (via tools/clipboard_manager.py). Use when the user asks you to copy a password, code snippet, or any text for them.",
+          description: "Copy text onto the user's clipboard ONLY when the user explicitly asks to copy something to clipboard (in Vietnamese: 'copy ...', 'sao chép ...', 'lưu vào clipboard/bộ nhớ tạm'). DO NOT use this when the user asks to type, write, or enter text on the computer screen (use computer_use_type instead).",
           parameters: {
             type: "object",
             properties: {
