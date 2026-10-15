@@ -49,9 +49,12 @@ if __name__ == "__main__":
             _common.fail("SetSuspendState thất bại (máy không hỗ trợ sleep hoặc bị chặn bởi chính sách).")
         _common.emit(True, message="Đã yêu cầu máy ngủ.", hibernate_enabled=hib,
                      note="Hibernation đang bật — Windows có thể ngủ đông thay vì sleep." if hib else None)
-    flag = "/s" if a.action == "shutdown" else "/r"
-    r = subprocess.run(["shutdown", flag, "/t", str(SHUTDOWN_DELAY_SECONDS)], capture_output=True)
-    if r.returncode != 0:
-        _common.fail(_common.decode_bytes(r.stderr or r.stdout).strip() or "Lệnh shutdown thất bại.")
-    _common.emit(True, message=f"Máy sẽ {'tắt' if a.action == 'shutdown' else 'khởi động lại'} sau "
-                 f"{SHUTDOWN_DELAY_SECONDS} giây (huỷ bằng lệnh `shutdown /a`).")
+        sys.exit(0)
+    elif a.action in ("shutdown", "restart"):
+        flag = "/s" if a.action == "shutdown" else "/r"
+        r = subprocess.run(["shutdown", flag, "/t", str(SHUTDOWN_DELAY_SECONDS)], capture_output=True)
+        if r.returncode != 0:
+            _common.fail(_common.decode_bytes(r.stderr or r.stdout).strip() or "Lệnh shutdown thất bại.")
+        _common.emit(True, message=f"Máy sẽ {'tắt' if a.action == 'shutdown' else 'khởi động lại'} sau "
+                     f"{SHUTDOWN_DELAY_SECONDS} giây (huỷ bằng lệnh `shutdown /a`).")
+        sys.exit(0)

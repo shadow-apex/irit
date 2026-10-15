@@ -1,52 +1,78 @@
-﻿import { useState } from "react"
-import SciFiImageRadar from "./SciFiImageRadar"
+import { useState } from "react"
+import SciFiScanReveal from "./SciFiScanReveal"
+import trangChuImg from "./trang_chu.png"
 import "./index.css"
 
 function App() {
   const [phase, setPhase] = useState<"idle" | "reveal" | "done">("idle");
 
   return (
-    <div style={{ width: "100vw", height: "100vh", backgroundColor: "#000", margin: 0, padding: 0, display: "flex", justifyContent: "center", alignItems: "center" }}>
+    <div style={{ width: "100vw", height: "100vh", backgroundColor: "#000", margin: 0, padding: 0, position: "relative", overflow: "hidden" }}>
       
       {phase === "idle" && (
-        <button 
-          onClick={() => setPhase("reveal")} 
-          style={{ 
-            padding: "15px 30px", 
-            fontSize: "1.5rem", 
-            cursor: "pointer", 
-            background: "transparent", 
-            color: "#0ff", 
-            border: "2px solid #0ff", 
-            borderRadius: "8px",
-            fontFamily: "monospace",
-            textTransform: "uppercase",
-            letterSpacing: "2px",
-            animation: "pulse 1.5s infinite"
-          }}>
-          Click de Khoi dong He thong (Va bat am thanh)
-        </button>
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", height: "100%" }}>
+          <button 
+            onClick={() => setPhase("reveal")} 
+            style={{ 
+              padding: "16px 36px", 
+              fontSize: "1.4rem", 
+              cursor: "pointer", 
+              background: "rgba(0, 255, 255, 0.08)", 
+              color: "#3EE8FF", 
+              border: "2px solid #3EE8FF", 
+              borderRadius: "8px",
+              fontFamily: "monospace",
+              textTransform: "uppercase",
+              letterSpacing: "2px",
+              boxShadow: "0 0 20px rgba(62, 232, 255, 0.4)",
+              transition: "all 0.3s ease"
+            }}>
+            Click để Khởi động Hệ thống (Có Âm thanh & Cánh Cửa)
+          </button>
+        </div>
       )}
 
       {phase === "reveal" && (
         <div style={{ position: "fixed", inset: 0 }}>
-          <SciFiImageRadar onComplete={() => setPhase("done")} autoStart={true} />
+          <SciFiScanReveal 
+            autoStart={true} 
+            speed={1} 
+            onComplete={() => setPhase("done")} 
+          />
         </div>
       )}
 
       {phase === "done" && (
-        <div style={{ color: "#0ff", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", height: "100%", fontSize: "2rem", fontFamily: "monospace" }}>
-          <div>HE THONG DA KICH HOAT</div>
-          <br /><br />
-          <button onClick={() => setPhase("idle")} style={{ padding: "10px 20px", fontSize: "1rem", cursor: "pointer", background: "#0ff", color: "#000", border: "none", borderRadius: "4px" }}>
-            Xem Lai
+        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+          <img 
+            src={trangChuImg} 
+            alt="Trang Chu I.R.I.S" 
+            style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+          />
+          <button 
+            onClick={() => setPhase("idle")} 
+            style={{ 
+              position: "absolute", 
+              bottom: "30px", 
+              left: "50%", 
+              transform: "translateX(-50%)", 
+              padding: "10px 24px", 
+              fontSize: "0.95rem", 
+              cursor: "pointer", 
+              background: "rgba(10, 20, 30, 0.85)", 
+              color: "#3EE8FF", 
+              border: "1px solid #3EE8FF", 
+              borderRadius: "6px",
+              fontFamily: "monospace",
+              boxShadow: "0 0 15px rgba(62, 232, 255, 0.3)"
+            }}>
+            Xem Lại Khởi Động
           </button>
         </div>
       )}
       
       <style>
         {`
-          @keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 10px #0ff; } 50% { opacity: 0.5; box-shadow: none; } }
           body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
         `}
       </style>

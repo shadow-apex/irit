@@ -7,6 +7,7 @@ import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import DrawingCanvas from "./DrawingCanvas";
 import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
+import HudTopNotch from "./HudTopNotch";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import { acceptedKey } from "../lib/tasks";
@@ -114,6 +115,7 @@ export default function HudShell({
   galaxyPositionsRef,
   handStateRef,
   readerOpen,
+  hudTopNotchEnabled,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -193,6 +195,7 @@ export default function HudShell({
   /** Per-frame hand data (useHandControl's stateRef) — read every rAF, not React state. */
   handStateRef?: { current: HandState };
   readerOpen?: boolean;
+  hudTopNotchEnabled?: boolean;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -222,7 +225,15 @@ export default function HudShell({
       window.removeEventListener("blur", handleBlur);
     };
   }, [commsOpen]);
-    const [workOpen, setWorkOpen] = useState(true);
+    const [workOpen, setWorkOpen] = useState(() => visibleTasks.length > 0);
+    const prevTaskCountRef = useRef(visibleTasks.length);
+
+    useEffect(() => {
+      if (visibleTasks.length > prevTaskCountRef.current) {
+        setWorkOpen(true);
+      }
+      prevTaskCountRef.current = visibleTasks.length;
+    }, [visibleTasks.length]);
 
   // Tự động đóng tab Tasks sau 3 giây nếu có task bị lỗi
   const failedTasksRef = useRef<Set<string>>(new Set());
@@ -347,6 +358,7 @@ export default function HudShell({
 
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
+      {hudTopNotchEnabled !== false && <HudTopNotch />}
       {/* A pending PO question outranks everything else in the HUD — it stays
           a lit, always-visible island rather than tucked behind a toggle. */}
       {poQuestion ? (
@@ -570,22 +582,26 @@ export default function HudShell({
       ) : null}
 
       {/* Slim work stream, top-right — collapsible like Comms */}
-      {visibleTasks.length > 0 ? (
-        <div className="hud-right">
-          <button
-            type="button"
-            className={`hud-comms-toggle hud-hit ${workOpen ? "open" : ""}`}
-            onClick={() => setWorkOpen((current) => !current)}
-            title={workOpen ? "Collapse tasks" : "Show tasks"}
-          >
-            <Terminal size={12} />
-            Tasks
-            <span className="count">{visibleTasks.length}</span>
-            <ChevronDown size={12} className="chev" />
-          </button>
-          {workOpen ? (
-            <div className="hud-work hud-hit" ref={workScrollRef}>
-              {visibleTasks.map((task) => (
+      <div className="hud-right">
+        <button
+          type="button"
+          className={`hud-comms-toggle hud-hit ${workOpen ? "open" : ""}`}
+          onClick={() => setWorkOpen((current) => !current)}
+          title={workOpen ? "Collapse tasks" : "Show tasks"}
+        >
+          <Terminal size={12} />
+          Tasks
+          <span className="count">{visibleTasks.length}</span>
+          <ChevronDown size={12} className="chev" />
+        </button>
+        {workOpen ? (
+          <div className="hud-work hud-hit" ref={workScrollRef}>
+            {visibleTasks.length === 0 ? (
+              <div className="hud-work-empty">
+                Chưa có tác vụ nào
+              </div>
+            ) : (
+              visibleTasks.map((task) => (
                 <WorkCard
                   key={task.id}
                   task={task}
@@ -594,11 +610,11 @@ export default function HudShell({
                   onToggleSteps={() => onToggleSteps(task.id)}
                   onOpen={() => onOpenTask(task)}
                 />
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+              ))
+            )}
+          </div>
+        ) : null}
+      </div>
 
       {/* Left column, bottom-left: collapsible comms on top, camera at the corner */}
       <div className="hud-left" ref={commsWrapperRef}>

@@ -27,7 +27,7 @@ export const WINDOWS_ONLY_TOOLS = new Set([
   "magic_move.py", "move_window.py", "multi_monitor_info.py", "power_manager.py", "read_notifications.py",
   "search_everything.py", "sys_control.py", "system_actions.py", "wifi_manager.py", "mouse_control.py",
   "media_control.py", "image_viewer.py", "clipboard_history.py", "process_manager.py", "ocr_region.py",
-  "color_picker.py",
+  "color_picker.py", "file_explorer.py",
 ]);
 
 export const MAX_STDOUT_BYTES = 1_000_000; // TL: giới hạn stdout ≤ 1 MB
@@ -565,4 +565,17 @@ export async function systemActionTool(action, target, extra = []) {
 export async function writeNoteScriptTool(text, isNew) {
   if (!text) return { status: "error", error: "Thiếu 'text'." };
   return runJsonTool("system_actions.py", ["note", optArg("text", text), ...(isNew ? ["--new"] : [])], { timeoutMs: 15000 }, "system_actions.py note thất bại.");
+}
+
+// -----------------------------------------------------------------------
+// file_explorer.py: mở thư mục hoặc bôi đen file trong File Explorer
+// -----------------------------------------------------------------------
+export async function fileExplorerTool(args = {}) {
+  const path = typeof args.path === "string" ? args.path.trim() : "";
+  const action = typeof args.action === "string" ? args.action.trim() : "auto";
+  const cli = [];
+  if (path) cli.push(path);
+  if (action && action !== "auto") cli.push(`--action=${action}`);
+  if (args.select === true) cli.push("--select");
+  return runJsonTool("file_explorer.py", cli, { timeoutMs: 15000 }, "file_explorer.py thất bại.");
 }

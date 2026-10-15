@@ -153,6 +153,7 @@ if __name__ == "__main__":
         if daemon_alive():
             _write_cmd("close")
         _common.emit(True, message="Đã đóng cửa sổ xem ảnh.")
+        sys.exit(0)
     _common.require("PIL", "Pillow")
     try:
         import tkinter  # noqa: F401

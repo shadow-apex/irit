@@ -29,8 +29,10 @@ html:not(.hud-mode) .boot,
 html:not(.hud-mode) .reader-backdrop,
 html:not(.hud-mode) .history-backdrop,
 html:not(.hud-mode) .match-backdrop,
-html:not(.hud-mode) .setup-backdrop {
+html:not(.hud-mode) .setup-backdrop,
+html:not(.hud-mode) .ssr-root {
   border-radius: 14px;
+  overflow: hidden;
 }
 
 /* ===== Mode transitions ===== */
@@ -180,13 +182,18 @@ html:not(.hud-mode) .setup-backdrop {
 /* ===== Slim work stream (top-right) ===== */
 .hud-right {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 24px;
+  right: 20px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
+  z-index: 50;
   animation: hud-slide 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
+}
+
+.hud-right .hud-comms-toggle {
+  align-self: flex-end;
 }
 
 .hud-work {
@@ -198,6 +205,19 @@ html:not(.hud-mode) .setup-backdrop {
   gap: 8px;
   scrollbar-width: none;
   animation: hud-rise 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hud-work-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--muted, rgba(255, 255, 255, 0.5));
+  background: var(--surface-glass, rgba(10, 20, 30, 0.75));
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--hairline, rgba(255, 255, 255, 0.1));
+  border-radius: var(--r-card, 8px);
+  width: 260px;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .hud-work::-webkit-scrollbar {

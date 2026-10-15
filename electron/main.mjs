@@ -103,7 +103,7 @@ import { stopWebServer } from "./web-server.mjs";
 import { stopOmniServer, setOmniLogger } from "./main/omni-server.mjs";
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
-import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
+import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
 import { toggleMeetingRecording, meetingRecorder } from "./main/meeting-recording.mjs";
 import {
@@ -447,6 +447,10 @@ app.whenReady().then(() => {
   // Gemini live session, giống hệt cách vision:desk-frame hoạt động.
   ipcMain.on("vision:camera-stream-frame", (_event, base64DataUrl) => {
     handleCameraStreamFrame(base64DataUrl);
+  });
+
+  ipcMain.on("vision:companion-frame", (_event, base64DataUrl) => {
+    handleCompanionVisionFrame(base64DataUrl);
   });
 
   // V-10: validate payload, đổi tỉ lệ -> toạ độ màn hình, cử chỉ hệ thống mặc định TẮT

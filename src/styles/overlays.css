@@ -1018,18 +1018,30 @@
 
 /* ===== Boot sequence overlay ===== */
 .boot {
-  position: fixed;
-  inset: 0;
+  position: relative;
+  width: min(480px, calc(100% - 64px));
+  max-width: 480px;
+  margin: 0 auto 8px;
+  align-self: center;
   z-index: 60;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 10px;
+  padding: 16px 28px 18px;
+  border-radius: 16px;
   background:
-    radial-gradient(52% 46% at 50% 40%, rgba(17, 34, 64, 0.55), transparent 72%),
-    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
-  animation: boot-in 0.5s ease;
+    radial-gradient(120% 120% at 50% 0%, rgba(20, 36, 60, 0.65), transparent 70%),
+    linear-gradient(180deg, rgba(8, 14, 24, 0.92) 0%, rgba(4, 7, 14, 0.96) 100%);
+  border: 1px solid var(--hairline-strong);
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 24px rgba(var(--cyan-rgb), 0.12);
+  backdrop-filter: blur(20px) saturate(1.2);
+  animation: boot-in 0.4s ease;
+  overflow: hidden;
 }
 
 /* Reuse the real orb (ReactorCore) so the boot orb matches the live one. */

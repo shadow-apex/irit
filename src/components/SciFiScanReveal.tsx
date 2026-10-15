@@ -5,6 +5,9 @@ import radarPart1 from "./part1_outer.png";
 import radarPart2 from "./part2_middle_outer.png";
 import radarPart3 from "./part3_middle_inner.png";
 import radarPart4 from "./part4_center.png";
+import doorLeftImg from "./Canh_Cua_Trai.png";
+import doorRightImg from "./Canh_Cua_Phai.png";
+import trangChuImg from "./trang_chu.png";
 
 /**
  * SciFiScanReveal
@@ -36,6 +39,7 @@ export interface SciFiScanRevealProps {
   autoStart?: boolean;
   onComplete?: () => void;
   className?: string;
+  transparentBackdrop?: boolean;
 }
 
 type Phase =
@@ -47,18 +51,18 @@ type Phase =
   | "access_granted"
   | "hud_scan"
   | "flash_transition"
-  | "reveal"
+  | "door_transition"
   | "done";
 
-// [start, end] in unscaled seconds, matching the source video timeline (0-22s)
-// Matches the reference clip's frame-by-frame timing:
-//  0-2s  "PLEASE INPUT..." blinking terminal prompt
-//  2-4s  "PLEASE IDENTIFY YOURSELF" + empty bordered field
-//  4-6s  "ENTER PASSWORD" + field filling with masked dots
-//  6-7s  "ACCESS GRANTED" glitch flash
-//  7-15s cyan HUD radar rings spinning up, center glyph glowing in
-//  15-19s bloom/flare burst + circuit debris + push-through zoom
-//  19-22s fade to dark face reveal
+// [start, end] in unscaled seconds, matching the source video timeline (0-22s):
+//  0-1.5s  "PLEASE INPUT..." blinking terminal prompt
+//  1.5-3.5s "PLEASE IDENTIFY YOURSELF" + empty bordered field
+//  3.5-4.5s loading bar
+//  4.5-6s  "ENTER PASSWORD" + field filling with masked dots
+//  6-7s    "ACCESS GRANTED" glitch flash
+//  7-15s   cyan HUD radar rings spinning up, ReactorCore powering on
+//  15-18.8s bloom/flare burst + circuit debris + push-through zoom
+//  18.8-22.1s mechanical blast doors slam shut & slide open to reveal cockpit
 const PHASE_TIMES: Record<Exclude<Phase, "idle" | "done">, [number, number]> = {
   input: [0, 1.5],
   identify: [1.5, 3.5],
@@ -66,10 +70,10 @@ const PHASE_TIMES: Record<Exclude<Phase, "idle" | "done">, [number, number]> = {
   password: [4.5, 6],
   access_granted: [6, 7],
   hud_scan: [7, 15],
-  flash_transition: [15, 19],
-  reveal: [19, 21.5],
+  flash_transition: [15, 18.8],
+  door_transition: [18.8, 22.1],
 };
-const TOTAL_DURATION = 21.5;
+const TOTAL_DURATION = 22.1;
 
 // ---------------------------------------------------------------------
 // Embedded original audio (am_thanh_goc.mp3, 22s) as a data URI so the
@@ -307,6 +311,7 @@ export default function SciFiScanReveal({
   autoStart = false,
   onComplete,
   className,
+  transparentBackdrop = false,
 }: SciFiScanRevealProps) {
   const [started, setStarted] = useState(autoStart);
   const startedRef = useRef(autoStart);
@@ -321,6 +326,11 @@ export default function SciFiScanReveal({
   const reactorRef = useRef<HTMLDivElement | null>(null);
   const radarRef = useRef<HTMLDivElement | null>(null);
   const radarImgRefs = useRef<Array<HTMLImageElement | null>>([]);
+  const doorLeftRef = useRef<HTMLDivElement | null>(null);
+  const doorRightRef = useRef<HTMLDivElement | null>(null);
+  const doorBackdropRef = useRef<HTMLDivElement | null>(null);
+  const seamFlareRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -582,6 +592,76 @@ export default function SciFiScanReveal({
         }
       }
 
+      // Door Transition Animation (18.8s to 22.1s)
+      if (tScaled >= 18.8 && tScaled <= TOTAL_DURATION) {
+        const dt = tScaled - 18.8; // 0 to 3.3s
+        let leftTranslate = -100;
+        let rightTranslate = 100;
+        let flareOpacity = 0;
+        let shakeX = 0;
+        let shakeY = 0;
+
+        if (dt < 1.1) {
+          // Closing: -100% -> 0% (left), 100% -> 0% (right)
+          const p = Math.min(1, dt / 1.1);
+          const ease = 1 - Math.pow(1 - p, 3);
+          leftTranslate = -100 * (1 - ease);
+          rightTranslate = 100 * (1 - ease);
+        } else if (dt < 1.45) {
+          // Impact & lock
+          leftTranslate = 0;
+          rightTranslate = 0;
+          const impactP = (dt - 1.1) / 0.35;
+          flareOpacity = Math.sin(impactP * Math.PI);
+          shakeX = Math.sin(dt * 70) * 6;
+          shakeY = Math.cos(dt * 85) * 4;
+        } else if (dt < 1.6) {
+          // Hold closed before opening
+          leftTranslate = 0;
+          rightTranslate = 0;
+        } else {
+          // Opening: 0% -> -100% (left), 0% -> 100% (right)
+          const p = Math.min(1, (dt - 1.6) / 1.4);
+          const ease = Math.pow(p, 2.2);
+          leftTranslate = -100 * ease;
+          rightTranslate = 100 * ease;
+        }
+
+        // ONLY reveal Home Screen when opening doors (dt >= 1.6s)
+        const isOpening = dt >= 1.6;
+        if (doorBackdropRef.current) {
+          doorBackdropRef.current.style.display = (!transparentBackdrop && isOpening) ? "block" : "none";
+        }
+        if (containerRef.current) {
+          containerRef.current.style.transform = `translate(${shakeX}px, ${shakeY}px)`;
+          if (transparentBackdrop) {
+            containerRef.current.style.background = isOpening ? "transparent" : "";
+          }
+        }
+        if (doorLeftRef.current) {
+          doorLeftRef.current.style.transform = `translateX(${leftTranslate}%)`;
+          doorLeftRef.current.style.display = "block";
+        }
+        if (doorRightRef.current) {
+          doorRightRef.current.style.transform = `translateX(${rightTranslate}%)`;
+          doorRightRef.current.style.display = "block";
+        }
+        if (seamFlareRef.current) {
+          seamFlareRef.current.style.opacity = flareOpacity.toString();
+        }
+      } else {
+        if (doorBackdropRef.current) doorBackdropRef.current.style.display = "none";
+        if (doorLeftRef.current) doorLeftRef.current.style.display = "none";
+        if (doorRightRef.current) doorRightRef.current.style.display = "none";
+        if (seamFlareRef.current) seamFlareRef.current.style.opacity = "0";
+        if (containerRef.current) {
+          containerRef.current.style.transform = "translate(0px, 0px)";
+          if (transparentBackdrop) {
+            containerRef.current.style.background = "";
+          }
+        }
+      }
+
       if (tScaled < TOTAL_DURATION) {
         rafRef.current = requestAnimationFrame(loop);
       } else {
@@ -603,18 +683,29 @@ export default function SciFiScanReveal({
     (PHASE_TIMES[key][1] - PHASE_TIMES[key][0]) / speed;
 
   return (
-    <div className={"ssr-root" + (className ? " " + className : "")}>
+    <div 
+      ref={containerRef} 
+      className={"ssr-root" + (className ? " " + className : "")}
+    >
       <style>{`
         .ssr-root {
           position: relative;
-          width: 100vw;
-          height: 100vh;
-          background: radial-gradient(ellipse at center, #0a1420 0%, #000814 75%);
+          width: 100%;
+          height: 100%;
+          border-radius: 14px;
           overflow: hidden;
+          background: radial-gradient(ellipse at center, #0a1420 0%, #000814 75%);
           font-family: "JetBrains Mono", "Courier New", monospace;
           color: #3EE8FF;
           isolation: isolate;
           user-select: none;
+          box-shadow: inset 0 0 0 1px rgba(148, 196, 255, 0.08);
+        }
+        :fullscreen .ssr-root,
+        .fullscreen .ssr-root,
+        html.fullscreen .ssr-root {
+          border-radius: 0 !important;
+          box-shadow: none !important;
         }
         .ssr-canvas-layer {
           position: absolute;
@@ -831,64 +922,35 @@ export default function SciFiScanReveal({
           50% { content: ".."; } 75% { content: "..."; }
         }
 
-        /* ---- reveal ---- */
-        .ssr-reveal {
+        /* ---- mechanical blast doors ---- */
+        .ssr-door {
           position: absolute;
-          inset: 0;
-          z-index: 15;
-          background: #000;
-          overflow: hidden;
-        }
-        .ssr-reveal-flash {
-          position: absolute;
-          inset: 0;
-          background: #fff;
-          animation: ssr-reveal-flash var(--dur) ease-out forwards;
-        }
-        @keyframes ssr-reveal-flash {
-          0% { opacity: 1; }
-          100% { opacity: 0; }
-        }
-        .ssr-reveal-media {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          clip-path: circle(0% at 50% 50%);
-          animation: ssr-reveal-clip var(--dur) cubic-bezier(.2,.7,.3,1) forwards;
-          animation-delay: calc(var(--dur) * 0.12);
-        }
-        @keyframes ssr-reveal-clip {
-          from { clip-path: circle(0% at 50% 50%); }
-          to { clip-path: circle(75% at 50% 50%); }
-        }
-        .ssr-reveal-media img, .ssr-reveal-media video {
-          width: 100%; height: 100%;
-          object-fit: cover;
-          filter: brightness(0.55) contrast(1.15) saturate(0.9);
-        }
-        .ssr-reveal-rim {
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(115deg, rgba(62,232,255,0.35) 0%, rgba(62,232,255,0) 38%, rgba(0,0,0,0.5) 100%);
-          mix-blend-mode: screen;
+          top: 0;
+          bottom: 0;
+          width: 50%;
+          background-size: 100% 100%;
+          background-repeat: no-repeat;
+          z-index: 25;
           pointer-events: none;
         }
-        .ssr-reveal-placeholder {
-          width: 46%;
-          aspect-ratio: 1;
-          border-radius: 50%;
-          background: radial-gradient(circle at 38% 35%, rgba(62,232,255,0.35), rgba(0,8,20,0.9) 70%);
-          border: 1px solid rgba(62,232,255,0.4);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          text-align: center;
-          font-size: 10px;
-          letter-spacing: 2px;
-          color: rgba(160,255,255,0.75);
-          padding: 10px;
+        .ssr-door-left {
+          left: 0;
+        }
+        .ssr-door-right {
+          right: 0;
+        }
+        .ssr-seam-flare {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          left: 50%;
+          width: 6px;
+          transform: translateX(-50%);
+          background: #3EE8FF;
+          box-shadow: 0 0 25px #3EE8FF, 0 0 50px #3EE8FF;
+          opacity: 0;
+          z-index: 26;
+          pointer-events: none;
         }
 
         /* ---- intro animations for reactor core ---- */
@@ -1094,27 +1156,77 @@ export default function SciFiScanReveal({
         </div>
       )}
 
-      {phase === "reveal" && (
-        <div className="ssr-reveal" key="reveal">
-          <div
-            className="ssr-reveal-flash"
-            style={{ ["--dur" as any]: `${dur("reveal") * 0.6}s` }}
-          />
-          <div
-            className="ssr-reveal-media"
-            style={{ ["--dur" as any]: `${dur("reveal")}s` }}
-          >
-            {revealMedia ? (
-              revealMediaType === "video" ? (
-                <video src={revealMedia} autoPlay muted loop playsInline />
-              ) : (
-                <img src={revealMedia} alt="reveal" />
-              )
-            ) : null}
-            <div className="ssr-reveal-rim" />
-          </div>
-        </div>
-      )}
+      {/* Home Screen Backdrop behind the blast doors */}
+      <div 
+        ref={doorBackdropRef}
+        className="ssr-door-backdrop"
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage: `url(${trangChuImg})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          zIndex: 20,
+          display: "none",
+        }}
+      />
+
+      {/* Mechanical Blast Doors (replacing old black reveal screen) */}
+      <div 
+        ref={doorLeftRef}
+        className="ssr-door ssr-door-left"
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: "50%",
+          backgroundImage: `url(${doorLeftImg})`,
+          backgroundSize: "100% 100%",
+          backgroundRepeat: "no-repeat",
+          zIndex: 25,
+          transform: "translateX(-100%)",
+          display: "none",
+          willChange: "transform"
+        }}
+      />
+      <div 
+        ref={doorRightRef}
+        className="ssr-door ssr-door-right"
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: "50%",
+          backgroundImage: `url(${doorRightImg})`,
+          backgroundSize: "100% 100%",
+          backgroundRepeat: "no-repeat",
+          zIndex: 25,
+          transform: "translateX(100%)",
+          display: "none",
+          willChange: "transform"
+        }}
+      />
+      <div 
+        ref={seamFlareRef}
+        className="ssr-seam-flare"
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          left: "50%",
+          width: "6px",
+          transform: "translateX(-50%)",
+          background: "#3EE8FF",
+          boxShadow: "0 0 25px #3EE8FF, 0 0 50px #3EE8FF",
+          opacity: 0,
+          zIndex: 26,
+          pointerEvents: "none",
+          transition: "opacity 0.1s ease"
+        }}
+      />
 
       <div className="ssr-scanlines" />
       <div className="ssr-vignette" />

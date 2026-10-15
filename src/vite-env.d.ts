@@ -314,6 +314,8 @@ type IrisApi = {
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;
   // FEAT-VIS-DIRECT-01: Direct Stream Vision (companion/robot camera, no desktopCapturer)
   sendCameraStreamFrame: (data: string) => void;
+  onSnapCompanionVision?: (callback: () => void) => () => void;
+  sendCompanionVisionFrame: (data: string) => void;
   reportDeskVisionState: (enabled: boolean) => void;
   reportCameraStreamStatus: (hasStream: boolean) => void;
   onToggleCameraStreamVision: (callback: (enabled: boolean) => void) => () => void;

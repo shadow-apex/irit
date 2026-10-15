@@ -23,21 +23,31 @@ import sys
 def ensure_utf8():
     """Ép stdout/stderr dùng UTF-8 (console Windows mặc định là code page OEM)."""
     for name in ("stdout", "stderr"):
-        stream = getattr(sys, name)
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            stream = getattr(sys, name, None)
+            if stream is not None:
+                try:
+                    stream.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    try:
+                        setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace"))
+                    except Exception:
+                        pass
         except Exception:
-            try:
-                setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace"))
-            except Exception:
-                pass
+            pass
+
+
+ensure_utf8()
 
 
 def emit(success=True, **fields):
     """In MỘT dòng JSON. success=False ⇒ thoát mã 1."""
     payload = {"success": bool(success)}
     payload.update(fields)
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    try:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except UnicodeEncodeError:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     if not success:
         sys.exit(1)
@@ -47,7 +57,10 @@ def fail(error, code=1, **fields):
     """In JSON lỗi rồi thoát với mã `code` (≠ 0)."""
     payload = {"success": False, "error": str(error)}
     payload.update(fields)
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    try:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except UnicodeEncodeError:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
     sys.exit(code if code else 1)
 

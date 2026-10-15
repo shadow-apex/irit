@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { LayoutGrid, Code, Globe, Terminal, Box, Search, Play, Monitor, FileCode, AppWindow, X } from "lucide-react";
+import { LayoutGrid, Code, Globe, Terminal, Search, Play, Monitor, FileCode, AppWindow, X } from "lucide-react";
 import appsData from "../config/apps.json";
 
 interface AppItem {

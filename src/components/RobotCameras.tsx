@@ -1,6 +1,6 @@
 import { claimKeyCapture, isEditableTarget } from '../lib/keyCapture';
 import { useEffect, useRef, useState } from "react";
-import { X, Bot, RefreshCw, WifiOff, Maximize2, Minimize2 } from "lucide-react";
+import { Bot, RefreshCw, WifiOff, Maximize2, Minimize2 } from "lucide-react";
 import DraggablePiP from "./DraggablePiP";
 
 // Khoảng thời gian refresh ảnh camera (3 giây)

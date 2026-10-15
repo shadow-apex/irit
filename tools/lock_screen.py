@@ -11,4 +11,5 @@ if __name__ == "__main__":
 
     if ctypes.windll.user32.LockWorkStation():
         _common.emit(True, message="Đã khoá màn hình.")
-    _common.fail("LockWorkStation() thất bại.")
+    else:
+        _common.fail("LockWorkStation() thất bại.")

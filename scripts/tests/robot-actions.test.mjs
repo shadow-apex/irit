@@ -101,3 +101,15 @@ test("device-config: fallback sang .example.json và cảnh báo khi JSON hỏng
   process.env.IRIS_CONFIG_DIR = dir;
   dc.resetDeviceConfigCache();
 });
+
+test("resolveRobotDevice: khớp số thứ tự (1, robot 1, camera 1, #1) và token", () => {
+  assert.equal(ra.resolveRobotDevice("1").id, "bot");
+  assert.equal(ra.resolveRobotDevice("robot 1").id, "bot");
+  assert.equal(ra.resolveRobotDevice("camera 1").id, "bot");
+  assert.equal(ra.resolveRobotDevice("#1").id, "bot");
+  assert.equal(ra.resolveRobotDevice("2").id, "nocfg");
+  assert.equal(ra.resolveRobotDevice("bot").id, "bot");
+  assert.equal(ra.resolveRobotDevice("Bot").id, "bot");
+  assert.equal(ra.resolveRobotDevice("999").status, "none");
+});
+

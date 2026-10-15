@@ -14,7 +14,7 @@ test("nhận diện lời gọi nguy hiểm / an toàn", () => {
   assert.equal(isDangerousCall("system_control", { camera: "off" }), true);
   assert.equal(isDangerousCall("system_control", { volume: "up" }), false);
   assert.equal(isDangerousCall("system_control", { wifi: "on" }), false);
-  assert.equal(isDangerousCall("close_app", { target: "x.exe" }), true);
+  assert.equal(isDangerousCall("close_app", { target: "x.exe" }), false);
   assert.equal(isDangerousCall("media_control", { action: "next" }), false);
 });
 
@@ -62,7 +62,7 @@ test("onPending được gọi để hiện cảnh báo lên HUD", () => {
 
 test("catalog: tool nguy hiểm có confirm_token và mô tả quy trình xác nhận", () => {
   const decls = buildClaudeTools().flatMap((g) => g.functionDeclarations || []);
-  for (const name of ["power_manager", "system_control", "process_manager", "close_app"]) {
+  for (const name of ["power_manager", "system_control", "process_manager"]) {
     const d = decls.find((x) => x.name === name);
     assert.ok(d, `thiếu tool ${name}`);
     assert.match(d.description, /needs_confirmation/);
@@ -71,6 +71,10 @@ test("catalog: tool nguy hiểm có confirm_token và mô tả quy trình xác n
   }
   const safe = decls.find((x) => x.name === "media_control");
   assert.ok(!(safe.parameters || safe.input_schema).properties.confirm_token);
+  const closeApp = decls.find((x) => x.name === "close_app");
+  if (closeApp) {
+    assert.ok(!(closeApp.parameters || closeApp.input_schema).properties?.confirm_token);
+  }
 });
 
 test("annotate không nhân đôi chú thích khi gọi lại", () => {

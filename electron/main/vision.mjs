@@ -21,7 +21,8 @@ import { getRobotsConfig, getSmartHomeCamerasConfig } from "./device-config.mjs"
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { resolvePythonCommand } from "./sidecar-process.mjs";
-import { unpackedRepoRoot } from "./paths.mjs";
+import { unpackedRepoRoot, userDataDir } from "./paths.mjs";
+import { saveScreenshot } from "./screenshot-store.mjs";
 import { grabJpeg, createFrameLoop } from "./vision-capture.mjs";
 
 const MAX_IPC_FRAME_CHARS = 5_600_000; // ≈ 4 MB nhị phân sau base64
@@ -437,3 +438,206 @@ export function requestDeskSnapshot({ timeoutMs = 8000 } = {}) {
     mainWindow.webContents.send("vision:snap-desk");
   });
 }
+
+let pendingCompanionSnap = null;
+
+/** IPC `vision:companion-frame` từ renderer khi chụp ảnh camera Alt+C / Companion */
+export function handleCompanionVisionFrame(base64DataUrl) {
+  if (!pendingCompanionSnap) return false;
+  const { resolve, timer, save } = pendingCompanionSnap;
+  clearTimeout(timer);
+  pendingCompanionSnap = null;
+
+  const base64 = base64Of(base64DataUrl);
+  if (!base64) {
+    resolve({
+      status: "error",
+      error: "Camera điện thoại (Alt+C) chưa được kết nối hoặc không có hình ảnh. Hãy quét mã QR tại bảng Companion Camera (Alt+C) để kết nối điện thoại.",
+    });
+    return false;
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  let screenshot_path = null;
+  if (save) {
+    try {
+      screenshot_path = saveScreenshot(path.join(userDataDir(), "screenshots"), buffer);
+    } catch (saveErr) {
+      console.warn("[handleCompanionVisionFrame] Lỗi khi lưu ảnh:", saveErr);
+    }
+  }
+
+  sendVideoFrame(base64, "image/jpeg");
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `Đã chụp ảnh từ Companion Camera (Alt+C)${screenshot_path ? ` -> ${screenshot_path}` : ""}.`,
+  });
+
+  resolve({
+    status: "success",
+    camera_id: "companion_phone",
+    camera_name: "Companion Camera (Alt+C)",
+    ...(screenshot_path ? { screenshot_path } : {}),
+    message: `Đã chụp thành công ảnh từ camera điện thoại (Alt+C).${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
+    instructions: "Ảnh từ camera điện thoại (Alt+C) vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trong camera nếu được hỏi.",
+  });
+  return true;
+}
+
+export function requestCompanionSnapshot({ timeoutMs = 8000, save = true } = {}) {
+  if (!mainWindow) return Promise.resolve({ status: "error", error: "Không có cửa sổ Iris." });
+  if (pendingCompanionSnap) return Promise.resolve({ status: "error", error: "Đang có một yêu cầu chụp khác." });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingCompanionSnap = null;
+      resolve({ status: "error", error: "Hết thời gian chờ camera điện thoại (Alt+C) — hãy kiểm tra lại kết nối điện thoại." });
+    }, timeoutMs);
+    pendingCompanionSnap = { resolve, timer, save };
+    mainWindow.webContents.send("vision:snap-companion");
+  });
+}
+
+/**
+ * Chụp một ảnh tĩnh từ một camera robot, camera điện thoại (Alt+C), hoặc smart home camera cụ thể qua giọng nói/chat.
+ * Hỗ trợ target bằng ID, tên, số thứ tự (ví dụ: 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1'), hoặc 'alt c' / 'companion' / 'phone'.
+ */
+export async function takeCameraSnapshot(args = {}) {
+  const target = typeof args?.target === "string" ? args.target.trim() : "";
+  const save = args?.save !== false;
+
+  const targetNorm = target.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
+  const isAltC = /^(?:camera\s*)?(?:alt\s*c|alt_c|companion|phone|dien\s*thoai)(?:\s*camera)?$/i.test(targetNorm);
+  if (isAltC) {
+    return requestCompanionSnapshot({ timeoutMs: 8000, save });
+  }
+
+  let matched = null;
+  const robots = getRobotsConfig() || {};
+  const smarthome = getSmartHomeCamerasConfig() || {};
+
+  if (!target) {
+    if (activeRobotId && robots[activeRobotId] && pickUrl(robots[activeRobotId])) {
+      matched = { type: "robot", id: activeRobotId, name: robots[activeRobotId]?.name || activeRobotId, url: pickUrl(robots[activeRobotId]) };
+    } else {
+      for (const [id, cfg] of Object.entries(robots)) {
+        if (pickUrl(cfg)) {
+          matched = { type: "robot", id, name: cfg?.name || id, url: pickUrl(cfg) };
+          break;
+        }
+      }
+      if (!matched) {
+        for (const [id, cfg] of Object.entries(smarthome)) {
+          if (pickUrl(cfg)) {
+            matched = { type: "smarthome", id, name: cfg?.name || id, url: pickUrl(cfg) };
+            break;
+          }
+        }
+      }
+    }
+  } else {
+    const { resolveRobotDevice, normalizeViText, tokenize } = await import("./robot-actions.mjs");
+    const res = resolveRobotDevice(target);
+    if (res.status === "ok") {
+      const cfg = robots[res.id];
+      matched = { type: "robot", id: res.id, name: cfg?.name || res.id, url: pickUrl(cfg) };
+    } else if (res.status === "ambiguous") {
+      const names = res.ids.map((id) => robots[id]?.name || id).join(", ");
+      return {
+        status: "error",
+        error: `Tên camera "${target}" khớp với nhiều hơn 1 robot (${names}). Hãy nói tên cụ thể hơn.`,
+      };
+    } else {
+      const needleNorm = normalizeViText(target);
+      const needleTokens = tokenize(target);
+
+      const numMatch = needleNorm.match(/^(?:camera|cam|cua so|thiet bi)?\s*(?:so\s*)?#?(\d+)$/);
+      if (numMatch) {
+        const idx = parseInt(numMatch[1], 10) - 1;
+        const shIds = Object.keys(smarthome);
+        if (idx >= 0 && idx < shIds.length) {
+          const id = shIds[idx];
+          matched = { type: "smarthome", id, name: smarthome[id]?.name || id, url: pickUrl(smarthome[id]) };
+        }
+      }
+
+      if (!matched && smarthome[target]) {
+        matched = { type: "smarthome", id: target, name: smarthome[target]?.name || target, url: pickUrl(smarthome[target]) };
+      }
+      if (!matched) {
+        for (const [id, cfg] of Object.entries(smarthome)) {
+          if (normalizeViText(id) === needleNorm || normalizeViText(cfg?.name || "") === needleNorm) {
+            matched = { type: "smarthome", id, name: cfg?.name || id, url: pickUrl(cfg) };
+            break;
+          }
+        }
+      }
+      if (!matched && needleTokens.length > 0) {
+        for (const [id, cfg] of Object.entries(smarthome)) {
+          const allTokens = [...tokenize(id), ...tokenize(cfg?.name || "")];
+          if (needleTokens.every((t) => allTokens.includes(t))) {
+            matched = { type: "smarthome", id, name: cfg?.name || id, url: pickUrl(cfg) };
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!matched) {
+    const available = [
+      ...Object.entries(robots).filter(([, cfg]) => pickUrl(cfg)).map(([id, cfg]) => cfg?.name || id),
+      ...Object.entries(smarthome).filter(([, cfg]) => pickUrl(cfg)).map(([id, cfg]) => cfg?.name || id),
+    ];
+    return {
+      status: "error",
+      error: `Không tìm thấy camera phù hợp cho "${target || "mặc định"}". Các camera hiện có URL: ${available.length ? available.join(", ") : "Chưa có camera nào có camera_url."}`,
+    };
+  }
+
+  if (!matched.url) {
+    return {
+      status: "error",
+      error: `Camera "${matched.name}" (${matched.id}) chưa được cấu hình camera_url hoặc snapshot_url.`,
+    };
+  }
+
+  let buffer;
+  try {
+    buffer = await grabJpeg(matched.url, { timeoutMs: 7000 });
+  } catch (err) {
+    return {
+      status: "error",
+      error: `Không thể kết nối hoặc tải ảnh từ camera "${matched.name}" (${matched.url}): ${err.message}`,
+    };
+  }
+
+  let screenshot_path = null;
+  if (save) {
+    try {
+      screenshot_path = saveScreenshot(path.join(userDataDir(), "screenshots"), buffer);
+    } catch (saveErr) {
+      console.warn("[takeCameraSnapshot] Lỗi khi lưu ảnh:", saveErr);
+    }
+  }
+
+  sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `Đã chụp ảnh từ camera "${matched.name}"${screenshot_path ? ` -> ${screenshot_path}` : ""}.`,
+  });
+
+  return {
+    status: "success",
+    camera_id: matched.id,
+    camera_name: matched.name,
+    type: matched.type,
+    ...(screenshot_path ? { screenshot_path } : {}),
+    message: `Đã chụp thành công ảnh từ camera "${matched.name}".${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
+    instructions: "Ảnh từ camera vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trong camera nếu được hỏi.",
+  };
+}
+

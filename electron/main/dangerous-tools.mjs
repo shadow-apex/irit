@@ -18,7 +18,6 @@ export const DANGEROUS = {
     [a.wifi, a.bluetooth, a.camera].some((v) => String(v || "").toLowerCase() === "off") ||
     [a.bluetooth, a.camera].some((v) => String(v || "").toLowerCase() === "on"),
   process_manager: (a) => String(a.action || "").toLowerCase() === "kill",
-  close_app: () => true,
   // TL-08: để lộ mã OTP chưa che cho mô hình đám mây cần người dùng đồng ý rõ.
   read_system_notifications: (a) => a.reveal_otp === true,
 };

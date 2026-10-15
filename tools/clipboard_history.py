@@ -187,6 +187,7 @@ def start():
     pid = _running_pid()
     if pid:
         _common.emit(True, message="Đã có vòng lặp theo dõi clipboard đang chạy.", pid=pid, already_running=True)
+        return
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
@@ -198,6 +199,7 @@ def start():
         if pid:
             _common.emit(True, message=f"Đã bật theo dõi clipboard (giữ {_ttl()} giây, tối đa {MAX_ENTRIES} mục; "
                                        "bỏ qua mật khẩu/OTP/số thẻ).", pid=pid, ttl_seconds=_ttl())
+            return
     _common.fail("Không khởi động được vòng lặp theo dõi clipboard.")
 
 
@@ -210,6 +212,7 @@ def stop():
             pass
         _save([])
         _common.emit(True, message="Không có vòng lặp nào đang chạy (đã xoá lịch sử).", was_running=False)
+        return
     import psutil
 
     try:

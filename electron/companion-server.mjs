@@ -5,7 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { spawnSync } from 'node:child_process';
 import { userConfigPath } from './main/env-config.mjs';
+import { pythonBin } from './main/paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -311,6 +313,15 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   // cert in PHONE_CAMERA/cert/. This is required for Safari on iOS to allow
   // getUserMedia() (camera) over the LAN — Safari treats plain HTTP on a LAN
   // IP as an insecure context and silently blocks camera access.
+  if (!fs.existsSync(CERT_PATH) || !fs.existsSync(KEY_PATH)) {
+    try {
+      const genScript = path.join(__dirname, '..', 'scripts', 'generate-companion-cert.py');
+      if (fs.existsSync(genScript)) {
+        spawnSync(pythonBin(), [genScript], { stdio: "ignore", windowsHide: true });
+      }
+    } catch {}
+  }
+
   if (fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) {
     try {
       const httpsOptions = {

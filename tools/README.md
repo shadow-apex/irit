@@ -46,6 +46,7 @@ Phía Node chuẩn hoá thành `{..., "status": "success" | "error"}` (`electron
 | `search_everything.py` | `search_local_files` | cần `es.exe` |
 | `ocr_region.py` | `ocr_region` | `IRIS_OCR_LANG`, tự chọn `vie+eng` nếu có |
 | `image_viewer.py` | `view_image` | chỉ hiển thị cho người dùng |
+| `file_explorer.py` | `file_explorer` | mở thư mục hoặc bôi đen/mở file trong File Explorer |
 | `sys_monitor.py` | `get_system_stats` | CPU/RAM/ổ đĩa/pin |
 | `active_window_info.py` `color_picker.py` `idle_time.py` `multi_monitor_info.py` `lock_screen.py` `focus_assist.py` `notifier.py` `media_control.py` `desktop_manager.py` | cùng tên | |
 

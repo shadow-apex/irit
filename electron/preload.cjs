@@ -85,6 +85,12 @@ contextBridge.exposeInMainWorld("iris", {
   // MediaStream (Companion WebRTC / robot) lên <canvas> và đẩy JPEG/base64
   // lên đây; Main chỉ chuyển tiếp thẳng vào Gemini, không dùng desktopCapturer.
   sendCameraStreamFrame: (base64) => ipcRenderer.send("vision:camera-stream-frame", base64),
+  onSnapCompanionVision: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("vision:snap-companion", handler);
+    return () => ipcRenderer.removeListener("vision:snap-companion", handler);
+  },
+  sendCompanionVisionFrame: (base64) => ipcRenderer.send("vision:companion-frame", base64),
   onExpandRobotPip: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("ui:expand-robot-pip", handler);

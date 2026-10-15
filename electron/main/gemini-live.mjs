@@ -52,17 +52,22 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+let hasGreetedStartup = false;
+
 export const GreetGate = {
-  done: true,
+  done: false,
   timer: null,
   arm() {
+    if (hasGreetedStartup) return;
     this.done = false;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.fire(), 8000);
+    // Chào một câu ngắn gọn, ấm áp sau 1.2s khi vừa kết nối phiên lúc khởi động
+    this.timer = setTimeout(() => this.fire(), 1200);
   },
   fire() {
-    if (this.done) return;
+    if (this.done || hasGreetedStartup) return;
     this.done = true;
+    hasGreetedStartup = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     sendWelcomeGreeting();
@@ -83,21 +88,19 @@ export function flushTranscripts() {
 }
 
 /**
- * Quy tắc dùng các tool trong /tools (OS/phần cứng) cho Gemini. Các tham số chi tiết đã nằm trong schema của
- * từng tool (claude-tools-catalog.mjs) nên ở đây chỉ ghi: tham số bắt buộc, lựa chọn dễ nhầm, và quy tắc an toàn.
- * Giữ ngắn gọn — khối này nằm trong systemInstruction ở MỌI phiên.
+ * Quy tắc dùng toàn bộ công cụ trong /tools (OS/Desktop/Phần cứng) cho Gemini Live.
+ * Ngắn gọn, súc tích, chỉ rõ mục đích để Gemini gọi trực tiếp không qua Claude.
  */
 const LOCAL_TOOL_RULES = [
-  "OS/HARDWARE TOOLS: call them directly (never via submit_claude_task), pass only the fields needed.",
-  "APPS: minimize_app = to the taskbar (its result text says 'thu nhỏ' but that is NOT Picture-in-Picture); hide_app = fully invisible, ONLY when the user explicitly asks to hide completely ('ẩn hoàn toàn', 'tàng hình'), never for 'thu nhỏ' or plain 'ẩn'; restore_app undoes both; close_app quits. All take {target = exe name, e.g. 'chrome.exe'}, never Iris itself (use control_ui minimize_iris/restore_iris). write_note{text, is_new?} appends to a Notepad note (is_new=true starts a fresh one). process_manager{action: list(sort cpu|ram, top) | kill(name = exact exe, no wildcards; force only if the user accepts losing unsaved data)} — always list before kill.",
-  "WINDOWS: move_window_precise{name = part of the title, x, y, width?, height?}. move_window_magic{mode:'name' + name, x, y} or {mode:'active'}: tell the user at once to click the target window, it moves ~5 s later. desktop_manager{new|close|left|right = virtual desktops, boss = show desktop}. Call multi_monitor_info before using coordinates on a multi-monitor setup.",
-  "MOUSE: mouse_control{action: move|click|drag|scroll|position|release; x,y; drag also x2,y2; scroll needs amount (+up/-down); button left|right|middle; double; move+click:true = move then click; monitor N; space:'frame' when x,y were read off a screenshot}. Fast by default; 'release' frees a stuck button after a failed drag.",
-  "SEE THE SCREEN: take_ai_screenshot{save?} gives YOU an image. ocr_region{left,top,width,height — all four or none} returns text only (needs Tesseract). active_window_info = title/exe/position of the focused window. color_picker{x,y} (omit = under the cursor). view_image{latest|prev|next|close} shows SAVED shots to the USER only, never to you.",
-  "SYSTEM: system_control{volume up|down|mute(toggle)|unmute; volume_level 0-100 absolute; brightness 0-100 (laptop panel only); wifi on|off; bluetooth on|off; camera on|off} — bluetooth/camera need a UAC prompt (tell the user to click Yes); camera off also disables Iris's own webcam. wifi_manager{action: list|profiles|status|disconnect|connect + ssid} — connects only to saved networks, never ask for a password. power_manager{sleep|shutdown|restart} (5 s delay). media_control{playpause|next|prev} only. get_system_stats = CPU/RAM/disk/battery. idle_time = seconds since last input. focus_assist opens Windows' settings page for the user. lock_screen: ask first.",
-  "CLIPBOARD/FILES/ALERTS: read_clipboard; write_clipboard{text}. clipboard_history{start|stop|list(limit)|use(index)|clear} is opt-in and privacy-sensitive — if it errors as disabled, tell the user to set IRIS_CLIPBOARD_HISTORY=1; announce when you start it. search_local_files{query, max?} needs Everything (es.exe); query must not start with - or /. read_system_notifications{limit?} masks OTP codes; reveal_otp only when the user asks to hear one. send_desktop_notification{title,message} = toast NOW; quick_reminder{action: schedule(minutes,title,message) | list | cancel(id)} = LATER (max 7 days).",
-  "CONFIRMATION: power_manager, process_manager kill, close_app, system_control (wifi off / bluetooth / camera) and reveal_otp first return needs_confirmation + confirm_token without acting. Read the action aloud; only after a spoken yes re-call the SAME tool with the SAME args + confirm_token. Never confirm on your own.",
-  "ERRORS: on status:'error' give the reason in one short line (e.g. es.exe/Tesseract/Python missing, UAC not accepted, Windows-only) — fix a missing/invalid argument and retry once, otherwise don't retry blindly.",
-].join(" ");
+  "LOCAL OS/HARDWARE TOOLS (/tools): ALWAYS call these tools directly for any desktop, window, system, or hardware request — NEVER delegate to Claude via submit_claude_task.",
+  "1. APPS & WINDOWS: open_url_or_app{target, is_url}; close_app{target}; minimize_app{target} (hide app to taskbar); hide_app{target} (fully invisible); restore_app{target}; move_window_precise{name, x, y, width?, height?} (resize/shrink/move window); move_window_magic{mode, x, y}; desktop_manager{action: new|close|left|right|boss} ('boss' = Win+D hide all windows / show desktop); process_manager{action: list|kill, name?}; write_note{text, is_new?}.",
+  "2. MOUSE & SCREEN: mouse_control{action: move|click|drag|scroll|position|release, x?, y?, button?}; take_ai_screenshot{save?} (inspect screen); take_camera_snapshot{target?, save?} (capture photo/snapshot of a specific robot camera, Alt+C/companion phone camera, or smart home camera, e.g. 'chụp ảnh camera robot 1', 'chụp camera alt c', 'chụp camera điện thoại', 'chụp ảnh robot thám hiểm'); ocr_region{left?, top?, width?, height?} (read text on screen); color_picker{x?, y?}; active_window_info; view_image{action: latest|prev|next|close}; multi_monitor_info.",
+  "3. SYSTEM & HARDWARE: system_control{volume: up|down|mute|unmute, volume_level: 0-100, brightness: 0-100, wifi: on|off, bluetooth: on|off, camera: on|off}; wifi_manager{action: list|profiles|status|connect|disconnect, ssid?}; power_manager{action: sleep|shutdown|restart}; media_control{action: playpause|next|prev}; get_system_stats (CPU/RAM/disk/battery); idle_time; focus_assist; lock_screen.",
+  "4. CLIPBOARD, FILES & ALERTS: file_explorer{path, action?, select?} (open folder or file in File Explorer); read_clipboard; write_clipboard{text}; clipboard_history{action: list|use|clear|start|stop}; search_local_files{query, max?} (fast search via Everything); read_system_notifications{limit?, reveal_otp?}; send_desktop_notification{title, message}; quick_reminder{action: schedule|list|cancel, minutes?, title?, message?}.",
+  "5. VIETNAMESE COMMANDS & AMBIGUITY DISAMBIGUATION: 'ẩn màn hình' / 'về desktop' / 'hiện màn hình chính' / 'boss key' -> desktop_manager{action: 'boss'}; 'ẩn' / 'hạ xuống taskbar' / 'giấu đi' (làm biến mất khỏi màn hình) -> app: minimize_app{target} (hoặc hide_app{target} nếu ẩn hoàn toàn); Iris: control_ui{action: 'minimize_iris'}; 'thu nhỏ' / 'cho nhỏ lại' (thu nhỏ kích thước, VẪN TRÊN MÀN HÌNH, KHÔNG PHẢI ẨN) -> app: move_window_precise{name, x, y, width, height}; Iris PiP: control_ui{action: 'toggle_robot_pip'}; 'phóng to' / 'mở lại' / 'hiện lại' -> app: restore_app{target}; Iris: control_ui{action: 'restore_iris'}; 'đóng ứng dụng' / 'tắt app' -> close_app; mở thư mục/file/ổ đĩa/Downloads/Desktop trong File Explorer -> file_explorer; âm lượng/độ sáng -> system_control; nghe/dừng nhạc -> media_control; tình trạng pin/RAM/CPU -> get_system_stats; chụp/xem/nhìn màn hình -> take_ai_screenshot; chụp ảnh camera/robot/Alt+C ('chụp ảnh camera robot 1', 'chụp camera alt c', 'chụp camera điện thoại', 'chụp robot thám hiểm', 'chụp camera') -> take_camera_snapshot{target}; theo dõi màn hình liên tục -> toggle_screen_vision; tìm file -> search_local_files; đọc clipboard/sao chép -> read_clipboard/write_clipboard; tắt máy/ngủ -> power_manager.",
+  "6. CONFIRMATION: Destructive actions (power_manager, process_manager kill, system_control for wifi off/bluetooth/camera, lock_screen) return needs_confirmation + confirm_token. close_app executes IMMEDIATELY without confirmation. Announce to user, and upon verbal consent ('yes'/'đồng ý'), re-call the tool with the same parameters + confirm_token.",
+  "7. RESPONSE: Execute immediately, speak 1 short, natural sentence after completion."
+].join("\n");
 
 export function buildLiveConfig(resumeHandle) {
   const isClaudeEnabled = process.env.IRIS_CLAUDE_ENABLED !== "false";
@@ -132,6 +135,9 @@ export function buildLiveConfig(resumeHandle) {
         {
           text: [
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
+            "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (QUY TẮC IM LẶNG & TRỢ LÝ CHUYÊN NGHIỆP):",
+            "- DO NOT INTERRUPT THIRD-PARTY CONVERSATIONS: When the user is talking with friends, colleagues, family, in a meeting, or on a phone call in the room, STAY COMPLETELY SILENT. NEVER comment, interrupt, chime in, or reply to their conversation. ONLY respond when the user speaks DIRECTLY to you (e.g. addressing you by name 'Iris', 'này Iris', or issuing a clear instruction directed to the assistant). When in doubt whether the user is talking to someone else or to you: ALWAYS DEFAULT TO SILENCE.",
+            "- RESPECT SILENCE & NEVER ASK UNSOLICITED QUESTIONS: When the user is silent, working, thinking, reading, typing, or when there is ambient background noise: REMAIN ABSOLUTELY SILENT. NEVER speak unprompted asking 'Are you there?', 'Do you need help?', 'Bạn có đó không?', 'Bạn đang nghĩ gì thế?'. You are an executive, discreet assistant: always 100% attentive and ready when called, but NEVER noisy or intrusive.",
             "Claude is your worker brain for terminal, files, web, coding, research, deals and background automation. You also have built-in Google Search — use it directly for quick facts and simple lookups that don't need Claude.",
             `CRITICAL: be decisive, never ask clarifying questions for actionable work. Any request to research, code, check, build, or find a deal -> immediately submit_claude_task. Only exception: a NEW project/feature goes through PO intake (see PRODUCT OWNER CONTROL below).`,
             "Routing: quick fact -> Google Search. Multi-step/background work -> Claude. Anything covered by a lane below -> call that lane directly, never through Claude, and never make the user wait behind a busy Claude session for it.",
@@ -152,14 +158,14 @@ export function buildLiveConfig(resumeHandle) {
             "BRIEF WRITING — the 'task' string is all headless Claude gets, so nothing left unwritten survives: PO gets a short control intent (never a PRD/tasks/acceptance-criteria — that's its job). DEV gets 'implement the open change' (+ its name if given, + any spoken override the spec can't know about). STUDY gets an explicit RECORD or VERIFY brief with the synthesis/claims and source verbatim. A Decisions-needed follow-up restates each decision + chosen option verbatim, never reopening settled ones. Self-check before sending: could someone who never heard this conversation do the work from the brief alone?",
             "UI control: toggle teleprompter/copilot/meeting-recorder/cameras via control_ui's matching toggle_* action. 'open it/that result', 'show history', 'close it', 'go back', 'open the current task' -> get_ui_context + control_ui, never submit_claude_task. 'show/hide the steps' -> show_task_steps/hide_task_steps, target named in query if given, else the viewed or running task.",
             "Task-by-description: 'open the failed one'/'open the deals task' -> control_ui action open_task_by_query with those words as query, no exact match needed. If Iris shows a chooser for multiple matches, user can click or say first/second/third — check pendingTaskMatches via get_ui_context first. Ambiguous UI command -> prefer expanded task, then focused task, then latest result. Keep acknowledgements short.",
-            `SLEEP: on 'go to sleep'/'goodnight'/'that's all for now', a short goodbye then go_to_sleep — only when explicitly asked. A pending PO question always gets answered before an ambiguous new open-task request.`,
+            `SLEEP: on 'go to sleep'/'goodnight'/'that's all for now'/'ngủ đi'/'tạm nghỉ', a short goodbye then go_to_sleep — only when explicitly asked. A pending PO question always gets answered before an ambiguous new open-task request.`,
             `After submit_claude_task: 'started' -> one short line ("On it, Claude's on it now"); 'queued' -> tell ${userDisplayName()} it's queued behind the current task. Keep what you SAY short even when what you SENT was detailed.`,
             `start_new_claude_session only on an explicit request (new/fresh session, start over); confirm briefly afterward.`,
-            `On SYSTEM_EVENT_SESSION_START, speak a warm welcome-back greeting to ${userDisplayName()} immediately, without waiting for them to talk first.`,
+            `On SYSTEM_EVENT_SESSION_START, greet ${userDisplayName()} in English once: "Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?", then listen quietly.`,
             `On SYSTEM_EVENT_CLAUDE_COMPLETE, proactively announce it (even mid-chat), briefly: Claude's back, summarize, ask if they want the details before continuing.`,
             "Answer directly only for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
-            "IMPORTANT VIETNAMESE UI MAPPING: 'phongto', 'phóng to', 'moro', 'mở rộng', 'mở lại', 'hiện lại' = bring the Iris UI back -> control_ui restore_iris if it is on the taskbar, or toggle_robot_pip again if it is in Picture-in-Picture. 'thu nhỏ' in ANY form ('thu nhỏ', 'thu nhỏ tab', 'cho nhỏ lại', 'nhỏ lại') = shrink the Iris window to Picture-in-Picture -> control_ui toggle_robot_pip; never minimize_iris, minimize_app or hide_app for these. 'ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ' about Iris itself = control_ui minimize_iris (to the taskbar); about ANOTHER app = minimize_app with that app's exe. minimize_app/hide_app/close_app/restore_app cannot act on Iris's own window. NEVER confuse these.",
+            "IMPORTANT VIETNAMESE UI MAPPING: DO NOT confuse 'thu nhỏ' (making window size smaller / PiP, still visible on screen) with 'ẩn' (hiding/minimizing to taskbar or boss key). (1) 'Ẩn màn hình', 'về desktop', 'hiện desktop' = desktop_manager{action: 'boss'}. (2) 'Thu nhỏ' Iris ('thu nhỏ', 'thu nhỏ Iris', 'cho Iris nhỏ lại') = shrink Iris to Picture-in-Picture -> control_ui toggle_robot_pip; 'Thu nhỏ' an external app ('thu nhỏ cửa sổ Chrome/Notepad', 'cho nhỏ lại') = move_window_precise with smaller width/height (window stays visible on screen); NEVER call minimize_app, hide_app, or minimize_iris when the user asks to 'thu nhỏ'. (3) 'Ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ' = for Iris itself: control_ui minimize_iris (drops Iris to the taskbar); for another app: minimize_app with that app's exe (or hide_app if fully hidden). (4) 'Phóng to', 'mở rộng', 'mở lại', 'hiện lại' = control_ui restore_iris if Iris is on the taskbar, or toggle_robot_pip again if Iris is in Picture-in-Picture; for another app: restore_app with that app's exe. minimize_app/hide_app/close_app/restore_app cannot act on Iris's own window. NEVER confuse these.",
             // Ported from myiris: each capability's own prose, spliced in
             // rather than concatenated elsewhere since prose position here is
             // meaningful. Empty string (capability not applicable right now,
@@ -179,23 +185,12 @@ export function buildLiveConfig(resumeHandle) {
 
 export function sendWelcomeGreeting() {
   (async () => {
-    let reachable = false;
-    try {
-      const status = await checkClaudeStatus();
-      reachable = Boolean(status.reachable);
-    } catch {
-      reachable = false;
-    }
     if (!liveSession) return;
 
-    const claudeLine = reachable
-      ? "Claude is online and all channels are connected, so we're good to go."
-      : "I'm still bringing Claude online, channels are connecting now.";
-
     const greeting =
-      `SYSTEM_EVENT_SESSION_START: The session just started. Proactively greet ${userDisplayName()} out loud right now in a warm, concise way (1-2 sentences). ` +
-      `Say something like: Hi ${userDisplayName()}, welcome back. ${claudeLine} Then ask what they have in mind. ` +
-      "Speak this greeting immediately without waiting for the user to talk first.";
+      `SYSTEM_EVENT_SESSION_START: The app just started up. Greet ${userDisplayName()} in ENGLISH right now, saying: ` +
+      `"Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?" ` +
+      `CRITICAL: Speak this English greeting ONCE right now. After this greeting, stay quietly attentive and do NOT repeat it or ask unsolicited questions.`;
 
     liveSession.sendRealtimeInput({ text: greeting });
   })();
@@ -380,6 +375,7 @@ export async function stopLive() {
   userStopped = true;
   resumptionHandle = null;
   reconnectAttempts = 0;
+  hasGreetedStartup = false;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

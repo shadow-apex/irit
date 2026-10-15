@@ -91,7 +91,7 @@ test("mã hoá: không BOM, không mojibake trong mã nguồn electron/ src/ scr
 });
 
 test("không còn file rác / ảnh chụp / transcript / bí mật trong repo", () => {
-  for (const f of ["patch.js", "patch.cjs", "test-config.mjs", "test-syntax.mjs", "test-gemini.mjs", "print_diff.py", "diff_output.txt", "remove_tools.py", "test.png", "robots.json", "smarthome_cameras.json"]) {
+  for (const f of ["patch.js", "patch.cjs", "patch.py", "test-smarthome.mjs", "test-config.mjs", "test-syntax.mjs", "test-gemini.mjs", "print_diff.py", "diff_output.txt", "remove_tools.py", "test.png", "robots.json", "smarthome_cameras.json"]) {
     assert.equal(fs.existsSync(path.join(root, f)), false, `file không được có mặt: ${f}`);
   }
   assert.equal(fs.existsSync(path.join(root, "teleprompter_logs")), false);

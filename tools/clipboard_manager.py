@@ -32,13 +32,16 @@ if __name__ == "__main__":
         if a.action == "read":
             content = pyperclip.paste()
             _common.emit(True, text=content or "", empty=not content)
-        text = sys.stdin.buffer.read().decode("utf-8", errors="replace") if a.stdin else (a.text or "")
-        if not text:
-            _common.fail("Thiếu nội dung để ghi vào clipboard.")
-        if len(text) > MAX_WRITE_CHARS:
-            _common.fail(f"Văn bản quá dài (> {MAX_WRITE_CHARS} ký tự).")
-        pyperclip.copy(text)
-        _common.emit(True, message=f"Đã chép {len(text)} ký tự vào clipboard.", chars=len(text))
+            sys.exit(0)
+        elif a.action == "write":
+            text = sys.stdin.buffer.read().decode("utf-8", errors="replace") if a.stdin else (a.text or "")
+            if not text:
+                _common.fail("Thiếu nội dung để ghi vào clipboard.")
+            if len(text) > MAX_WRITE_CHARS:
+                _common.fail(f"Văn bản quá dài (> {MAX_WRITE_CHARS} ký tự).")
+            pyperclip.copy(text)
+            _common.emit(True, message=f"Đã chép {len(text)} ký tự vào clipboard.", chars=len(text))
+            sys.exit(0)
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001

@@ -19,11 +19,42 @@ def to_int(v):
 def pick_color(x=None, y=None):
     _common.dpi_aware()
     if x is None or y is None:
-        pg = _common.require("pyautogui")
-        x, y = pg.position()
-    from PIL import ImageGrab
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+            pt = POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            x, y = pt.x, pt.y
+        except Exception:
+            pg = _common.require("pyautogui")
+            x, y = pg.position()
 
     x, y = int(x), int(y)
+
+    # Thử nhanh & chính xác qua GDI GetPixel (không bị lỗi screen grab failed)
+    try:
+        import ctypes
+
+        hdc = ctypes.windll.user32.GetDC(None)
+        if hdc:
+            try:
+                color = ctypes.windll.gdi32.GetPixel(hdc, x, y)
+                if color != 0xFFFFFFFF:  # CLR_INVALID
+                    r = color & 0xFF
+                    g = (color >> 8) & 0xFF
+                    b = (color >> 16) & 0xFF
+                    return {"x": x, "y": y, "rgb": {"r": r, "g": g, "b": b}, "hex": "#{:02X}{:02X}{:02X}".format(r, g, b)}
+            finally:
+                ctypes.windll.user32.ReleaseDC(None, hdc)
+    except Exception:
+        pass
+
+    # Dự phòng qua PIL ImageGrab nếu GDI không trả được
+    from PIL import ImageGrab
     img = ImageGrab.grab(bbox=(x, y, x + 1, y + 1), all_screens=True).convert("RGB")
     r, g, b = img.getpixel((0, 0))
     return {"x": x, "y": y, "rgb": {"r": r, "g": g, "b": b}, "hex": "#{:02X}{:02X}{:02X}".format(r, g, b)}

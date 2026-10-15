@@ -30,6 +30,7 @@ import { triggerSmartHome } from "./robot-actions.mjs";
 import {
   toggleScreenVision,
   toggleRobotVision,
+  takeCameraSnapshot,
   toggleCameraStreamVision,
   toggleSmartHomeVision,
   requestDeskSnapshot,
@@ -93,6 +94,7 @@ import {
   searchEverythingTool,
   readNotificationsTool,
   sysMonitorTool,
+  fileExplorerTool,
 } from "./local-tools.mjs";
 
 // S-11: xác nhận hai bước cho tool nguy hiểm (shutdown/kill/tắt wifi...). Hiện cảnh báo lên HUD/log.
@@ -132,6 +134,8 @@ export async function executeClaudeTool(name, args = {}) {
       return toggleScreenVision();
     case "toggle_robot_vision":
       return toggleRobotVision(args);
+    case "take_camera_snapshot":
+      return takeCameraSnapshot(args);
     case "toggle_camera_stream_vision":
       return toggleCameraStreamVision();
     case "toggle_smarthome_vision":
@@ -282,6 +286,8 @@ export async function executeClaudeTool(name, args = {}) {
       return mediaControlTool(args.action);
     case "desktop_manager":
       return desktopManagerTool(args.action);
+    case "file_explorer":
+      return await fileExplorerTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

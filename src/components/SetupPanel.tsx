@@ -98,6 +98,8 @@ const I18N = {
     notesSkillsNote: "Installs wiki-* skills for note retrieval in ~/iris-second-brain.",
     advancedTitle: "Advanced & Testing",
     advancedHint: "Demo data lets you explore Iris without real Claude work.",
+    hudTopNotch: "HUD Top Notch / Sci-Fi Border",
+    hudTopNotchNote: "Show futuristic neon border and center notch at the top of HUD (Alt+Space).",
     demoData: "Load Demo / Test Data",
     demoDataNote: "Fills Work Stream with sample task cards.",
     savedTo: "Saved to",
@@ -176,6 +178,8 @@ const I18N = {
     notesSkillsNote: "Cài kỹ năng wiki-* để lưu và tra cứu ghi chú (~/iris-second-brain).",
     advancedTitle: "Dữ Liệu Thử Nghiệm",
     advancedHint: "Dữ liệu mẫu giúp khám phá Iris mà không tốn token thật.",
+    hudTopNotch: "Viền Trên Màn Hình HUD (Top Notch)",
+    hudTopNotchNote: "Hiển thị khung viền neon công nghệ ở cạnh trên màn hình HUD (Alt+Space).",
     demoData: "Nạp dữ liệu mẫu (Demo Data)",
     demoDataNote: "Tạo các thẻ công việc mẫu để thử nghiệm giao diện.",
     savedTo: "Lưu vào",
@@ -247,6 +251,8 @@ export default function SetupPanel({
   onToggleSounds,
   cameraDeviceId,
   onChangeCameraDevice,
+  hudTopNotchEnabled,
+  onToggleHudTopNotch,
   onClose,
   onSaved,
   onStart,
@@ -258,6 +264,8 @@ export default function SetupPanel({
   onToggleSounds: () => void;
   cameraDeviceId: string;
   onChangeCameraDevice: (deviceId: string) => void;
+  hudTopNotchEnabled?: boolean;
+  onToggleHudTopNotch?: (enabled: boolean) => void;
   onClose: () => void;
   onSaved: (config: IrisConfig) => void;
   onStart?: () => void;
@@ -652,6 +660,21 @@ export default function SetupPanel({
       </div>
       <div className="setup-grid-2" style={{ marginTop: 4 }}>
         <NotesSkillsField t={t} />
+        <label className="setup-field compact">
+          <span>{t.hudTopNotch}</span>
+          <ThemedSelect
+            ariaLabel={t.hudTopNotch}
+            value={hudTopNotchEnabled !== false ? "true" : "false"}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => onToggleHudTopNotch?.(value === "true")}
+          />
+          <small className="setup-note">{t.hudTopNotchNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
         <label className="setup-field compact">
           <span>{t.demoData}</span>
           <ThemedSelect

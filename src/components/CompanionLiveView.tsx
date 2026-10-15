@@ -13,12 +13,14 @@ import { companionStream } from "../lib/companionStream";
 export default function CompanionLiveView({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
+  const [hasFrame, setHasFrame] = useState(false);
   const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
   const [speakerMuted, setSpeakerMuted] = useState(true);
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeStream((stream) => {
       setHasStream(Boolean(stream));
+      setHasFrame(false);
       if (videoRef.current) {
         if (videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject = stream;
@@ -27,6 +29,22 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
       }
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onFrame = () => setHasFrame(true);
+    video.addEventListener("loadedmetadata", onFrame);
+    video.addEventListener("canplay", onFrame);
+    video.addEventListener("playing", onFrame);
+    video.addEventListener("timeupdate", onFrame);
+    return () => {
+      video.removeEventListener("loadedmetadata", onFrame);
+      video.removeEventListener("canplay", onFrame);
+      video.removeEventListener("playing", onFrame);
+      video.removeEventListener("timeupdate", onFrame);
+    };
   }, []);
 
   useEffect(() => {
@@ -175,7 +193,7 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
               width: "100%",
               height: "100%",
               objectFit: "contain",
-              display: hasStream ? "block" : "none",
+              display: hasFrame ? "block" : "none",
             }}
           />
           {!hasStream && (
@@ -196,6 +214,39 @@ export default function CompanionLiveView({ onClose }: { onClose: () => void }) 
               <span style={{ color: "#777", fontSize: 11 }}>
                 Quét QR ở panel Companion Camera (Alt+C) để kết nối.
               </span>
+            </div>
+          )}
+          {hasStream && !hasFrame && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 12,
+                color: "rgb(230, 180, 60)",
+                fontSize: 13,
+                textAlign: "center",
+                padding: "0 24px",
+                maxWidth: 540,
+              }}
+            >
+              <Smartphone size={32} style={{ opacity: 0.8 }} />
+              <div style={{ fontWeight: 600 }}>Đã bắt tay WebRTC, đang chờ nhận khung hình video...</div>
+              <div
+                style={{
+                  color: "#bbb",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  background: "rgba(255, 255, 255, 0.05)",
+                  padding: "12px 16px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  textAlign: "left",
+                }}
+              >
+                ⚠️ <strong>Nếu màn hình đứng yên ở đây:</strong> Máy tính và điện thoại đang kết nối qua <strong>Điểm phát sóng cá nhân (iPhone Hotspot dải 172.20.10.x)</strong> hoặc Wi-Fi bật Client Isolation, khiến luồng video trực tiếp (UDP) bị chặn.<br />
+                👉 <strong>Cách khắc phục:</strong> Kết nối cả PC và điện thoại vào <strong>cùng mạng Wi-Fi</strong> thông thường, hoặc cắm cáp USB giữa điện thoại và máy tính.
+              </div>
             </div>
           )}
         </div>

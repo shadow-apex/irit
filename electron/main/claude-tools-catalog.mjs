@@ -102,7 +102,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "minimize_app",
-          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to minimize (in Vietnamese: 'ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ') an app. DO NOT use this when the user says 'thu nhỏ' (which means Picture-in-Picture mode). It cannot act on Iris itself (use control_ui minimize_iris). Provide the executable name (e.g., 'calc.exe', 'notepad.exe').",
+          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to minimize (in Vietnamese: 'ẩn tab', 'ẩn đi', 'giấu đi', 'hạ xuống taskbar', 'dấu trừ') an app. DO NOT use this when the user says 'thu nhỏ' (which means resizing the window smaller or Picture-in-Picture mode, NOT hiding it) or 'ẩn màn hình' (which means desktop_manager boss key). It cannot act on Iris itself (use control_ui minimize_iris). Provide the executable name (e.g., 'calc.exe', 'notepad.exe').",
           parameters: {
             type: "object",
             properties: {
@@ -156,6 +156,28 @@ function buildClaudeToolsRaw() {
             },
             required: ["query"]
           }
+        },
+        {
+          name: "file_explorer",
+          description: "Open any folder or file in Windows File Explorer via tools/file_explorer.py. Supports opening folders (e.g., 'Downloads', 'Desktop', 'Documents', 'C:\\Projects', 'D:'), opening and highlighting a specific file in its containing folder (action='select'), or opening a file with its default program (action='open').",
+          parameters: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: "Path to folder or file to open in File Explorer (e.g. 'Downloads', 'Desktop', 'Documents', 'C:\\Users\\...', 'D:', or a relative path).",
+              },
+              action: {
+                type: "string",
+                description: "Action to take: 'auto' (default: open folder if directory, highlight if file), 'explore' (open folder in Explorer), 'select' (open containing folder and highlight file), 'open' (open file directly with associated program).",
+              },
+              select: {
+                type: "boolean",
+                description: "If true, opens the folder and highlights/selects the file.",
+              },
+            },
+            required: ["path"],
+          },
         },
         {
           name: "read_system_notifications",
@@ -214,7 +236,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "move_window_precise",
-          description: "Move and optionally resize a window on the user's screen via tools/move_window.py (Win32 API, no PowerShell). Use when the user asks you to move a specific window by name to an exact coordinate.",
+          description: "Move and optionally resize a window on the user's screen via tools/move_window.py (Win32 API, no PowerShell). Use when the user asks you to move or resize/shrink a specific window (in Vietnamese: 'thu nhỏ cửa sổ', 'cho cửa sổ nhỏ lại', 'di chuyển cửa sổ') by name.",
           parameters: {
             type: "object",
             properties: {
@@ -404,6 +426,17 @@ function buildClaudeToolsRaw() {
             type: "object",
             properties: {
               robot_id: { type: "string", description: "The ID of the robot to view." }
+            }
+          },
+        },
+        {
+          name: "take_camera_snapshot",
+          description: "Take a single photo/snapshot from a specific robot camera, the Companion/Alt+C phone camera, or a smart home camera, and save it to disk. Invoke this when the user asks via voice or chat to take a picture/photo/snapshot of a camera or robot (in Vietnamese: 'chụp ảnh camera robot 1', 'chụp ảnh camera alt c', 'chụp camera điện thoại', 'chụp ảnh robot thám hiểm', 'chụp camera số 1', 'chụp ảnh camera mock', 'chụp hình camera robot').",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "The name, ID, or index (1, 2, 3...) of the camera/robot to capture (e.g. 'esp32_robot_1', 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1', a smart home camera ID, or 'alt c' / 'companion' / 'phone' for the companion phone camera). If omitted, captures the active or first available camera." },
+              save: { type: "boolean", description: "Whether to save the snapshot to disk as an image file. Defaults to true." }
             }
           },
         },
@@ -849,11 +882,11 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "desktop_manager",
-          description: "Manages virtual desktops and boss key via tools/desktop_manager.py.",
+          description: "Manages virtual desktops and boss key via tools/desktop_manager.py. Use action='boss' when the user asks to hide screen / show desktop (in Vietnamese: 'ẩn màn hình', 'về desktop', 'hiện màn hình chính', 'boss key').",
           input_schema: {
             type: "object",
             properties: {
-              action: { type: "string", enum: ["new", "close", "left", "right", "boss"], description: "The desktop action to perform. 'boss' minimizes all windows." }
+              action: { type: "string", enum: ["new", "close", "left", "right", "boss"], description: "The desktop action to perform. 'boss' minimizes all windows to reveal desktop ('ẩn màn hình')." }
             },
             required: ["action"]
           }

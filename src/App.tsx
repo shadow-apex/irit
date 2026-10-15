@@ -63,7 +63,9 @@ function loadCameraDeviceId(): string {
 }
 
 export default function App() {
-  const [hasPlayedIntro, setHasPlayedIntro] = useState(false);
+  const [hasPlayedIntro, setHasPlayedIntro] = useState(
+    () => new URLSearchParams(window.location.search).get("skipintro") === "1"
+  );
   const [sidecarRunning, setSidecarRunning] = useState(false);
   // Drives the WebGL backdrop/orb render loops: paused (0 GPU) whenever the
   // window is unfocused, independent of awake/asleep.
@@ -199,6 +201,21 @@ export default function App() {
       // Best-effort persistence; the selection still applies for this session.
     }
   }
+
+  const [hudTopNotchEnabled, setHudTopNotchEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("iris.hudTopNotchEnabled") !== "false";
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleHudTopNotch = (enabled: boolean) => {
+    setHudTopNotchEnabled(enabled);
+    try {
+      window.localStorage.setItem("iris.hudTopNotchEnabled", enabled ? "true" : "false");
+    } catch {}
+  };
 
   // Wake/sleep edges: fire the orb's double-pulse and the audio cues.
   const prevRunningRef = useRef(false);
@@ -622,7 +639,7 @@ export default function App() {
   }, [transcript]);
 
   const working = useMemo(
-    () => tasks.some((task) => !TERMINAL.has(task.status.toLowerCase())) && tasks.length > 0,
+    () => tasks.some((task) => !TERMINAL.has(task.status.toLowerCase())),
     [tasks],
   );
 
@@ -1757,6 +1774,49 @@ export default function App() {
     };
   }, [cameraStreamVisionEnabled]);
 
+  // Lắng nghe yêu cầu chụp ảnh từ camera điện thoại (Alt+C / Companion) qua giọng nói/chat
+  useEffect(() => {
+    if (!hasBridge || !window.iris.onSnapCompanionVision) return;
+    return window.iris.onSnapCompanionVision(() => {
+      const stream = companionStream.getStream();
+      if (!stream || stream.getVideoTracks().length === 0) {
+        window.iris.sendCompanionVisionFrame("");
+        return;
+      }
+      const video = document.createElement("video");
+      video.autoplay = true;
+      video.muted = true;
+      video.srcObject = stream;
+      const canvas = document.createElement("canvas");
+      let sent = false;
+      const trySend = () => {
+        if (sent) return;
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          const dataUrl = videoToJpegDataUrl(video, canvas, 1280, 0.85);
+          if (dataUrl) {
+            sent = true;
+            video.srcObject = null;
+            window.iris.sendCompanionVisionFrame(dataUrl);
+          }
+        }
+      };
+      video.onloadeddata = () => {
+        trySend();
+      };
+      video.play().then(() => trySend()).catch(() => {});
+      setTimeout(trySend, 250);
+      setTimeout(() => {
+        if (!sent) {
+          trySend();
+          if (!sent) {
+            video.srcObject = null;
+            window.iris.sendCompanionVisionFrame("");
+          }
+        }
+      }, 1000);
+    });
+  }, [hasBridge]);
+
   const caption = useMemo(() => {
     if (!sidecarRunning)
       return {
@@ -1792,21 +1852,9 @@ export default function App() {
         : audioState === "idle"
           ? "warn"
           : "on";
-  if (!hasPlayedIntro) {
-    const searchParams = new URLSearchParams(window.location.search);
-    const isAutoStart = searchParams.get("autostart") === "1";
-    const speedParam = searchParams.has("speed") ? parseFloat(searchParams.get("speed") || "1") : 1;
-    return (
-      <SciFiScanReveal 
-        autoStart={isAutoStart}
-        speed={speedParam}
-        onComplete={() => {
-          setHasPlayedIntro(true);
-          if (!sidecarRunning) start();
-        }} 
-      />
-    );
-  }
+  const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const isAutoStart = searchParams?.get("autostart") === "1";
+  const speedParam = searchParams?.has("speed") ? parseFloat(searchParams.get("speed") || "1") : 1;
 
 
   
@@ -1870,6 +1918,7 @@ export default function App() {
           galaxyPositionsRef={galaxyPositionsRef}
           handStateRef={handStateRef}
           readerOpen={Boolean(openNote)}
+          hudTopNotchEnabled={hudTopNotchEnabled}
         />
       ) : (
       <div
@@ -2005,6 +2054,8 @@ export default function App() {
           />
         ) : null}
 
+        {booting ? <BootSequence visible={booting} /> : null}
+
         <footer className="deck-foot">
           <span className="build-meta">
             IRIS · build 0.2.0 · by Ashutosh Shrivastava ·{" "}
@@ -2017,8 +2068,6 @@ export default function App() {
             </a>
           </span>
         </footer>
-
-        {booting ? <BootSequence visible={booting} /> : null}
       </div>
       )}
 
@@ -2062,6 +2111,8 @@ export default function App() {
           config={fullConfig}
           soundsEnabled={soundsEnabled}
           onToggleSounds={toggleSounds}
+          hudTopNotchEnabled={hudTopNotchEnabled}
+          onToggleHudTopNotch={toggleHudTopNotch}
           cameraDeviceId={cameraDeviceId}
           onChangeCameraDevice={setCameraDeviceId}
           onClose={() => setSetup(null)}
@@ -2080,6 +2131,28 @@ export default function App() {
       ) : null}
       <CompanionWebRTC />
       <MusicWidget />
+      {!hasPlayedIntro && (
+        <div 
+          style={{ 
+            position: "fixed", 
+            inset: 0, 
+            zIndex: 999999,
+            borderRadius: isFullscreen ? 0 : "14px",
+            overflow: "hidden",
+            boxShadow: isFullscreen ? "none" : "inset 0 0 0 1px rgba(148, 196, 255, 0.08)",
+          }}
+        >
+          <SciFiScanReveal 
+            autoStart={isAutoStart}
+            speed={speedParam}
+            transparentBackdrop={true}
+            onComplete={() => {
+              setHasPlayedIntro(true);
+              if (!sidecarRunning) start();
+            }} 
+          />
+        </div>
+      )}
     </>
   );
 }

@@ -16,5 +16,5 @@ winsdk          # read_notifications.py (WinRT UserNotificationListener)
 
 # Không cần cài thêm (chỉ dùng ctypes/subprocess/winreg có sẵn):
 #   idle_time.py, lock_screen.py, multi_monitor_info.py, magic_move.py, move_window.py,
-#   wifi_manager.py, power_manager.py, sys_control.py, focus_assist.py
+#   wifi_manager.py, power_manager.py, sys_control.py, focus_assist.py, file_explorer.py
 # Cần chương trình ngoài (không phải gói pip): Everything CLI `es.exe` cho search_everything.py.

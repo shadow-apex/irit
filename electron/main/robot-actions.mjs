@@ -30,6 +30,16 @@ export function resolveRobotDevice(device) {
   const needleNorm = normalizeViText(device);
   const needleTokens = tokenize(device);
 
+  // Khớp số thứ tự 1-based (ví dụ "1", "robot 1", "camera 1", "cửa sổ 1", "#1")
+  const numMatch = needleNorm.match(/^(?:robot|camera|cam|cua so|thiet bi)?\s*(?:so\s*)?#?(\d+)$/);
+  if (numMatch) {
+    const idx = parseInt(numMatch[1], 10) - 1;
+    const ids = Object.keys(robots);
+    if (idx >= 0 && idx < ids.length) {
+      return { status: "ok", id: ids[idx] };
+    }
+  }
+
   // 2) Khớp chính xác theo id hoặc tên (chuẩn hoá dấu + hoa/thường)
   const exactMatches = [];
   for (const [id, cfg] of Object.entries(robots)) {
@@ -41,14 +51,14 @@ export function resolveRobotDevice(device) {
   if (exactMatches.length === 1) return { status: "ok", id: exactMatches[0] };
   if (exactMatches.length > 1) return { status: "ambiguous", ids: exactMatches };
 
-  // 3) Khớp theo token: mọi từ trong lệnh phải xuất hiện TRỌN VẸN trong tên
+  // 3) Khớp theo token: mọi từ trong lệnh phải xuất hiện TRỌN VẸN trong tên/id
   // thiết bị (không phải substring ký tự) để tránh khớp nhầm kiểu "đèn" lọt
   // vào giữa 1 từ khác không liên quan.
   if (needleTokens.length > 0) {
     const tokenMatches = [];
     for (const [id, cfg] of Object.entries(robots)) {
-      const nameTokens = tokenize(cfg?.name || "");
-      if (needleTokens.every((t) => nameTokens.includes(t))) {
+      const allTokens = [...tokenize(id), ...tokenize(cfg?.name || "")];
+      if (needleTokens.every((t) => allTokens.includes(t))) {
         tokenMatches.push(id);
       }
     }

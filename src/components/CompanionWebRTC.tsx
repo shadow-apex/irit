@@ -16,7 +16,6 @@ async function loadIceServers(): Promise<RTCIceServer[]> {
   }
   return DEFAULT_ICE_SERVERS;
 }
-const MAX_BUFFERED_BYTES = 1_000_000;
 
 // FIX BUG-AUDIO-AUTOPLAY-01: Chromium chặn AudioContext ở trạng thái
 // "suspended" cho tới khi có một User Gesture (click/keydown/touch) THẬT SỰ
