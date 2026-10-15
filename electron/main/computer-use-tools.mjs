@@ -62,45 +62,49 @@ export function getUiContext() {
 }
 
 export function controlUi({ action, target_id = undefined, query = undefined } = {}) {
+  const isWindowValid = mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.();
   switch (action) {
-    case "toggle_teleprompter":
-      toggleLiveTranscriber();
+    case "toggle_teleprompter": {
+      toggleLiveTranscriber().catch((err) => console.error("[controlUi] toggleLiveTranscriber error:", err));
       return { status: "success", message: "Toggled Teleprompter (Alt+T)" };
-    case "toggle_copilot":
+    }
+    case "toggle_copilot": {
       toggleCopilotMode();
       return { status: "success", message: "Toggled AI Copilot (Alt+A)" };
-    case "toggle_meeting_recorder":
-      toggleMeetingRecording();
+    }
+    case "toggle_meeting_recorder": {
+      toggleMeetingRecording().catch((err) => console.error("[controlUi] toggleMeetingRecording error:", err));
       return { status: "success", message: "Toggled Meeting Recorder (Alt+M)" };
+    }
     case "toggle_robot_pip":
-      if (mainWindow) mainWindow.webContents.send("ui:toggle-robot-pip");
+      if (isWindowValid) mainWindow.webContents.send("ui:toggle-robot-pip");
       return { status: "success", message: "Toggled Robot PiP (Alt+R)" };
     case "toggle_companion_pip":
-      if (mainWindow) mainWindow.webContents.send("ui:toggle-companion-pip");
+      if (isWindowValid) mainWindow.webContents.send("ui:toggle-companion-pip");
       return { status: "success", message: "Toggled Companion PiP (Alt+C)" };
     case "toggle_screen_vision":
       return toggleScreenVision(); // trạng thái thật (enabled/disabled/error), không "success" giả
     case "toggle_desk_vision":
       // V-06: kênh đúng là "vision:toggle-desk-continuous" (preload không nghe "vision:toggle-desk").
-      if (!mainWindow) return { status: "error", error: "Không có cửa sổ Iris." };
+      if (!isWindowValid) return { status: "error", error: "Không có cửa sổ Iris." };
       mainWindow.webContents.send("vision:toggle-desk-continuous");
       return { status: "success", message: "Đã gửi lệnh bật/tắt Desk Vision (Super+Shift+C)." };
     case "toggle_camera_stream_vision":
       return toggleCameraStreamVision();
     case "toggle_smarthome_pip":
-      if (mainWindow) mainWindow.webContents.send("ui:toggle-smarthome-pip");
+      if (isWindowValid) mainWindow.webContents.send("ui:toggle-smarthome-pip");
       return { status: "success", message: "Toggled Smart Home Cameras PiP (Alt+H)" };
     case "open_companion_live_view":
-      if (mainWindow) mainWindow.webContents.send("companion:open-live-view");
+      if (isWindowValid) mainWindow.webContents.send("companion:open-live-view");
       return { status: "success", message: "Opened Companion Live View." };
     // Cửa sổ của CHÍNH Iris không thể điều khiển qua minimize_app/hide_app (system_actions.py loại nó) — dùng hai action này.
     // Giống nút "—" trên thanh tiêu đề (win:control). backgroundThrottling=false nên Gemini Live vẫn nghe/nói khi đang thu xuống.
     case "minimize_iris":
-      if (!mainWindow || mainWindow.isDestroyed()) return { status: "error", error: "Không có cửa sổ Iris." };
+      if (!isWindowValid) return { status: "error", error: "Không có cửa sổ Iris." };
       mainWindow.minimize();
       return { status: "success", message: "Đã đưa cửa sổ Iris xuống thanh tác vụ. Nói 'mở lại Iris' hoặc bấm biểu tượng Iris trên thanh tác vụ để hiện lại." };
     case "restore_iris":
-      if (!mainWindow || mainWindow.isDestroyed()) return { status: "error", error: "Không có cửa sổ Iris." };
+      if (!isWindowValid) return { status: "error", error: "Không có cửa sổ Iris." };
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();

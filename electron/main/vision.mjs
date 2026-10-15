@@ -82,24 +82,45 @@ export function visionFrameGeometry() {
   };
 }
 
-function captureScreenFallback(geometry, quality = 50) {
+function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const pythonCmd = resolvePythonCommand();
     const scriptPath = path.join(unpackedRepoRoot(), "sidecar", "screen_capture.py");
-    const proc = spawn(pythonCmd, [scriptPath, String(geometry.frame_w), String(geometry.frame_h), String(quality)], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let proc;
+    let timer;
+    let settled = false;
+
+    const finish = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(val);
+    };
+
+    try {
+      proc = spawn(pythonCmd, [scriptPath, String(geometry.frame_w), String(geometry.frame_h), String(quality)], {
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      return reject(e);
+    }
+
+    timer = setTimeout(() => {
+      try { proc.kill(); } catch { /* ignore */ }
+      finish(reject, new Error(`Quá thời gian chờ chụp màn hình dự phòng (${timeoutMs}ms)`));
+    }, timeoutMs);
+
     const chunks = [];
     let errOutput = "";
     proc.stdout.on("data", (chunk) => chunks.push(chunk));
     proc.stderr.on("data", (err) => { errOutput += err.toString(); });
-    proc.on("error", reject);
+    proc.on("error", (err) => finish(reject, err));
     proc.on("close", (code) => {
       if (code === 0 && chunks.length > 0) {
-        resolve(Buffer.concat(chunks));
+        finish(resolve, Buffer.concat(chunks));
       } else {
-        reject(new Error(errOutput.trim() || `Exit code ${code}`));
+        finish(reject, new Error(errOutput.trim() || `Exit code ${code}`));
       }
     });
   });
@@ -426,16 +447,30 @@ export function handleDeskFrame(base64DataUrl) {
 
 /** Tool take_desk_snapshot: chỉ báo success khi frame THỰC SỰ đã tới (V-12). */
 export function requestDeskSnapshot({ timeoutMs = 8000 } = {}) {
-  if (!mainWindow) return Promise.resolve({ status: "error", error: "Không có cửa sổ Iris." });
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents?.isDestroyed?.()) {
+    return Promise.resolve({ status: "error", error: "Không có cửa sổ Iris." });
+  }
   if (!hasSession()) return Promise.resolve({ status: "error", error: "Chưa có phiên Gemini Live đang chạy." });
   if (pendingDeskSnap) return Promise.resolve({ status: "error", error: "Đang có một yêu cầu chụp khác." });
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    let resolved = false;
+    let timer = null;
+    const safeResolve = (val) => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
       pendingDeskSnap = null;
-      resolve({ status: "error", error: "Hết thời gian chờ camera bàn (không có ảnh nào được chụp)." });
+      resolve(val);
+    };
+    timer = setTimeout(() => {
+      safeResolve({ status: "error", error: "Hết thời gian chờ camera bàn (không có ảnh nào được chụp)." });
     }, timeoutMs);
-    pendingDeskSnap = { resolve, timer };
-    mainWindow.webContents.send("vision:snap-desk");
+    pendingDeskSnap = { resolve: safeResolve, timer };
+    try {
+      mainWindow.webContents.send("vision:snap-desk");
+    } catch (sendErr) {
+      safeResolve({ status: "error", error: `Không thể gửi yêu cầu chụp camera bàn: ${sendErr.message}` });
+    }
   });
 }
 
@@ -479,6 +514,7 @@ export function handleCompanionVisionFrame(base64DataUrl) {
     status: "success",
     camera_id: "companion_phone",
     camera_name: "Companion Camera (Alt+C)",
+    type: "companion",
     ...(screenshot_path ? { screenshot_path } : {}),
     message: `Đã chụp thành công ảnh từ camera điện thoại (Alt+C).${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
     instructions: "Ảnh từ camera điện thoại (Alt+C) vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trong camera nếu được hỏi.",
@@ -487,30 +523,81 @@ export function handleCompanionVisionFrame(base64DataUrl) {
 }
 
 export function requestCompanionSnapshot({ timeoutMs = 8000, save = true } = {}) {
-  if (!mainWindow) return Promise.resolve({ status: "error", error: "Không có cửa sổ Iris." });
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents?.isDestroyed?.()) {
+    return Promise.resolve({ status: "error", error: "Không có cửa sổ Iris." });
+  }
   if (pendingCompanionSnap) return Promise.resolve({ status: "error", error: "Đang có một yêu cầu chụp khác." });
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    let resolved = false;
+    let timer = null;
+    const safeResolve = (val) => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
       pendingCompanionSnap = null;
-      resolve({ status: "error", error: "Hết thời gian chờ camera điện thoại (Alt+C) — hãy kiểm tra lại kết nối điện thoại." });
+      resolve(val);
+    };
+    timer = setTimeout(() => {
+      safeResolve({ status: "error", error: "Hết thời gian chờ camera điện thoại (Alt+C) — hãy kiểm tra lại kết nối điện thoại." });
     }, timeoutMs);
-    pendingCompanionSnap = { resolve, timer, save };
-    mainWindow.webContents.send("vision:snap-companion");
+    pendingCompanionSnap = { resolve: safeResolve, timer, save };
+    try {
+      mainWindow.webContents.send("vision:snap-companion");
+    } catch (sendErr) {
+      safeResolve({ status: "error", error: `Không thể gửi yêu cầu chụp camera điện thoại: ${sendErr.message}` });
+    }
   });
 }
 
 /**
- * Chụp một ảnh tĩnh từ một camera robot, camera điện thoại (Alt+C), hoặc smart home camera cụ thể qua giọng nói/chat.
- * Hỗ trợ target bằng ID, tên, số thứ tự (ví dụ: 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1'), hoặc 'alt c' / 'companion' / 'phone'.
+ * Chụp một ảnh tĩnh từ một camera robot, camera điện thoại (Alt+C), màn hình máy tính (Screen), hoặc smart home camera cụ thể qua giọng nói/chat.
+ * Hỗ trợ target bằng ID, tên, số thứ tự (ví dụ: 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1'), 'alt c' / 'companion' / 'phone', hoặc 'screen' / 'desktop' / 'màn hình'.
  */
 export async function takeCameraSnapshot(args = {}) {
   const target = typeof args?.target === "string" ? args.target.trim() : "";
   const save = args?.save !== false;
 
   const targetNorm = target.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
-  const isAltC = /^(?:camera\s*)?(?:alt\s*c|alt_c|companion|phone|dien\s*thoai)(?:\s*camera)?$/i.test(targetNorm);
+  const isAltC = /^(?:camera\s*|may\s*anh\s*)?(?:alt\s*c|alt_c|companion|companion_phone|phone|dien\s*thoai|dt)(?:\s*camera)?$/i.test(targetNorm);
   if (isAltC) {
     return requestCompanionSnapshot({ timeoutMs: 8000, save });
+  }
+
+  // Nhận diện chụp màn hình máy tính (Desktop Screen) qua take_camera_snapshot
+  const isScreen = /^(?:camera\s*)?(?:screen|desktop|pc|computer|man\s*hinh|man\s*hinh\s*may\s*tinh)(?:\s*camera)?$/i.test(targetNorm);
+  if (isScreen) {
+    try {
+      const { buffer, geometry } = await grabPrimaryScreenJpeg(70);
+      let screenshot_path = null;
+      if (save) {
+        try {
+          screenshot_path = saveScreenshot(path.join(userDataDir(), "screenshots"), buffer);
+        } catch (saveErr) {
+          console.warn("[takeCameraSnapshot] Lỗi khi lưu ảnh màn hình:", saveErr);
+        }
+      }
+      sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: `Đã chụp ảnh màn hình máy tính${screenshot_path ? ` -> ${screenshot_path}` : ""}.`,
+      });
+      return {
+        status: "success",
+        camera_id: "desktop_screen",
+        camera_name: "Desktop Screen (Màn hình máy tính)",
+        type: "screen",
+        frame_geometry: geometry,
+        ...(screenshot_path ? { screenshot_path } : {}),
+        message: `Đã chụp thành công ảnh màn hình máy tính.${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
+        instructions: "Ảnh chụp màn hình máy tính vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trên màn hình nếu được hỏi.",
+      };
+    } catch (err) {
+      return {
+        status: "error",
+        error: `Không thể chụp ảnh màn hình máy tính: ${err.message}`,
+      };
+    }
   }
 
   let matched = null;

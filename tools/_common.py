@@ -21,8 +21,8 @@ import sys
 
 
 def ensure_utf8():
-    """Ép stdout/stderr dùng UTF-8 (console Windows mặc định là code page OEM)."""
-    for name in ("stdout", "stderr"):
+    """Ép stdout/stderr/stdin dùng UTF-8 (console Windows mặc định là code page OEM)."""
+    for name in ("stdout", "stderr", "stdin"):
         try:
             stream = getattr(sys, name, None)
             if stream is not None:

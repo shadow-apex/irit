@@ -31,20 +31,36 @@ export function parseToolOutput(stdout) {
   if (!text) return null;
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].startsWith("{")) continue;
-    try {
-      const v = JSON.parse(lines[i]);
-      if (v && typeof v === "object" && !Array.isArray(v)) return v;
-    } catch {
-      /* thử dòng trước */
+    const line = lines[i];
+    const s = line.indexOf("{");
+    if (s < 0) continue;
+    const e = line.lastIndexOf("}");
+    if (e > s) {
+      try {
+        const v = JSON.parse(line.slice(s, e + 1));
+        if (v && typeof v === "object" && !Array.isArray(v)) return v;
+      } catch {
+        /* thử dòng trước */
+      }
     }
   }
   try {
     const v = JSON.parse(text); // JSON nhiều dòng
     return v && typeof v === "object" && !Array.isArray(v) ? v : null;
   } catch {
-    return null;
+    /* thử bóc khối JSON nhiều dòng */
   }
+  const s = text.indexOf("{");
+  const e = text.lastIndexOf("}");
+  if (s >= 0 && e > s) {
+    try {
+      const v = JSON.parse(text.slice(s, e + 1));
+      if (v && typeof v === "object" && !Array.isArray(v)) return v;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /**

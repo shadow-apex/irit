@@ -431,11 +431,11 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "take_camera_snapshot",
-          description: "Take a single photo/snapshot from a specific robot camera, the Companion/Alt+C phone camera, or a smart home camera, and save it to disk. Invoke this when the user asks via voice or chat to take a picture/photo/snapshot of a camera or robot (in Vietnamese: 'chụp ảnh camera robot 1', 'chụp ảnh camera alt c', 'chụp camera điện thoại', 'chụp ảnh robot thám hiểm', 'chụp camera số 1', 'chụp ảnh camera mock', 'chụp hình camera robot').",
+          description: "Take a single photo/snapshot from a specific robot camera, the Companion/Alt+C phone camera, a smart home camera, or the desktop computer screen, and save it to disk. Invoke this when the user asks via voice or chat to take a picture/photo/snapshot of a camera, robot, or computer screen (in Vietnamese: 'chụp ảnh camera robot 1', 'chụp ảnh camera alt c', 'chụp camera điện thoại', 'chụp ảnh robot thám hiểm', 'chụp camera số 1', 'chụp ảnh camera mock', 'chụp hình camera robot', 'chụp màn hình máy tính').",
           parameters: {
             type: "object",
             properties: {
-              target: { type: "string", description: "The name, ID, or index (1, 2, 3...) of the camera/robot to capture (e.g. 'esp32_robot_1', 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1', a smart home camera ID, or 'alt c' / 'companion' / 'phone' for the companion phone camera). If omitted, captures the active or first available camera." },
+              target: { type: "string", description: "The name, ID, or index (1, 2, 3...) of the camera/robot to capture (e.g. 'esp32_robot_1', 'robot 1', '1', 'Robot Tham Hiem', 'mock_bot_1', a smart home camera ID, 'alt c' / 'companion' / 'phone' for the companion phone camera, or 'screen' / 'desktop' / 'màn hình' for the desktop computer screen). If omitted, captures the active or first available camera." },
               save: { type: "boolean", description: "Whether to save the snapshot to disk as an image file. Defaults to true." }
             }
           },

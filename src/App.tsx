@@ -1811,42 +1811,81 @@ export default function App() {
   useEffect(() => {
     if (!hasBridge || !window.iris.onSnapCompanionVision) return;
     return window.iris.onSnapCompanionVision(() => {
-      const stream = companionStream.getStream();
-      if (!stream || stream.getVideoTracks().length === 0) {
-        window.iris.sendCompanionVisionFrame("");
-        return;
-      }
-      const video = document.createElement("video");
-      video.autoplay = true;
-      video.muted = true;
-      video.srcObject = stream;
-      const canvas = document.createElement("canvas");
       let sent = false;
-      const trySend = () => {
+      let cleanupDone = false;
+      let video: HTMLVideoElement | null = null;
+
+      const safeSend = (dataUrl: string) => {
         if (sent) return;
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
-          const dataUrl = videoToJpegDataUrl(video, canvas, 1280, 0.85);
-          if (dataUrl) {
-            sent = true;
-            video.srcObject = null;
-            window.iris.sendCompanionVisionFrame(dataUrl);
-          }
+        sent = true;
+        cleanup();
+        try {
+          window.iris?.sendCompanionVisionFrame?.(dataUrl);
+        } catch (err) {
+          console.warn("[onSnapCompanionVision] Lỗi gửi frame:", err);
         }
       };
-      video.onloadeddata = () => {
-        trySend();
+
+      const cleanup = () => {
+        if (cleanupDone) return;
+        cleanupDone = true;
+        if (video) {
+          try {
+            video.onloadeddata = null;
+            video.srcObject = null;
+          } catch {
+            // ignore
+          }
+          video = null;
+        }
       };
-      video.play().then(() => trySend()).catch(() => {});
-      setTimeout(trySend, 250);
-      setTimeout(() => {
-        if (!sent) {
+
+      try {
+        const stream = companionStream.getStream();
+        if (!stream || stream.getVideoTracks().length === 0) {
+          safeSend("");
+          return;
+        }
+
+        video = document.createElement("video");
+        video.autoplay = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        const canvas = document.createElement("canvas");
+
+        const trySend = () => {
+          if (sent || !video) return;
+          try {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              const dataUrl = videoToJpegDataUrl(video, canvas, 1280, 0.85);
+              if (dataUrl) {
+                safeSend(dataUrl);
+              }
+            }
+          } catch (e) {
+            console.warn("[onSnapCompanionVision] Lỗi chụp frame:", e);
+          }
+        };
+
+        video.onloadeddata = () => {
           trySend();
+        };
+
+        video.play().then(() => trySend()).catch(() => {});
+        setTimeout(trySend, 250);
+        setTimeout(() => {
           if (!sent) {
-            video.srcObject = null;
-            window.iris.sendCompanionVisionFrame("");
+            trySend();
+            if (!sent) {
+              safeSend("");
+            }
           }
-        }
-      }, 1000);
+        }, 1200);
+      } catch (err) {
+        console.error("[onSnapCompanionVision] Ngoại lệ:", err);
+        safeSend("");
+      }
     });
   }, [hasBridge]);
 

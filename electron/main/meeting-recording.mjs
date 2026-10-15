@@ -10,6 +10,8 @@ import { spawnSidecar, stopSidecar, resolvePythonCommand } from "./sidecar-proce
 import { mainWindow, enterHud } from "./window-manager.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 
+import { emitEvent } from "./events.mjs";
+
 export function getMeetingRecordingsDir() {
   const now = new Date();
   const y = now.getFullYear();
@@ -32,11 +34,15 @@ export function buildMeetingWavPath() {
 
 export let meetingRecorder = null; // handle { proc, state, exitCode }
 export let meetingWavPath = null;
+export let isSummarizing = false;
 
 export async function toggleMeetingRecording() {
-  // Chặn double-hotkey trong lúc đang start hoặc đang stop
+  // Chặn double-hotkey trong lúc đang start, stopping hoặc đang summarize
   if (meetingRecorder && (meetingRecorder.state === "starting" || meetingRecorder.state === "stopping")) {
     return { status: "error", error: "Đang xử lý, vui lòng đợi." };
+  }
+  if (isSummarizing) {
+    return { status: "error", error: "Đang phân tích âm thanh và tạo tóm tắt cuộc họp trước đó, vui lòng đợi hoàn tất." };
   }
 
   if (!meetingRecorder || meetingRecorder.state === "dead") {
@@ -52,7 +58,7 @@ export async function toggleMeetingRecording() {
     meetingRecorder = spawnSidecar(pythonPath, [scriptPath, meetingWavPath], {
       cwd: unpackedRepoRoot(),
       onFatalError: (message) => {
-        if (mainWindow) {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
           mainWindow.webContents.send("hud:message", { title: "Lỗi ghi âm cuộc họp", content: message });
         }
       },
@@ -61,7 +67,7 @@ export async function toggleMeetingRecording() {
     meetingRecorder.proc.stderr.on("data", (data) => console.error(`Meeting Recorder Err: ${data}`));
 
     enterHud();
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
       mainWindow.webContents.send("hud:message", { title: "Meeting Summarizer", content: "Đang ghi âm cuộc họp... (Bấm Alt+M hoặc ra lệnh để kết thúc)" });
     }
     return { status: "success", message: "Bắt đầu ghi âm cuộc họp." };
@@ -69,16 +75,21 @@ export async function toggleMeetingRecording() {
 
   // --- Dừng ghi âm ---
   enterHud();
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
     mainWindow.webContents.send("hud:message", { title: "Meeting Summarizer", content: "Đang phân tích âm thanh và tạo tóm tắt... Vui lòng chờ 1-2 phút." });
   }
 
+  isSummarizing = true;
   await stopSidecar(meetingRecorder, { timeoutMs: 5000 }); // luôn resolve, không treo vô hạn
   meetingRecorder = null;
   const wavPath = meetingWavPath;
 
   try {
     if (!wavPath || !fs.existsSync(wavPath)) throw new Error("Không tìm thấy file ghi âm.");
+    const stat = fs.statSync(wavPath);
+    if (stat.size <= 44) {
+      throw new Error("File ghi âm quá ngắn hoặc không có dữ liệu âm thanh. Hãy kiểm tra microphone.");
+    }
     if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
 
     const { GoogleGenAI } = await import("@google/genai");
@@ -86,13 +97,7 @@ export async function toggleMeetingRecording() {
 
     const uploadResult = await ai.files.upload({ file: wavPath, mimeType: "audio/wav" });
 
-    // BUG-MEETING-01 FIX: "gemini-1.5-pro" is a dead model ID — Google has
-    // fully shut down all Gemini 1.0/1.5 models, every call to them now
-    // returns a 404 ("model not found"). Every summarization request was
-    // silently failing and landing in the catch block below as
-    // "Lỗi tóm tắt". Use the Google-maintained "gemini-flash-latest" alias
-    // instead (currently resolves to gemini-3.5-flash) so this doesn't
-    // rot again the next time Google retires a model.
+    // Sử dụng model gemini-flash-latest ổn định
     const response = await ai.models.generateContent({
       model: "gemini-flash-latest",
       contents: [
@@ -101,16 +106,48 @@ export async function toggleMeetingRecording() {
       ]
     });
 
-    const summary = response.text;
+    const summary = response.text || "";
 
-    if (mainWindow) {
+    // Xoá file đệm trên Google Cloud sau khi tóm tắt xong để không tràn quota lưu trữ
+    if (uploadResult?.name) {
+      try {
+        await ai.files.delete({ name: uploadResult.name });
+      } catch (delErr) {
+        // bỏ qua nếu xoá không thành công
+      }
+    }
+
+    // Lưu bản tóm tắt Markdown ngay cạnh file WAV để tiện lưu trữ tra cứu
+    const summaryPath = wavPath.replace(/\.wav$/i, "_summary.md");
+    try {
+      fs.writeFileSync(summaryPath, `# Tóm Tắt Cuộc Họp\n\n- Thời gian: ${new Date().toLocaleString("vi-VN")}\n- File ghi âm: ${wavPath}\n\n${summary}`, "utf8");
+    } catch (saveErr) {
+      console.warn("[MeetingRecorder] Không thể lưu file tóm tắt:", saveErr);
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
       mainWindow.webContents.send("hud:message", { title: "Tóm tắt cuộc họp", content: summary });
     }
-    return { status: "success", message: `Đã tạo bản tóm tắt cuộc họp thành công. File ghi âm: ${wavPath}` };
+
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `Đã hoàn thành tóm tắt cuộc họp -> ${summaryPath}`,
+    });
+
+    return {
+      status: "success",
+      message: `Đã tạo bản tóm tắt cuộc họp thành công. File ghi âm: ${wavPath}, Tóm tắt: ${summaryPath}`,
+      wav_path: wavPath,
+      summary_path: summaryPath,
+      summary,
+    };
   } catch (err) {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
       mainWindow.webContents.send("hud:message", { title: "Lỗi tóm tắt", content: err.message });
     }
     return { status: "error", error: err.message };
+  } finally {
+    isSummarizing = false;
   }
 }

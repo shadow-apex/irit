@@ -22,8 +22,13 @@ export function killTree(target, { force = true } = {}) {
     try {
       const args = ["/pid", String(pid), "/T"];
       if (force) args.push("/F");
-      spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore" });
-      return true;
+      const res = spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore" });
+      if (!res.error && res.status === 0) {
+        if (typeof target === "object" && typeof target?.kill === "function") {
+          try { target.kill(sig); } catch { /* ignore */ }
+        }
+        return true;
+      }
     } catch {
       /* rơi xuống kill thường */
     }
@@ -31,6 +36,9 @@ export function killTree(target, { force = true } = {}) {
     try {
       // Âm pid = cả nhóm; chỉ có tác dụng nếu tiến trình được spawn với detached:true.
       process.kill(-pid, sig);
+      if (typeof target === "object" && typeof target?.kill === "function") {
+        try { target.kill(sig); } catch { /* ignore */ }
+      }
       return true;
     } catch {
       /* không phải leader của nhóm */
@@ -38,6 +46,9 @@ export function killTree(target, { force = true } = {}) {
   }
   try {
     process.kill(pid, sig);
+    if (typeof target === "object" && typeof target?.kill === "function") {
+      try { target.kill(sig); } catch { /* ignore */ }
+    }
     return true;
   } catch {
     return false;

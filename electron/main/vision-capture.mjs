@@ -33,6 +33,7 @@ export async function grabJpeg(url, { timeoutMs = 5000, maxBytes = 4_000_000, fe
     // MJPEG: cắt đúng 1 frame. KHÔNG abort() trong vòng lặp rồi return — sẽ reject AbortError;
     // phải `break` rồi mới abort ở finally.
     let buf = Buffer.alloc(0);
+    if (!res.body) throw new Error("stream ended without a body");
     try {
       for await (const chunk of res.body) {
         buf = Buffer.concat([buf, chunk]);

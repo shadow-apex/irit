@@ -83,8 +83,10 @@ export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTok
   return (block?.text || "").trim();
 }
 
+let hudClearTimer = null;
+
 export function updateTeleprompterHud() {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents?.isDestroyed?.()) return;
   let content = liveTranscripts.join("\n");
   if (translateEnabled) {
     let t = [...liveTranslations];
@@ -99,12 +101,16 @@ export function updateTeleprompterHud() {
   // gửi copilotHistory/copilotStatus như dữ liệu có cấu trúc riêng,
   // HudShell tự render thành bảng cuộn được, giữ nguyên toàn bộ lịch sử
   // trong phiên (không bị mất khi có câu hỏi mới).
-  mainWindow.webContents.send("hud:message", {
-    title: "Live Teleprompter",
-    content,
-    copilotHistory: copilotEnabled ? copilotHistory : undefined,
-    copilotStatus: copilotEnabled ? copilotStatus : undefined,
-  });
+  try {
+    mainWindow.webContents.send("hud:message", {
+      title: "Live Teleprompter",
+      content,
+      copilotHistory: copilotEnabled ? copilotHistory : undefined,
+      copilotStatus: copilotEnabled ? copilotStatus : undefined,
+    });
+  } catch (err) {
+    console.warn("[updateTeleprompterHud] Lỗi gửi hud:message:", err);
+  }
 }
 
 export async function toggleTranslateMode(targetLang) {
@@ -196,7 +202,11 @@ export async function toggleLiveTranscriber() {
     const updateLiveHud = () => updateTeleprompterHud();
 
     enterHud();
-    if (mainWindow) {
+    if (hudClearTimer) {
+      clearTimeout(hudClearTimer);
+      hudClearTimer = null;
+    }
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
       mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content: "Đang khởi động AI dịch thuật... (Bấm Alt+T để tắt)" });
     }
 
@@ -403,10 +413,17 @@ export async function toggleLiveTranscriber() {
   }
 
   enterHud();
-  if (mainWindow) {
+  if (hudClearTimer) {
+    clearTimeout(hudClearTimer);
+    hudClearTimer = null;
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
     mainWindow.webContents.send("hud:message", { title: "Live Teleprompter", content: "Đã tắt tính năng Nhắc Tuồng." });
-    setTimeout(() => {
-       if (mainWindow) mainWindow.webContents.send("hud:message", null);
+    hudClearTimer = setTimeout(() => {
+      hudClearTimer = null;
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
+        mainWindow.webContents.send("hud:message", null);
+      }
     }, 2000);
   }
 

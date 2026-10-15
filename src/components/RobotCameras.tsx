@@ -228,8 +228,8 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
         indexStr = e.detail;
       }
       
-      // Xử lý sự kiện bấm phím khi PiP đang mở (Option 3: 1..9)
-      if (e.type === 'keydown' && e.key >= '1' && e.key <= '9' && !isEditableTarget(e.target)) {
+      // Xử lý sự kiện bấm phím khi PiP đang mở (Option 3: 1..9) — không ăn phím khi có Ctrl/Alt/Meta
+      if (e.type === 'keydown' && e.key >= '1' && e.key <= '9' && !isEditableTarget(e.target) && !e.ctrlKey && !e.altKey && !e.metaKey) {
         indexStr = e.key;
       }
 
