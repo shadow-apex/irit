@@ -125,6 +125,19 @@ def speak_phrase(text):
         sys.stderr.write(f"[TTS fallback: {e}]\n")
 
 
+_showcase_mutex = None
+
+
+def _acquire_singleton_mutex():
+    global _showcase_mutex
+    kernel32 = ctypes.windll.kernel32
+    # Local\ ensures it is scoped to the current interactive Windows logon session
+    _showcase_mutex = kernel32.CreateMutexW(None, False, "Local\\IrisShowcaseLiveSingletonMutex")
+    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        return False
+    return True
+
+
 def find_notepad_edit(keyword):
     """Tìm HWND của cửa sổ Notepad và control Edit bên trong."""
     user32 = ctypes.windll.user32
@@ -136,7 +149,8 @@ def find_notepad_edit(keyword):
         length = user32.GetWindowTextLengthW(hwnd)
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        if keyword in buf.value or "Notepad" in buf.value:
+        val = buf.value.lower()
+        if keyword.lower() in val:
             target_hwnd = hwnd
             def child_cb(chwnd, _lp):
                 nonlocal target_edit
@@ -173,6 +187,20 @@ def update_notepad(h_edit, text_content):
 
 
 def run_showcase():
+    if not _acquire_singleton_mutex():
+        sys.stderr.write("[iris_showcase] Đã có một tiến trình trình diễn đang chạy. Hủy bỏ gọi trùng lặp.\n")
+        return {
+            "success": True,
+            "message": "Một phiên trình diễn khác đang diễn ra, tránh chạy trùng lặp.",
+            "steps": [],
+        }
+
+    # Đóng cửa sổ Notepad trình diễn cũ nếu còn tồn tại từ phiên trước
+    old_hwnd, _ = find_notepad_edit("iris_live_showcase")
+    if old_hwnd:
+        ctypes.windll.user32.PostMessageW(old_hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        time.sleep(0.3)
+
     temp_dir = tempfile.gettempdir()
     file_name = "iris_live_showcase.txt"
     temp_path = os.path.join(temp_dir, file_name)

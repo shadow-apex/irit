@@ -607,38 +607,61 @@ export async function fileExplorerTool(args = {}) {
 // -----------------------------------------------------------------------
 // iris_showcase.py: trình diễn trực tiếp các khả năng của Iris
 // -----------------------------------------------------------------------
+let isShowcaseRunning = false;
+
 export async function irisShowcaseTool(_args = {}) {
+  if (isShowcaseRunning) {
+    return {
+      status: "busy",
+      output: "Màn trình diễn đang diễn ra, vui lòng chờ Iris hoàn tất.",
+    };
+  }
+  isShowcaseRunning = true;
+
   const { enterHud } = await import("./window-manager.mjs");
   const { emitEvent } = await import("./events.mjs");
+  const { setAudioChunkSuppressed } = await import("./gemini-live.mjs");
 
-  // Vào chế độ Glass HUD (Alt + Space) trước khi trình diễn
-  enterHud();
-  await new Promise((r) => setTimeout(r, 350));
+  // Chống lặp âm thanh: Tạm thời ngắt luồng mic gửi lên Gemini Live trong lúc Iris nói và trình diễn
+  setAudioChunkSuppressed(true);
 
-  emitEvent({ type: "audio_state", state: "speaking" });
-  emitEvent({ type: "transcript", speaker: "iris", text: "Xin chào! Sau đây là màn trình diễn trực tiếp khả năng điều khiển hệ thống của Iris." });
+  try {
+    // Vào chế độ Glass HUD (Alt + Space) trước khi trình diễn
+    enterHud();
+    await new Promise((r) => setTimeout(r, 350));
 
-  const onLine = (line) => {
-    if (line.startsWith("IRIS_SHOWCASE_STEP:")) {
-      try {
-        const payload = JSON.parse(line.slice("IRIS_SHOWCASE_STEP:".length));
-        emitEvent({ type: "audio_state", state: "speaking" });
-        emitEvent({ type: "transcript", speaker: "iris", text: `[${payload.step}/6] ${payload.speech}` });
-      } catch {
-        // bỏ qua nếu lỗi parse
+    emitEvent({ type: "audio_state", state: "speaking" });
+    emitEvent({
+      type: "transcript",
+      speaker: "iris",
+      text: "Sau đây là màn trình diễn trực tiếp khả năng điều khiển hệ thống của Iris.",
+    });
+
+    const onLine = (line) => {
+      if (line.startsWith("IRIS_SHOWCASE_STEP:")) {
+        try {
+          const payload = JSON.parse(line.slice("IRIS_SHOWCASE_STEP:".length));
+          emitEvent({ type: "audio_state", state: "speaking" });
+          emitEvent({ type: "transcript", speaker: "iris", text: `[${payload.step}/6] ${payload.speech}` });
+        } catch {
+          // bỏ qua nếu lỗi parse
+        }
       }
-    }
-  };
+    };
 
-  const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 65000, onLine });
-  const res = buildToolResponse(run, "iris_showcase.py thất bại.");
+    const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 65000, onLine });
+    const res = buildToolResponse(run, "iris_showcase.py thất bại.");
 
-  emitEvent({ type: "audio_state", state: "idle" });
-  emitEvent({
-    type: "transcript",
-    speaker: "iris",
-    text: "Đã hoàn thành toàn bộ màn trình diễn trực tiếp!",
-  });
+    emitEvent({ type: "audio_state", state: "idle" });
+    emitEvent({
+      type: "transcript",
+      speaker: "iris",
+      text: "Đã hoàn thành toàn bộ màn trình diễn trực tiếp!",
+    });
 
-  return res;
+    return res;
+  } finally {
+    setAudioChunkSuppressed(false);
+    isShowcaseRunning = false;
+  }
 }
