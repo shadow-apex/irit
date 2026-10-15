@@ -17,7 +17,15 @@ def get_active_window_info():
     _common.dpi_aware()
     win = _winutil.foreground_window()
     if not win:
-        return None
+        # Fallback: nếu chưa focus cửa sổ nào (ví dụ đang ở desktop), thử lấy cửa sổ hiển thị trên cùng
+        windows = _winutil.enum_windows(visible_only=True)
+        non_iris = [w for w in windows if not _winutil.is_self_window(w)]
+        if non_iris:
+            win = non_iris[0]
+        elif windows:
+            win = windows[0]
+        else:
+            return None
     exe_path = None
     try:
         import psutil
@@ -41,5 +49,9 @@ if __name__ == "__main__":
     except Exception as e:  # noqa: BLE001
         _common.fail(f"Không đọc được cửa sổ đang focus: {e}")
     if info is None:
-        _common.fail("Không tìm thấy cửa sổ nào đang được focus.")
-    _common.emit(True, **info)
+        _common.emit(True, title="", pid=0, process_name=None, process_path=None,
+                     rect={"left": 0, "top": 0, "right": 0, "bottom": 0},
+                     width=0, height=0, is_iris=False,
+                     message="Hiện không có cửa sổ ứng dụng nào đang mở hoặc được chọn.")
+    else:
+        _common.emit(True, **info)

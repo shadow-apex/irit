@@ -20,6 +20,7 @@ if __name__ == "__main__":
     a = build_parser().parse_args()
     pg = _common.require("pyautogui")
     pg.PAUSE = 0
+    pg.FAILSAFE = False
     try:
         pg.press(KEYS[a.action][0])
     except Exception as e:  # noqa: BLE001

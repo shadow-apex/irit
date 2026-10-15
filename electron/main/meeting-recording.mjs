@@ -95,7 +95,7 @@ export async function toggleMeetingRecording() {
     const { GoogleGenAI } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    const uploadResult = await ai.files.upload({ file: wavPath, mimeType: "audio/wav" });
+    const uploadResult = await ai.files.upload({ file: wavPath, config: { mimeType: "audio/wav" } });
 
     // Sử dụng model gemini-flash-latest ổn định
     const response = await ai.models.generateContent({
