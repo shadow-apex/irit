@@ -95,6 +95,7 @@ import {
   readNotificationsTool,
   sysMonitorTool,
   fileExplorerTool,
+  irisShowcaseTool,
 } from "./local-tools.mjs";
 
 // S-11: xác nhận hai bước cho tool nguy hiểm (shutdown/kill/tắt wifi...). Hiện cảnh báo lên HUD/log.
@@ -288,6 +289,8 @@ export async function executeClaudeTool(name, args = {}) {
       return desktopManagerTool(args.action);
     case "file_explorer":
       return await fileExplorerTool(args);
+    case "iris_showcase":
+      return await irisShowcaseTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

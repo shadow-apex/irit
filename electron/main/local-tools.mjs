@@ -27,7 +27,7 @@ export const WINDOWS_ONLY_TOOLS = new Set([
   "magic_move.py", "move_window.py", "multi_monitor_info.py", "power_manager.py", "read_notifications.py",
   "search_everything.py", "sys_control.py", "system_actions.py", "wifi_manager.py", "mouse_control.py",
   "media_control.py", "image_viewer.py", "clipboard_history.py", "process_manager.py", "ocr_region.py",
-  "color_picker.py", "file_explorer.py",
+  "color_picker.py", "file_explorer.py", "iris_showcase.py",
 ]);
 
 export const MAX_STDOUT_BYTES = 1_000_000; // TL: giới hạn stdout ≤ 1 MB
@@ -583,3 +583,11 @@ export async function fileExplorerTool(args = {}) {
   if (args.select === true) cli.push("--select");
   return runJsonTool("file_explorer.py", cli, { timeoutMs: 15000 }, "file_explorer.py thất bại.");
 }
+
+// -----------------------------------------------------------------------
+// iris_showcase.py: trình diễn trực tiếp các khả năng của Iris
+// -----------------------------------------------------------------------
+export async function irisShowcaseTool() {
+  return runJsonTool("iris_showcase.py", [], { timeoutMs: 40000 }, "iris_showcase.py thất bại.");
+}
+

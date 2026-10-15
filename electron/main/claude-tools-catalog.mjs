@@ -883,6 +883,11 @@ function buildClaudeToolsRaw() {
           parameters: { type: "object", properties: {} },
         },
         {
+          name: "iris_showcase",
+          description: "Run an interactive live capability demonstration of Iris directly on the user's screen via tools/iris_showcase.py. Opens Notepad, introduces each feature with realistic timing/delays, and directly executes each feature on the machine: (1) Volume Up, (2) Volume Down, (3) Open Tab, (4) Close Tab, (5) Smooth Mouse Cursor Movement, (6) Window Movement. Invoke this whenever the user asks Iris to showcase/demonstrate what she can do (in Vietnamese: 'giới thiệu những thứ bạn có thể làm', 'demo tính năng', 'trình diễn khả năng', 'bạn làm được những gì', 'showcase').",
+          parameters: { type: "object", properties: {} },
+        },
+        {
           name: "go_to_sleep",
           description:
             "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
