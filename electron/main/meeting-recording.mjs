@@ -95,7 +95,10 @@ export async function toggleMeetingRecording() {
     // rot again the next time Google retires a model.
     const response = await ai.models.generateContent({
       model: "gemini-flash-latest",
-      contents: [uploadResult, "Đây là file ghi âm cuộc họp. Hãy nghe thật kỹ và tóm tắt cực kỳ chi tiết toàn bộ nội dung cuộc họp bằng tiếng Việt. Phân chia rõ ràng các chủ đề đã thảo luận, các quyết định quan trọng được đưa ra, và trích xuất danh sách Action Items (Công việc cần làm) cụ thể. Trình bày bằng định dạng Markdown chuyên nghiệp, đầy đủ và chi tiết nhất có thể."]
+      contents: [
+        { fileData: { fileUri: uploadResult.uri, mimeType: uploadResult.mimeType || "audio/wav" } },
+        "Đây là file ghi âm cuộc họp. Hãy nghe thật kỹ và tóm tắt cực kỳ chi tiết toàn bộ nội dung cuộc họp bằng tiếng Việt. Phân chia rõ ràng các chủ đề đã thảo luận, các quyết định quan trọng được đưa ra, và trích xuất danh sách Action Items (Công việc cần làm) cụ thể. Trình bày bằng định dạng Markdown chuyên nghiệp, đầy đủ và chi tiết nhất có thể."
+      ]
     });
 
     const summary = response.text;

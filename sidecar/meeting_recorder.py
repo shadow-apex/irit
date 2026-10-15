@@ -27,14 +27,27 @@ def record_stream(mic, sample_rate, chunk_frames, out_buf, name):
         print(f"Error recording from {name}: {e}", file=sys.stderr)
 
 
+def to_stereo(arr):
+    if arr is None:
+        return None
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 1:
+        return np.column_stack([arr, arr])
+    if arr.ndim == 2:
+        if arr.shape[1] == 1:
+            return np.column_stack([arr[:, 0], arr[:, 0]])
+        elif arr.shape[1] > 2:
+            return arr[:, :2]
+    return arr
+
+
 def mixer_writer(wav_writer, loopback_buf, mic_buf):
     """Chạy trên thread riêng: định kỳ lấy chunk mới nhất từ 2 buffer,
     trộn lại, và GHI THẲNG ra file .wav ngay lập tức rồi giải phóng khỏi
-    RAM. Đây là điểm khác biệt chính so với bản cũ (giữ toàn bộ audio
-    trong list rồi mới concat vào cuối -> tràn RAM với cuộc họp dài)."""
+    RAM. Đảm bảo chuẩn hoá stereo để không lệch kênh giữa mic và loa."""
     while recording or loopback_buf or mic_buf:
-        lb = loopback_buf.pop(0) if loopback_buf else None
-        mb = mic_buf.pop(0) if mic_buf else None
+        lb = to_stereo(loopback_buf.pop(0) if loopback_buf else None)
+        mb = to_stereo(mic_buf.pop(0) if mic_buf else None)
 
         if lb is None and mb is None:
             if not recording:

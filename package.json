@@ -30,7 +30,7 @@
     "package:win": "npm run build && electron-builder --win --dir",
     "dist:win": "npm run build && electron-builder --win",
     "electron": "node scripts/run-electron.mjs",
-    "test": "node --test scripts/tests/*.test.mjs",
+    "test": "node --test --test-concurrency=1 scripts/tests/*.test.mjs",
     "setup:mediapipe": "node scripts/prepare-mediapipe.mjs",
     "setup:ort": "node scripts/prepare-ort.mjs",
     "test:py": "python -m unittest discover -s tools/tests"

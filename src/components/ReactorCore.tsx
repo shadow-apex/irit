@@ -75,8 +75,10 @@ export default function ReactorCore({
   thinking = false,
   wakeKey = 0,
   rippleKey = 0,
+  speed = 1,
 }: {
   state: ReactorState;
+  speed?: number;
   /** Legacy combined level (still honored if the split refs are not given). */
   levelRef?: { current: number };
   /** Mic level — drives the sharp radial-bar "you are talking" signature. */
@@ -178,7 +180,7 @@ export default function ReactorCore({
       const live = Math.max(liveRef.current, inLive, outLive);
       boostRef.current *= 0.945; // wake surge decays over ~1s
       const energy = Math.min(1, energyRef.current + live * 0.6 + boostRef.current);
-      const t = time / 1000;
+      const t = (time / 1000) * speed;
 
       const cx = width / 2;
       const cy = height / 2;

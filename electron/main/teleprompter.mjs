@@ -41,6 +41,18 @@ export let translateTargetLang = "";
 export let liveTranslations = []; // song song với liveTranscripts, tối đa 3 dòng gần nhất
 export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
 
+let localGenAi = null;
+async function getGenAi() {
+  if (ai) return ai;
+  const key = (process.env.GEMINI_API_KEY || "").trim();
+  if (!key) return null;
+  if (!localGenAi) {
+    const { GoogleGenAI } = await import("@google/genai");
+    localGenAi = new GoogleGenAI({ apiKey: key });
+  }
+  return localGenAi;
+}
+
 export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 400 } = {}) {
   const apiKey = (process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
   if (!apiKey) {
@@ -229,11 +241,12 @@ export async function toggleLiveTranscriber() {
                    const sysPrompt = `Bạn là công cụ dịch song song thời gian thực. Dịch CÂU MỚI (đánh dấu rõ trong tin nhắn, nếu có) sang ngôn ngữ "${translateTargetLang}", dựa vào ngữ cảnh phía trên (nếu có) để dịch đúng đại từ/ý được nhắc ở câu trước. ` +
                        `CHỈ trả về bản dịch của CÂU MỚI — không dịch lại phần ngữ cảnh, không giải thích, không thêm gì khác. Giữ nguyên các tiền tố [Bạn]/[Đối tác]/[Chung] ở đầu câu MỚI nếu có, chỉ dịch phần nội dung sau tiền tố.`;
 
-                   if (ai) {
+                   const genAi = await getGenAi();
+                   if (genAi) {
                      currentStreamingTranslation = "⏳...";
                      updateLiveHud();
-                     const responseStream = await ai.models.generateContentStream({
-                       model: "gemini-1.5-flash",
+                     const responseStream = await genAi.models.generateContentStream({
+                       model: "gemini-flash-latest",
                        contents: sysPrompt + "\n\n" + userText,
                      });
                      
@@ -322,9 +335,10 @@ export async function toggleLiveTranscriber() {
                  // fallback tạm sang Gemini (đã có sẵn) để tính năng không bị câm,
                  // đồng thời báo rõ lý do trong log để người dùng biết cần cấu hình.
                  emitEvent({ type: "log", level: "warn", message: `Nhắc bài: gọi Claude thất bại (${claudeErr.message}), fallback sang Gemini.` });
-                 if (!ai) { copilotStatus = ""; updateLiveHud(); return; }
+                 const genAi = await getGenAi();
+                 if (!genAi) { copilotStatus = ""; updateLiveHud(); return; }
                  try {
-                   const response = await ai.models.generateContent({
+                   const response = await genAi.models.generateContent({
                      model: "gemini-flash-latest",
                      contents: systemPrompt + "\n\n" + contextText,
                    });
@@ -434,12 +448,13 @@ export async function askTeleprompter(question) {
   try {
     answer = await callClaudeForTeleprompter(systemPrompt, question, { maxTokens: 400 });
   } catch (err) {
-    if (!ai) {
+    const genAi = await getGenAi();
+    if (!genAi) {
        copilotStatus = ""; updateTeleprompterHud(); return { status: "error", error: "Cả Claude và Gemini API đều chưa được cấu hình." };
     }
     // fallback gemini
     try {
-      const response = await ai.models.generateContent({
+      const response = await genAi.models.generateContent({
         model: "gemini-flash-latest",
         contents: systemPrompt + "\n\nCâu hỏi: " + question,
       });

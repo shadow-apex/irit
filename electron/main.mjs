@@ -103,7 +103,7 @@ import { stopWebServer } from "./web-server.mjs";
 import { stopOmniServer, setOmniLogger } from "./main/omni-server.mjs";
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
-import { toggleScreenVision, handleCameraStreamFrame, handleDeskFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
+import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
 import { toggleMeetingRecording, meetingRecorder } from "./main/meeting-recording.mjs";
 import {
@@ -373,6 +373,13 @@ app.whenReady().then(() => {
   ipcMain.handle("teleprompter:toggle-translate", (_event, targetLang) => toggleTranslateMode(targetLang));
   ipcMain.handle("teleprompter:toggle-copilot", () => toggleCopilotMode());
   ipcMain.handle("teleprompter:ask", (_event, question) => askTeleprompter(question));
+  ipcMain.handle("teleprompter:toggle-transcriber", () => toggleLiveTranscriber());
+  ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());
+  ipcMain.handle("vision:get-screen-state", () => ({ isVisionEnabled }));
+  ipcMain.handle("meeting:toggle", () => toggleMeetingRecording());
+  ipcMain.handle("meeting:get-state", () => ({
+    isRecording: Boolean(meetingRecorder && meetingRecorder.state !== "dead"),
+  }));
   ipcMain.on("win:control", (_event, action) => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();
@@ -542,6 +549,13 @@ app.whenReady().then(() => {
       }
     });
   }
+
+  // Phím tắt Alt+S bổ trợ cho Screen Vision (tiện dụng, song song với Super+Shift+V)
+  try {
+    globalShortcut.register("Alt+S", () => {
+      toggleScreenVision();
+    });
+  } catch (e) {}
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

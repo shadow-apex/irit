@@ -1793,8 +1793,13 @@ export default function App() {
           ? "warn"
           : "on";
   if (!hasPlayedIntro) {
+    const searchParams = new URLSearchParams(window.location.search);
+    const isAutoStart = searchParams.get("autostart") === "1";
+    const speedParam = searchParams.has("speed") ? parseFloat(searchParams.get("speed") || "1") : 1;
     return (
       <SciFiScanReveal 
+        autoStart={isAutoStart}
+        speed={speedParam}
         onComplete={() => {
           setHasPlayedIntro(true);
           if (!sidecarRunning) start();

@@ -233,19 +233,20 @@ export async function triggerRobotAction({ robot_id, action: rawAction, params }
   // FIX-ROBOT-02: timeout cứng cho request điều khiển robot. fetch() mặc
   // định không có timeout — nếu ESP32 treo hoặc usb_server.py mất phản hồi,
   // request sẽ treo vô thời hạn và renderer (nút bấm WASD) không bao giờ
-  // biết lệnh có tới nơi hay không.
   const timeoutId = setTimeout(() => controller.abort(), ROBOT_ACTION_TIMEOUT_MS);
 
   try {
-    const headers = { "Content-Type": "application/json" };
+    const headers = { "Content-Type": "application/json", Connection: "close" };
     if (robot.token) headers["Authorization"] = `Bearer ${robot.token}`;
     // FIX-ARM-01 (tiếp): chỉ kẹp góc cho action arm_move, các action khác
     // (forward/backward/left/right/stop) đi qua nguyên vẹn như cũ.
     const safeParams = action === "arm_move" ? clampArmParams(params) : params;
+    const bodyStr = JSON.stringify({ action, params: safeParams });
+    headers["Content-Length"] = String(Buffer.byteLength(bodyStr));
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action, params: safeParams }),
+      body: bodyStr,
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

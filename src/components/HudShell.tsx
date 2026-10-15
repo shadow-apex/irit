@@ -359,29 +359,6 @@ export default function HudShell({
         </div>
       ) : null}
 
-      {/* Iron Man Glass System Stats */}
-      {hudStats && awake ? (
-        <div className="hud-stats-widget hud-hit">
-          <div className="stats-row">
-            <span className="stats-label">RAM</span>
-            <span className="stats-value">
-              {Math.round((hudStats.ramTotal - hudStats.ramFree) / 1024 / 1024 / 1024 * 10) / 10}GB / {Math.round(hudStats.ramTotal / 1024 / 1024 / 1024)}GB
-            </span>
-            <div className="stats-bar">
-              <div 
-                className="stats-fill" 
-                style={{ width: `${((hudStats.ramTotal - hudStats.ramFree) / hudStats.ramTotal) * 100}%` }} 
-              />
-            </div>
-          </div>
-          <div className="stats-row">
-            <span className="stats-label">TASKS</span>
-            <span className="stats-value">
-              {hudStats.activeTasks} RUNNING / {hudStats.queuedTasks} QUEUED
-            </span>
-          </div>
-        </div>
-      ) : null}
 
       {/* Center Message Widget */}
       {hudMessage ? (
@@ -670,9 +647,6 @@ export default function HudShell({
 
       {/* Orb cluster, bottom-right */}
       <div className="hud-orb-cluster hud-hit">
-        <div className={`hud-caption ${captionDim ? "dim" : ""}`}>
-          {awake ? caption : wakeWordEnabled ? "Say “Hey Iris”" : "Iris is asleep"}
-        </div>
         <div
           className="orb-stage hud-orb"
           ref={orbStageRef}

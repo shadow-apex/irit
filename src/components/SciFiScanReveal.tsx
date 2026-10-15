@@ -898,7 +898,7 @@ export default function SciFiScanReveal({
           height: 2px;
           background: rgba(62, 232, 255, 0.9);
           box-shadow: 0 0 12px rgba(62, 232, 255, 0.7);
-          animation: ssr-intro-line-anim 1.4s 3.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+          animation: ssr-intro-line-anim ${1.4 / speed}s ${3.2 / speed}s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
           z-index: 11;
         }
         @keyframes ssr-intro-line-anim {
@@ -920,7 +920,7 @@ export default function SciFiScanReveal({
           border-bottom-color: rgba(62, 232, 255, 0.9);
           opacity: 0;
           box-shadow: 0 0 20px rgba(62,232,255, 0.4), inset 0 0 20px rgba(62,232,255, 0.4);
-          animation: ssr-intro-circle-anim 1.2s 4.0s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+          animation: ssr-intro-circle-anim ${1.2 / speed}s ${4.0 / speed}s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
           z-index: 10;
         }
         @keyframes ssr-intro-circle-anim {
@@ -937,7 +937,7 @@ export default function SciFiScanReveal({
           align-items: center;
           justify-content: center;
           opacity: 0;
-          animation: ssr-orb-fade-in 1s 4.8s ease forwards;
+          animation: ssr-orb-fade-in ${1 / speed}s ${4.8 / speed}s ease forwards;
         }
         @keyframes ssr-orb-fade-in {
           from { opacity: 0; transform: scale(0.9); }
@@ -1010,7 +1010,7 @@ export default function SciFiScanReveal({
             <div className="ssr-intro-line" />
             <div className="ssr-intro-circle" />
             <div className="ssr-orb-wrapper">
-              <ReactorCore state="working" />
+              <ReactorCore state="working" speed={speed} />
             </div>
           </>
         )}

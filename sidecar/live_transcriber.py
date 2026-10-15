@@ -125,9 +125,10 @@ def get_fallback_model():
         if _fallback_model is None:
             from faster_whisper import WhisperModel
 
-            print("[FALLBACK] Đang tải model Whisper cục bộ (dự phòng)...", file=sys.stderr, flush=True)
+            whisper_model = (os.environ.get("IRIS_WHISPER_MODEL") or "small").strip()
+            print(f"[FALLBACK] Đang tải model Whisper cục bộ ({whisper_model}, dự phòng)...", file=sys.stderr, flush=True)
             cpu_cores = os.cpu_count() or 4
-            _fallback_model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8", cpu_threads=cpu_cores)
+            _fallback_model = WhisperModel(whisper_model, device="cpu", compute_type="int8", cpu_threads=cpu_cores)
             print("[FALLBACK] Model Whisper cục bộ đã sẵn sàng.", file=sys.stderr, flush=True)
         return _fallback_model
 

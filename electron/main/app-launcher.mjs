@@ -107,20 +107,9 @@ export function isProtectedProcess(name) {
   return PROTECTED_PROCESSES.has(String(name || "").toLowerCase());
 }
 
-const SAFE_SYSTEM_TOOLS = new Set(["cmd.exe", "powershell.exe", "calc.exe", "notepad.exe", "explorer.exe"]);
-
 /** @param {{desktopDir:string, openExternal:(u:string)=>Promise<void>, openPath:(p:string)=>Promise<string>}} deps */
 export async function openAppTarget(target, deps) {
   try {
-    if (typeof target === "string" && SAFE_SYSTEM_TOOLS.has(target.toLowerCase())) {
-      if (process.platform === "win32") {
-        const sysPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", target.toLowerCase());
-        if (fs.existsSync(sysPath)) {
-          const err = await deps.openPath(sysPath);
-          return err ? { success: false, error: err } : { success: true };
-        }
-      }
-    }
     if (typeof target === "string" && /^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:[\\/]/i.test(target)) {
       if (!isSafeExternalUrl(target)) return { success: false, error: "Chỉ cho phép URL http/https/vscode" };
       await deps.openExternal(target);

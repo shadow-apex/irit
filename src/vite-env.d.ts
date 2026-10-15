@@ -304,6 +304,11 @@ type IrisApi = {
   toggleTranslate: (targetLang: string) => Promise<{ status: string; message: string }>;
   toggleInterviewCopilot: () => Promise<{ status: string; message: string }>;
   askTeleprompter: (question: string) => Promise<{ status: string; error?: string }>;
+  toggleLiveTranscriber: () => Promise<{ status: string; message?: string; error?: string }>;
+  toggleScreenVision: () => Promise<{ status: string; message?: string; error?: string }>;
+  getScreenVisionState: () => Promise<{ isVisionEnabled: boolean }>;
+  toggleMeetingRecording: () => Promise<{ status: string; message?: string; error?: string }>;
+  getMeetingRecordingState: () => Promise<{ isRecording: boolean }>;
   onSnapDeskVision: (callback: () => void) => () => void;
   sendDeskVisionFrame: (data: string) => void;
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;

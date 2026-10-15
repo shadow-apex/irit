@@ -18,6 +18,10 @@ import { emitEvent } from "./events.mjs";
 import { mainWindow } from "./window-manager.mjs";
 import { liveSession, sendVideoFrame } from "./gemini-live.mjs";
 import { getRobotsConfig, getSmartHomeCamerasConfig } from "./device-config.mjs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { resolvePythonCommand } from "./sidecar-process.mjs";
+import { unpackedRepoRoot } from "./paths.mjs";
 import { grabJpeg, createFrameLoop } from "./vision-capture.mjs";
 
 const MAX_IPC_FRAME_CHARS = 5_600_000; // ≈ 4 MB nhị phân sau base64
@@ -77,6 +81,29 @@ export function visionFrameGeometry() {
   };
 }
 
+function captureScreenFallback(geometry, quality = 50) {
+  return new Promise((resolve, reject) => {
+    const pythonCmd = resolvePythonCommand();
+    const scriptPath = path.join(unpackedRepoRoot(), "sidecar", "screen_capture.py");
+    const proc = spawn(pythonCmd, [scriptPath, String(geometry.frame_w), String(geometry.frame_h), String(quality)], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks = [];
+    let errOutput = "";
+    proc.stdout.on("data", (chunk) => chunks.push(chunk));
+    proc.stderr.on("data", (err) => { errOutput += err.toString(); });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks));
+      } else {
+        reject(new Error(errOutput.trim() || `Exit code ${code}`));
+      }
+    });
+  });
+}
+
 /** Chụp màn hình chính → { buffer: JPEG, geometry }. Dùng chung cho vòng lặp vision và take_ai_screenshot. */
 export async function grabPrimaryScreenJpeg(quality = 50) {
   const { desktopCapturer, systemPreferences } = electron;
@@ -88,15 +115,38 @@ export async function grabPrimaryScreenJpeg(quality = 50) {
   }
   const primary = screen.getPrimaryDisplay();
   const geometry = visionFrameGeometry();
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: geometry.frame_w, height: geometry.frame_h },
-  });
-  // Đa màn hình: chọn đúng màn hình chính theo display_id (sources[0] không đảm bảo).
-  const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
-  if (!src) throw new Error("Không có nguồn màn hình (macOS: cấp quyền Screen Recording).");
-  const buffer = src.thumbnail.toJPEG(quality);
-  sources.length = 0; // giải phóng NativeImage — vòng lặp chạy liên tục
+  let buffer = null;
+
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: geometry.frame_w, height: geometry.frame_h },
+    });
+    // Đa màn hình: chọn đúng màn hình chính theo display_id (sources[0] không đảm bảo).
+    const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
+    if (src && !src.thumbnail.isEmpty()) {
+      const b = src.thumbnail.toJPEG(quality);
+      if (b && b.length > 0) buffer = b;
+    }
+    sources.length = 0; // giải phóng NativeImage — vòng lặp chạy liên tục
+  } catch (err) {
+    // desktopCapturer failed (e.g. WebRTC thread attach error on Windows)
+  }
+
+  // Dự phòng: trên Windows nếu desktopCapturer trả về rỗng (lỗi WebRTC desktop thread)
+  // thì chụp trực tiếp qua sidecar/screen_capture.py (Pillow ImageGrab + OpenInputDesktop).
+  if (!buffer || buffer.length === 0) {
+    try {
+      buffer = await captureScreenFallback(geometry, quality);
+    } catch (fallbackErr) {
+      // Báo lỗi nếu cả 2 phương án đều không thành công
+    }
+  }
+
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Không có nguồn màn hình hoặc không thể chụp ảnh màn hình.");
+  }
+
   return { buffer, geometry };
 }
 

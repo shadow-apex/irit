@@ -1,4 +1,5 @@
-import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone, Monitor, Subtitles, Disc } from "lucide-react";
 import AppLauncher from "./AppLauncher";
 
 function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
@@ -33,6 +34,37 @@ export default function TopBar({
   onOpenRobotCameras: () => void;
   onOpenCompanionQR: () => void;
 }) {
+  const [isScreenVision, setIsScreenVision] = useState(false);
+  const [isMeetingRecording, setIsMeetingRecording] = useState(false);
+  const [isTeleprompter, setIsTeleprompter] = useState(false);
+
+  const refreshStates = useCallback(() => {
+    window.iris?.getScreenVisionState?.().then((s) => setIsScreenVision(!!s?.isVisionEnabled)).catch(() => {});
+    window.iris?.getMeetingRecordingState?.().then((s) => setIsMeetingRecording(!!s?.isRecording)).catch(() => {});
+    window.iris?.getTeleprompterState?.().then((s) => setIsTeleprompter(!!s?.transcriberActive)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshStates();
+    const iv = setInterval(refreshStates, 2500);
+    return () => clearInterval(iv);
+  }, [refreshStates]);
+
+  const handleToggleScreenVision = async () => {
+    await window.iris?.toggleScreenVision?.();
+    refreshStates();
+  };
+
+  const handleToggleTeleprompter = async () => {
+    await window.iris?.toggleLiveTranscriber?.();
+    refreshStates();
+  };
+
+  const handleToggleMeeting = async () => {
+    await window.iris?.toggleMeetingRecording?.();
+    refreshStates();
+  };
+
   return (
     <header className="deck-top">
       <div className="deck-top-left">
@@ -66,6 +98,30 @@ export default function TopBar({
         <span className="brand-mark">I.R.I.S</span>
       </div>
       <div className="deck-top-right">
+        <button
+          className={`theme-toggle ${isScreenVision ? "active" : ""}`}
+          onClick={handleToggleScreenVision}
+          title={`Chia sẻ màn hình / Screen Vision (Alt+S)${isScreenVision ? " · Đang chia sẻ" : ""}`}
+          aria-label="Toggle Screen Vision"
+        >
+          <Monitor size={16} />
+        </button>
+        <button
+          className={`theme-toggle ${isTeleprompter ? "active" : ""}`}
+          onClick={handleToggleTeleprompter}
+          title={`Live Teleprompter / Nhắc bài & Dịch (Alt+T)${isTeleprompter ? " · Đang bật" : ""}`}
+          aria-label="Toggle Live Teleprompter"
+        >
+          <Subtitles size={16} />
+        </button>
+        <button
+          className={`theme-toggle ${isMeetingRecording ? "active" : ""}`}
+          onClick={handleToggleMeeting}
+          title={`Ghi âm & Tóm tắt cuộc họp (Alt+M)${isMeetingRecording ? " · Đang ghi âm" : ""}`}
+          aria-label="Toggle Meeting Recording"
+        >
+          <Disc size={16} />
+        </button>
         <AppLauncher />
         <button
           className="theme-toggle"

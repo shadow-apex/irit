@@ -62,6 +62,11 @@ contextBridge.exposeInMainWorld("iris", {
   toggleTranslate: (targetLang) => ipcRenderer.invoke("teleprompter:toggle-translate", targetLang),
   toggleInterviewCopilot: () => ipcRenderer.invoke("teleprompter:toggle-copilot"),
   askTeleprompter: (question) => ipcRenderer.invoke("teleprompter:ask", question),
+  toggleLiveTranscriber: () => ipcRenderer.invoke("teleprompter:toggle-transcriber"),
+  toggleScreenVision: () => ipcRenderer.invoke("vision:toggle-screen"),
+  getScreenVisionState: () => ipcRenderer.invoke("vision:get-screen-state"),
+  toggleMeetingRecording: () => ipcRenderer.invoke("meeting:toggle"),
+  getMeetingRecordingState: () => ipcRenderer.invoke("meeting:get-state"),
   sendDeskVisionFrame: (base64) => ipcRenderer.send("vision:desk-frame", base64),
   // V-12/V-13: renderer báo trạng thái thật để main không "đoán"
   reportDeskVisionState: (enabled) => ipcRenderer.send("vision:desk-state", { enabled: enabled === true }),
