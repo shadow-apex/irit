@@ -1016,11 +1016,12 @@
   animation: step-spin 0.7s linear infinite;
 }
 
-/* ===== Boot sequence overlay ===== */
-.boot {
+/* ===== Boot sequence overlay / card ===== */
+.deck .boot,
+.boot:not(.compact) {
   position: relative;
-  width: min(480px, calc(100% - 64px));
-  max-width: 480px;
+  width: min(520px, calc(100% - 64px));
+  max-width: 520px;
   margin: 0 auto 8px;
   align-self: center;
   z-index: 60;
@@ -1044,17 +1045,8 @@
   overflow: hidden;
 }
 
-/* Reuse the real orb (ReactorCore) so the boot orb matches the live one. */
-.boot .boot-orb {
-  width: min(34vh, 260px);
-  height: min(34vh, 260px);
-}
-
-/* The orb ring/radar chrome are only shown inside .deck.awake; show them here too. */
-.boot .orb-ring { opacity: 1; }
-.boot .orb-radar { opacity: 0.7; }
-
 .boot-title {
+  position: relative;
   margin-top: 2px;
   font-family: var(--font-display);
   font-weight: 600;
@@ -1063,6 +1055,12 @@
   margin-right: -0.5em;
   color: #eaf6ff;
   text-shadow: 0 0 24px rgba(var(--cyan-rgb), 0.45);
+  animation: boot-title-in 1s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
+}
+
+@keyframes boot-title-in {
+  from { opacity: 0; filter: blur(9px); letter-spacing: 0.75em; }
+  to { opacity: 1; filter: blur(0); letter-spacing: 0.5em; }
 }
 
 .boot-sub {
@@ -1072,6 +1070,7 @@
   margin-right: -0.52em;
   color: var(--muted);
   text-transform: uppercase;
+  animation: boot-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.7s both;
 }
 
 .boot-log {
@@ -1079,6 +1078,12 @@
   width: 320px;
   font-family: var(--font-mono);
   font-size: 11.5px;
+  animation: boot-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.95s both;
+}
+
+@keyframes boot-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .boot-line {
@@ -1087,7 +1092,7 @@
   gap: 10px;
   padding: 3px 0;
   color: var(--muted);
-  opacity: 0.5;
+  opacity: 0.45;
   transition: color 0.3s ease, opacity 0.3s ease;
 }
 
@@ -1121,6 +1126,7 @@
   border-radius: 999px;
   background: rgba(148, 196, 255, 0.12);
   overflow: hidden;
+  animation: boot-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) 1.05s both;
 }
 
 .boot-bar-fill {
@@ -1147,7 +1153,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ts-menu,
-  .spin {
+  .spin,
+  .boot .boot-orb,
+  .boot-title,
+  .boot-sub,
+  .boot-log,
+  .boot-bar {
     animation: none;
   }
 }

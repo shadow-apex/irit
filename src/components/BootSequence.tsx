@@ -10,7 +10,15 @@ const BOOT_LINES = [
   "establishing secure channel",
 ];
 
-export default function BootSequence({ visible }: { visible: boolean }) {
+export default function BootSequence({
+  visible,
+  closing = false,
+  compact = false,
+}: {
+  visible: boolean;
+  closing?: boolean;
+  compact?: boolean;
+}) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -27,14 +35,7 @@ export default function BootSequence({ visible }: { visible: boolean }) {
   if (!visible) return null;
 
   return (
-    <div className="boot">
-      <div className="boot-rings">
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-      <div className="boot-core" />
+    <div className={`boot ${compact ? "compact" : ""} ${closing ? "closing" : ""}`}>
       <div className="boot-title">I.R.I.S</div>
       <div className="boot-sub">SYSTEM INITIALIZATION</div>
 

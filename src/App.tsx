@@ -644,13 +644,46 @@ export default function App() {
   );
 
   const booting = sidecarRunning && geminiStatus !== "connected";
-  const prevBootingRef = useRef(false);
+  const [bootActive, setBootActive] = useState(false);
+  const [bootClosing, setBootClosing] = useState(false);
+  const bootStartRef = useRef(0);
+  const wasRunningRef = useRef(false);
+
   useEffect(() => {
-    // Tell main the boot screen is gone so Iris can speak its welcome now
-    // (design.md D6) — only on the falling edge, once per wake.
-    if (prevBootingRef.current && !booting && hasBridge) window.iris.notifyBootDone();
-    prevBootingRef.current = booting;
-  }, [booting, hasBridge]);
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = sidecarRunning;
+    if (!sidecarRunning) {
+      setBootActive(false);
+      setBootClosing(false);
+      return;
+    }
+    if (wasRunning) return;
+    if (geminiStatus === "connected") return; // instant resume — skip the intro
+    bootStartRef.current = Date.now();
+    setBootClosing(false);
+    setBootActive(true);
+  }, [sidecarRunning, geminiStatus]);
+
+  useEffect(() => {
+    if (booting || !bootActive) return;
+    const MIN_VISIBLE_MS = 2400;
+    const FADE_MS = 450;
+    const elapsed = Date.now() - bootStartRef.current;
+    let doneTimer: number | undefined;
+    const closeTimer = window.setTimeout(() => {
+      setBootClosing(true);
+      doneTimer = window.setTimeout(() => {
+        setBootActive(false);
+        setBootClosing(false);
+        // Tell main the boot screen is gone so Iris can speak its welcome now.
+        if (hasBridge) window.iris.notifyBootDone();
+      }, FADE_MS);
+    }, Math.max(0, MIN_VISIBLE_MS - elapsed));
+    return () => {
+      window.clearTimeout(closeTimer);
+      if (doneTimer) window.clearTimeout(doneTimer);
+    };
+  }, [booting, bootActive, hasBridge]);
 
   const reactorState = useMemo(() => {
     if (!sidecarRunning) return "idle" as const;
@@ -2054,7 +2087,12 @@ export default function App() {
           />
         ) : null}
 
-        {booting ? <BootSequence visible={booting} /> : null}
+        {uiMode === "deck" && bootActive ? (
+          <BootSequence
+            visible={bootActive}
+            closing={bootClosing}
+          />
+        ) : null}
 
         <footer className="deck-foot">
           <span className="build-meta">
@@ -2098,6 +2136,14 @@ export default function App() {
           matches={taskChooser.matches}
           onOpen={openTask}
           onClose={() => setTaskChooser(null)}
+        />
+      ) : null}
+
+      {uiMode === "hud" && bootActive ? (
+        <BootSequence
+          visible={bootActive}
+          closing={bootClosing}
+          compact
         />
       ) : null}
 
