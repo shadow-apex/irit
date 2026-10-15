@@ -48,17 +48,81 @@ def _hotkey(mod_vk, key_vk):
 
 
 def speak_phrase(text):
-    """Phát âm thanh thông báo qua Windows Speech Synthesizer (nếu có)."""
+    """Phát âm thanh tiếng Việt tự nhiên chuẩn AI (giọng nữ Hoài My Neural giống Iris), fallback sang winsdk/SAPI."""
+    # 1. Thử qua Edge-TTS Neural Voice (giọng AI tiếng Việt tự nhiên, ấm áp, truyền cảm giống Iris)
     try:
-        ps_code = "[System.Reflection.Assembly]::LoadWithPartialName('System.Speech') | Out-Null; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Speak($args[0])"
+        import asyncio
+        import edge_tts
+        import tempfile
+
+        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}.mp3")
+
+        async def _edge():
+            comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural")
+            await comm.save(tmp_mp3)
+
+        asyncio.run(_edge())
+        if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
+            winmm = ctypes.windll.winmm
+            alias = f"iristts_{os.getpid()}"
+            winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
+            winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
+            winmm.mciSendStringW(f"close {alias}", None, 0, None)
+            try:
+                os.remove(tmp_mp3)
+            except Exception:
+                pass
+            return
+    except Exception as e:
+        sys.stderr.write(f"[TTS edge: {e}]\n")
+
+    # 2. Fallback qua winsdk (Microsoft An)
+    try:
+        import winsdk.windows.media.speechsynthesis as ws
+        import winsdk.windows.storage.streams as streams
+        import winsound
+        import asyncio
+
+        async def _synth():
+            synth = ws.SpeechSynthesizer()
+            for v in ws.SpeechSynthesizer.all_voices:
+                if "vi-vn" in v.language.lower() or "an" in v.display_name.lower():
+                    synth.voice = v
+                    break
+            stream = await synth.synthesize_text_to_stream_async(text)
+            reader = streams.DataReader(stream.get_input_stream_at(0))
+            await reader.load_async(stream.size)
+            data = bytearray(stream.size)
+            reader.read_bytes(data)
+            return bytes(data)
+
+        wav_bytes = asyncio.run(_synth())
+        winsound.PlaySound(wav_bytes, winsound.SND_MEMORY)
+        return
+    except Exception as e:
+        sys.stderr.write(f"[TTS winsdk: {e}]\n")
+
+    # 3. Fallback qua PowerShell SAPI (truyền text qua STDIN UTF-8 an toàn)
+    try:
+        ps_code = (
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "Add-Type -AssemblyName System.Speech; "
+            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            "$text = [Console]::In.ReadToEnd(); "
+            "if ($text) { $s.Speak($text) }"
+        )
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_code, text],
-            timeout=5,
+            ["powershell", "-NoProfile", "-Command", ps_code],
+            input=text,
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=8,
             check=False,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        sys.stderr.write(f"[TTS fallback: {e}]\n")
 
 
 def find_notepad_edit(keyword):
@@ -186,10 +250,10 @@ def run_showcase():
     # -------------------------------------------------------------
     # 5. DI CHUYỂN CON TRỎ CHUỘT
     # -------------------------------------------------------------
-    report_step(5, "Di chuyển con trỏ", "Tôi có thể di chuyển con trỏ chuột")
+    report_step(5, "Di chuyển con trỏ chuột", "Tôi có thể di chuyển con trỏ chuột")
     content += "\n[5/6] ĐIỀU KHIỂN CHUỘT: Tự động di chuyển con trỏ chuột trên màn hình..."
     update_notepad(hedit, content)
-    speak_phrase("Tôi có thể di chuyển con trỏ")
+    speak_phrase("Tôi có thể di chuyển con trỏ chuột")
     time.sleep(0.4)
     sw = ctypes.windll.user32.GetSystemMetrics(0)
     sh = ctypes.windll.user32.GetSystemMetrics(1)
@@ -205,10 +269,10 @@ def run_showcase():
     # -------------------------------------------------------------
     # 6. DI CHUYỂN CỬA SỔ
     # -------------------------------------------------------------
-    report_step(6, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ")
+    report_step(6, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ ứng dụng")
     content += "\n[6/6] QUẢN LÝ CỬA SỔ: Di chuyển vị trí cửa sổ Notepad trên màn hình..."
     update_notepad(hedit, content)
-    speak_phrase("Tôi có thể di chuyển cửa sổ")
+    speak_phrase("Tôi có thể di chuyển cửa sổ ứng dụng")
     time.sleep(0.4)
     if notepad_hwnd:
         # Lượn cửa sổ sang phải rồi quay về
@@ -230,6 +294,7 @@ def run_showcase():
         "============================================================\n"
     )
     update_notepad(hedit, content)
+    speak_phrase("Đã hoàn tất toàn bộ màn trình diễn trực tiếp.")
 
     # Đảm bảo ghi lại file đầy đủ
     with open(temp_path, "w", encoding="utf-8") as f:

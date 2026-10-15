@@ -630,7 +630,7 @@ export async function irisShowcaseTool(_args = {}) {
     }
   };
 
-  const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 50000, onLine });
+  const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 65000, onLine });
   const res = buildToolResponse(run, "iris_showcase.py thất bại.");
 
   emitEvent({ type: "audio_state", state: "idle" });

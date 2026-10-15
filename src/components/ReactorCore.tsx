@@ -165,12 +165,18 @@ export default function ReactorCore({
     function draw(time: number) {
       const s = stateRef.current;
       const palette = PALETTES[s];
+      const t = (time / 1000) * speed;
       energyRef.current += (targetEnergy(s) - energyRef.current) * 0.06;
       // Live audio levels react fast on top of the smooth base energy so the
       // core visibly breathes with the actual voice. Mic and playback are
       // tracked separately for the two voice signatures.
       const inTarget = inputLevelRef ? Math.max(0, Math.min(1, inputLevelRef.current)) : 0;
-      const outTarget = outputLevelRef ? Math.max(0, Math.min(1, outputLevelRef.current)) : 0;
+      let outTarget = outputLevelRef ? Math.max(0, Math.min(1, outputLevelRef.current)) : 0;
+      if (s === "speaking" && outTarget < 0.05) {
+        // Natural speech modulation: vibrates the orb's voice rings and core while Iris speaks
+        const speechOsc = 0.32 + 0.22 * Math.sin(t * 8.2) * Math.cos(t * 3.4) + 0.1 * Math.sin(t * 14.5);
+        outTarget = Math.max(0.12, speechOsc);
+      }
       inRef.current += (inTarget - inRef.current) * 0.35;
       outRef.current += (outTarget - outRef.current) * 0.35;
       const legacyTarget = levelRef ? Math.max(0, Math.min(1, levelRef.current)) : 0;
@@ -180,7 +186,6 @@ export default function ReactorCore({
       const live = Math.max(liveRef.current, inLive, outLive);
       boostRef.current *= 0.945; // wake surge decays over ~1s
       const energy = Math.min(1, energyRef.current + live * 0.6 + boostRef.current);
-      const t = (time / 1000) * speed;
 
       const cx = width / 2;
       const cy = height / 2;

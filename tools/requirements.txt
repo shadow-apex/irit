@@ -13,6 +13,7 @@ plyer           # notifier.py (thông báo hệ thống)
 pytesseract     # ocr_region.py — CẦN CÀI THÊM Tesseract-OCR engine riêng (không phải gói pip):
                 #   https://github.com/UB-Mannheim/tesseract/wiki  (khuyến nghị cài thêm gói ngôn ngữ 'vie')
 winsdk          # read_notifications.py (WinRT UserNotificationListener)
+edge-tts        # iris_showcase.py (giọng AI tiếng Việt tự nhiên)
 
 # Không cần cài thêm (chỉ dùng ctypes/subprocess/winreg có sẵn):
 #   idle_time.py, lock_screen.py, multi_monitor_info.py, magic_move.py, move_window.py,
