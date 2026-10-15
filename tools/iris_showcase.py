@@ -55,7 +55,7 @@ def speak_phrase(text):
         import edge_tts
         import tempfile
 
-        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}.mp3")
+        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}_{int(time.time() * 1000)}.mp3")
 
         async def _edge():
             comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural")
@@ -64,14 +64,16 @@ def speak_phrase(text):
         asyncio.run(_edge())
         if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
             winmm = ctypes.windll.winmm
-            alias = f"iristts_{os.getpid()}"
-            winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
-            winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
-            winmm.mciSendStringW(f"close {alias}", None, 0, None)
+            alias = f"iristts_{os.getpid()}_{int(time.time() * 1000)}"
             try:
-                os.remove(tmp_mp3)
-            except Exception:
-                pass
+                winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
+                winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
+            finally:
+                winmm.mciSendStringW(f"close {alias}", None, 0, None)
+                try:
+                    os.remove(tmp_mp3)
+                except Exception:
+                    pass
             return
     except Exception as e:
         sys.stderr.write(f"[TTS edge: {e}]\n")
@@ -303,6 +305,7 @@ def run_showcase():
     speak_phrase("Tôi có thể di chuyển cửa sổ ứng dụng")
     time.sleep(0.4)
     if notepad_hwnd:
+        ctypes.windll.user32.SetForegroundWindow(notepad_hwnd)
         # Lượn cửa sổ sang phải rồi quay về
         for step_x in range(60, 620, 35):
             _winutil.move_resize(notepad_hwnd, step_x, 90, 680, 520)
