@@ -1,6 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import { mouse, keyboard, Point, Key, Button, screen as nutScreen } from "@nut-tree-fork/nut-js";
-import { desktopCapturer, screen as electronScreen } from "electron";
+import electron from "electron";
+const { desktopCapturer, screen: electronScreen, clipboard } = electron || {};
 
 // Config nut.js
 nutScreen.config.autoHighlight = false;
@@ -107,7 +108,7 @@ for (let i = 1; i <= 24; i++) {
 // Nhận vào chuỗi kiểu "ctrl+a", "ctrl+shift+t", "super+d", "Return"... và
 // bấm tổ hợp phím tương ứng: giữ hết các modifier -> bấm phím chính -> nhả
 // phím chính -> nhả các modifier theo thứ tự ngược lại.
-async function pressKeyCombo(rawText) {
+export async function pressKeyCombo(rawText) {
   const parts = String(rawText)
     .toLowerCase()
     .split("+")
@@ -138,8 +139,33 @@ async function pressKeyCombo(rawText) {
     await keyboard.releaseKey(mainKey);
   } finally {
     // Luôn nhả hết modifier kể cả khi có lỗi ở giữa, tránh phím bị "kẹt"
-    for (const mod of [...modifiers].reverse()) await keyboard.releaseKey(mod);
+    for (const mod of [...modifiers].reverse()) {
+      try { await keyboard.releaseKey(mod); } catch { /* ignore */ }
+    }
   }
+}
+
+/**
+ * Gõ văn bản native trên Windows: ưu tiên paste qua Clipboard + Ctrl+V để hỗ trợ 100%
+ * ký tự Unicode / tiếng Việt có dấu mà không bị bộ gõ Unikey/EVKey làm sai dấu.
+ */
+export async function typeTextNative(text) {
+  if (!text) return;
+  try {
+    if (clipboard && typeof clipboard.writeText === "function") {
+      const original = typeof clipboard.readText === "function" ? clipboard.readText() : "";
+      clipboard.writeText(text);
+      await pressKeyCombo("ctrl+v");
+      await new Promise((r) => setTimeout(r, 120));
+      setTimeout(() => {
+        try { clipboard.writeText(original); } catch { /* ignore */ }
+      }, 500);
+      return;
+    }
+  } catch {
+    // Fallback gõ từng ký tự qua nut.js nếu không dùng được clipboard
+  }
+  await keyboard.type(text);
 }
 
 // ============================================================================

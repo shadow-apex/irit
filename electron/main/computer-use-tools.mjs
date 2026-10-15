@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import electron from "electron";
 const { shell } = electron;
-import { runComputerSession } from "../computer-session.mjs";
+import { runComputerSession, pressKeyCombo, typeTextNative } from "../computer-session.mjs";
 import * as browserAgent from "../browser-agent.mjs";
 import {
   submitAction,
@@ -248,30 +248,44 @@ export async function startComputerUseType(args) {
   if (!text && !key) {
     return { status: "error", message: "Missing 'text' or 'key' to type." };
   }
-  emitEvent({ type: "log", level: "info", message: `Typing - text: '${text}', key: '${key}'` });
+  emitEvent({ type: "log", level: "info", message: `Typing - text: '${text || ""}', key: '${key || ""}'` });
 
-  const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  
-  try {
-    const response = await fetch(typeUrl, {
-      method: "POST",
-      headers: omniAuthHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ text, key }),
-      signal: controller.signal
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.success) {
-      throw new Error(`Keyboard action failed: ${result.error || response.statusText}`);
+  // 1. Thử qua OmniParser nếu server OmniParser được cấu hình và đang hoạt động
+  if (process.env.OMNIPARSER_TYPE_URL || process.env.OMNIPARSER_ENABLED === "true") {
+    const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const response = await fetch(typeUrl, {
+        method: "POST",
+        headers: omniAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ text, key }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const result = await response.json().catch(() => ({}));
+      if (response.ok && result.success) {
+        emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success via OmniParser` });
+        return { status: "success", message: `Đã nhập thành công qua OmniParser.` };
+      }
+    } catch {
+      // OmniParser không sẵn sàng, tự động chuyển xuống native typing bên dưới
     }
-    emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success` });
-    return { status: "success", message: `Keyboard action successful.` };
-  } catch (err) {
-    emitEvent({ type: "log", level: "error", message: `[Keyboard Error] ${err.message}` });
-    return { status: "error", message: `Error performing keyboard action: ${err.message}` };
-  } finally {
-    clearTimeout(timeoutId);
+  }
+
+  // 2. Nhập trực tiếp qua hệ thống (Nut.js + Clipboard) — hoạt động độc lập, không cần server
+  try {
+    if (text) {
+      await typeTextNative(text);
+    }
+    if (key) {
+      await pressKeyCombo(key);
+    }
+    emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success via native keyboard` });
+    return { status: "success", message: `Đã nhập xong: ${text ? `"${text}"` : key}` };
+  } catch (nativeErr) {
+    emitEvent({ type: "log", level: "error", message: `[Keyboard Error] ${nativeErr.message}` });
+    return { status: "error", message: `Không thể thực hiện thao tác bàn phím: ${nativeErr.message}` };
   }
 }
 
