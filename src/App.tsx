@@ -586,6 +586,13 @@ export default function App() {
         return;
       }
 
+      // Alt + Space (hoặc Option + Space): Bật / Tắt Glass HUD
+      if (event.altKey && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        window.iris?.toggleHud?.();
+        return;
+      }
+
       // Ctrl + Space: Bật / Tắt tràn toàn màn hình (phủ cả thanh taskbar Windows)
       if ((event.ctrlKey || event.metaKey) && (event.code === "Space" || event.key === " ")) {
         event.preventDefault();
@@ -593,11 +600,18 @@ export default function App() {
         return;
       }
 
-      // Escape: Thoát tràn toàn màn hình
-      if (key === "escape" && isFullscreen) {
-        event.preventDefault();
-        window.iris?.toggleFullscreen?.();
-        return;
+      // Escape: Thoát tràn toàn màn hình hoặc thoát Glass HUD
+      if (key === "escape") {
+        if (isFullscreen) {
+          event.preventDefault();
+          window.iris?.toggleFullscreen?.();
+          return;
+        }
+        if (uiMode === "hud") {
+          event.preventDefault();
+          window.iris?.toggleHud?.();
+          return;
+        }
       }
       
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
@@ -628,7 +642,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [sidecarRunning, hasBridge, secondBrainActive, isFullscreen]);
+  }, [sidecarRunning, hasBridge, secondBrainActive, isFullscreen, uiMode]);
 
   // Scoped autoscroll: scrollIntoView would also scroll every scrollable
   // ancestor (the rounded deck clips with overflow:hidden), shifting the whole

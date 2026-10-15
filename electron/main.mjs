@@ -474,12 +474,21 @@ app.whenReady().then(() => {
   startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini);
 
   createTray();
-  const registered = globalShortcut.register(hudHotkey(), () => {
-    toggleHud();
-    updateTrayMenu();
-  });
-  if (!registered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
+  const hudKey = hudHotkey();
+  const registerHud = (acc) => {
+    try {
+      return globalShortcut.register(acc, () => {
+        toggleHud();
+        updateTrayMenu();
+      });
+    } catch {
+      return false;
+    }
+  };
+  const reg1 = registerHud(hudKey);
+  const reg2 = registerHud("CommandOrControl+Alt+Space");
+  if (!reg1 && !reg2) {
+    emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudKey}.` });
   }
 
   // Phím tắt Ctrl + Space để tràn toàn màn hình (phủ cả taskbar)
