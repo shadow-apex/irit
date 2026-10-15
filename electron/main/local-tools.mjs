@@ -605,7 +605,7 @@ export async function fileExplorerTool(args = {}) {
 // -----------------------------------------------------------------------
 export async function irisShowcaseTool() {
   const { enterHud } = await import("./window-manager.mjs");
-  const { emitEvent, emitToRenderer } = await import("./events.mjs");
+  const { emitEvent } = await import("./events.mjs");
 
   // Vào chế độ Glass HUD (Alt + Space) trước khi trình diễn
   enterHud();
@@ -613,10 +613,6 @@ export async function irisShowcaseTool() {
 
   emitEvent({ type: "audio_state", state: "speaking" });
   emitEvent({ type: "transcript", speaker: "iris", text: "Xin chào! Sau đây là màn trình diễn trực tiếp khả năng điều khiển hệ thống của Iris." });
-  emitToRenderer("hud:message", {
-    title: "IRIS LIVE SHOWCASE",
-    content: "Đang mở Notepad và trực tiếp trình diễn các tính năng điều khiển hệ thống...",
-  });
 
   const onLine = (line) => {
     if (line.startsWith("IRIS_SHOWCASE_STEP:")) {
@@ -624,10 +620,6 @@ export async function irisShowcaseTool() {
         const payload = JSON.parse(line.slice("IRIS_SHOWCASE_STEP:".length));
         emitEvent({ type: "audio_state", state: "speaking" });
         emitEvent({ type: "transcript", speaker: "iris", text: `[${payload.step}/6] ${payload.speech}` });
-        emitToRenderer("hud:message", {
-          title: `IRIS SHOWCASE [${payload.step}/6]`,
-          content: `${payload.title}: ${payload.speech}`,
-        });
       } catch {
         // bỏ qua nếu lỗi parse
       }
@@ -642,10 +634,6 @@ export async function irisShowcaseTool() {
     type: "transcript",
     speaker: "iris",
     text: "Đã hoàn thành toàn bộ màn trình diễn trực tiếp!",
-  });
-  emitToRenderer("hud:message", {
-    title: "IRIS SHOWCASE HOÀN TẤT",
-    content: "Đã biểu diễn thành công 6 tính năng điều khiển trực tiếp trên máy tính!",
   });
 
   return res;

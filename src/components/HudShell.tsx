@@ -663,7 +663,6 @@ export default function HudShell({
 
       {/* Orb cluster, bottom-right */}
       <div className="hud-orb-cluster hud-hit">
-        {caption ? <div className={`hud-caption ${captionDim ? "dim" : ""}`}>{caption}</div> : null}
         <div
           className="orb-stage hud-orb"
           ref={orbStageRef}
