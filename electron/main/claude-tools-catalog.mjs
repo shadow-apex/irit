@@ -251,34 +251,35 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "move_window_magic",
-          description: "Move a window on the user's screen using tools/magic_move.py. Use when the user asks you to move a window. Never targets Iris's own window.",
+          description: "Move a window on the user's screen directly and instantly using tools/magic_move.py. Moves the currently active or topmost window directly to (x, y) without requiring the user to click or wait. Never targets Iris's own window.",
           parameters: {
             type: "object",
             properties: {
               mode: {
                 type: "string",
-                description: "'active' — the script REALLY counts down 5 seconds, then moves whichever window the user focused (tell the user right away to click the target window; the call returns after ~6 s); 'name' — move the window whose exe name or title (>=4 chars) matches. (A 'demo' mode exists only when IRIS_DEV_TOOLS=1.)",
+                description: "'active' (default: instantly moves current active/topmost window without countdown or user click); 'name' — move the window whose exe name or title (>=4 chars) matches. (A 'demo' mode exists only when IRIS_DEV_TOOLS=1.)",
               },
               name: { type: "string", description: "Window title (or part of it) to target. Required for mode 'name'." },
               x: { type: "integer", description: "Target X coordinate on screen. Defaults to 0." },
               y: { type: "integer", description: "Target Y coordinate on screen. Defaults to 0." },
+              wait: { type: "integer", description: "Optional seconds to wait before moving. Default 0 (moves instantly)." },
             },
             required: ["mode"],
           },
         },
         {
           name: "move_window_precise",
-          description: "Move and optionally resize a window on the user's screen via tools/move_window.py (Win32 API, no PowerShell). Use when the user asks you to move or resize/shrink a specific window (in Vietnamese: 'thu nhỏ cửa sổ', 'cho cửa sổ nhỏ lại', 'di chuyển cửa sổ') by name.",
+          description: "Move and optionally resize a window on the user's screen via tools/move_window.py (Win32 API, no PowerShell). Directly moves the window instantly without requiring the user to click. Use when the user asks you to move or resize/shrink a specific window (in Vietnamese: 'thu nhỏ cửa sổ', 'cho cửa sổ nhỏ lại', 'di chuyển cửa sổ', 'di chuyển tab'). Target window by name (e.g. 'chrome', 'notepad') or use 'active' (default) to move the currently open/active window directly.",
           parameters: {
             type: "object",
             properties: {
-              name: { type: "string", description: "Window title (or part of it) to target." },
+              name: { type: "string", description: "Window title (or part of it) or exe name to target, or 'active' for currently active window. Defaults to 'active'." },
               x: { type: "integer", description: "Target X coordinate on screen." },
               y: { type: "integer", description: "Target Y coordinate on screen." },
               width: { type: "integer", description: "Optional new width." },
               height: { type: "integer", description: "Optional new height." },
             },
-            required: ["name", "x", "y"],
+            required: ["x", "y"],
           },
         },
         {

@@ -33,15 +33,25 @@ def move_window(title, x, y, width=None, height=None):
     import _winutil
 
     t = validate_window_title(title)
-    wins = _winutil.select_windows(_winutil.enum_windows(), t)
-    if not wins:
-        return {"success": False, "error": f"Không tìm thấy cửa sổ nào khớp '{t}' (cửa sổ của chính Iris bị loại)."}
-    win = wins[0]
+    if t.lower() in ("active", "current", "focused", "top", "this", "cửa sổ này", "tab này", "tab"):
+        win = _winutil.foreground_window()
+        if not win or _winutil.is_self_window(win):
+            windows = _winutil.enum_windows(visible_only=True)
+            non_iris = [w for w in windows if not _winutil.is_self_window(w)]
+            if non_iris:
+                win = non_iris[0]
+            else:
+                return {"success": False, "error": "Không tìm thấy cửa sổ ứng dụng nào đang mở."}
+    else:
+        wins = _winutil.select_windows(_winutil.enum_windows(), t)
+        if not wins:
+            return {"success": False, "error": f"Không tìm thấy cửa sổ nào khớp '{t}' (cửa sổ của chính Iris bị loại)."}
+        win = wins[0]
     ok = _winutil.move_resize(win["hwnd"], x, y, width, height)
     if not ok:
         return {"success": False, "error": "SetWindowPos thất bại (cửa sổ có thể chạy với quyền cao hơn Iris)."}
     return {"success": True, "message": f"Đã di chuyển '{win['title']}' đến ({x}, {y}).",
-            "matched": len(wins), "window": win["title"]}
+            "matched": 1, "window": win["title"]}
 
 
 def build_parser():

@@ -27,11 +27,13 @@ def move_active_window(x, y, wait_time=0):
     for _ in range(wait):
         time.sleep(1)
     win = _winutil.foreground_window()
-    if not win:
-        return {"success": False, "error": "Không có cửa sổ nào đang được focus."}
-    if _winutil.is_self_window(win):
-        return {"success": False,
-                "error": "Cửa sổ đang focus là chính Iris — hãy bấm vào cửa sổ muốn di chuyển rồi thử lại."}
+    if not win or _winutil.is_self_window(win):
+        windows = _winutil.enum_windows(visible_only=True)
+        non_iris = [w for w in windows if not _winutil.is_self_window(w)]
+        if non_iris:
+            win = non_iris[0]
+        else:
+            return {"success": False, "error": "Không tìm thấy cửa sổ ứng dụng nào đang mở để di chuyển."}
     if not _winutil.move_resize(win["hwnd"], x, y):
         return {"success": False, "error": "Không di chuyển được cửa sổ (có thể cần quyền cao hơn)."}
     return {"success": True, "message": f"Đã di chuyển '{win['title']}' đến ({x}, {y}).", "window": win["title"]}
@@ -42,6 +44,8 @@ def move_window_by_name(title, x, y):
     from move_window import validate_window_title
 
     t = validate_window_title(title)
+    if t.lower() in ("active", "current", "focused", "top", "this", "cửa sổ này", "tab này"):
+        return move_active_window(x, y, 0)
     wins = _winutil.select_windows(_winutil.enum_windows(), t)
     if not wins:
         return {"success": False, "error": f"Không tìm thấy cửa sổ nào khớp '{t}'."}

@@ -205,22 +205,27 @@ export async function writeClipboardTool(args = {}) {
 // window magic (TL-07: --active có đếm ngược THẬT; demo chỉ khi IRIS_DEV_TOOLS=1)
 // -----------------------------------------------------------------------
 export async function moveWindowMagicTool(args = {}) {
-  const { mode = "active", name } = args;
+  const { mode = "active", name, wait } = args;
   const x = toIntArg(args.x ?? 0) ?? 0;
   const y = toIntArg(args.y ?? 0) ?? 0;
 
   if (mode === "active") {
-    // Script đếm ngược 5 s THẬT rồi mới lấy cửa sổ đang focus ⇒ phải chờ ~6 s (không detach để biết kết quả thật).
-    const r = await runJsonTool("magic_move.py", ["--active", "--wait=5", `-x=${x}`, `-y=${y}`], { timeoutMs: 15000 }, "magic_move.py thất bại.");
-    return { ...r, instructions: "Nếu thành công, báo cho người dùng cửa sổ đã được di chuyển. Nếu lỗi 'chính Iris', nhờ họ bấm vào cửa sổ cần di chuyển rồi thử lại." };
+    // Nếu args có truyền wait (đếm ngược cụ thể), thì đợi; mặc định wait=0 để di chuyển TRỰC TIẾP ngay lập tức
+    const waitSec = wait !== undefined && wait !== null ? Math.max(0, Math.min(Number(wait) || 0, 30)) : 0;
+    const r = await runJsonTool(
+      "magic_move.py",
+      ["--active", `--wait=${waitSec}`, `-x=${x}`, `-y=${y}`],
+      { timeoutMs: (waitSec + 10) * 1000 },
+      "magic_move.py thất bại."
+    );
+    return { ...r, instructions: "Báo cho người dùng cửa sổ đã được di chuyển thành công." };
   }
   if (mode === "demo") {
     if (process.env.IRIS_DEV_TOOLS !== "1") return { status: "error", error: "Chế độ demo bị tắt (chỉ bật khi IRIS_DEV_TOOLS=1)." };
     if (!name) return { status: "error", error: "Thiếu 'name' cho chế độ demo." };
     return runJsonTool("magic_move.py", ["--demo", optArg("name", name)], { timeoutMs: 15000 }, "magic_move.py thất bại.");
   }
-  if (!name) return { status: "error", error: "Thiếu 'name' — cửa sổ nào cần di chuyển?" };
-  return runJsonTool("magic_move.py", [optArg("name", name), `-x=${x}`, `-y=${y}`], { timeoutMs: 10000 }, "magic_move.py thất bại.");
+  return runJsonTool("magic_move.py", [optArg("name", name || "active"), `-x=${x}`, `-y=${y}`], { timeoutMs: 10000 }, "magic_move.py thất bại.");
 }
 
 // -----------------------------------------------------------------------
@@ -501,8 +506,7 @@ export async function viewImageTool(args) {
 // move_window_precise (TL-01: ctypes, không còn PowerShell)
 // -----------------------------------------------------------------------
 export async function moveWindowPreciseTool(args = {}) {
-  const { name } = args;
-  if (!name) return { status: "error", error: "Thiếu 'name' — cửa sổ nào cần di chuyển?" };
+  const name = args.name || "active";
   const x = toIntArg(args.x ?? 0) ?? 0;
   const y = toIntArg(args.y ?? 0) ?? 0;
   const cli = [String(name), String(x), String(y)];
