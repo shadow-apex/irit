@@ -119,7 +119,6 @@ def speak_phrase(text):
         import winsdk.windows.media.speechsynthesis as ws
         import winsdk.windows.storage.streams as streams
         import winsound
-        import asyncio
 
         async def _synth():
             synth = ws.SpeechSynthesizer()
