@@ -4,8 +4,17 @@ import { companionStream } from '../lib/companionStream';
 // S-02: KHÔNG còn credential TURN trong mã nguồn. ICE servers lấy từ main qua IPC
 // `companion:get-ice-servers` (đọc IRIS_TURN_URLS / IRIS_TURN_USERNAME / IRIS_TURN_CREDENTIAL
 // trong .env). Không cấu hình => chỉ STUN công cộng (đủ cho cùng mạng LAN; khi router bật
-// client-isolation / NAT hairpin cần cấu hình TURN riêng, ví dụ coturn).
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  {
+    urls: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+      'stun:stun3.l.google.com:19302',
+      'stun:stun4.l.google.com:19302',
+    ],
+  },
+];
 
 async function loadIceServers(): Promise<RTCIceServer[]> {
   try {

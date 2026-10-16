@@ -68,7 +68,17 @@ let ngrokRawUrl = null; // URL https gốc của tunnel do CHÍNH ta tạo (đ�
  * Không cấu hình TURN => chỉ STUN công cộng.
  */
 export function getIceServers(env = process.env) {
-  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
+  const servers = [
+    {
+      urls: [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun2.l.google.com:19302",
+        "stun:stun3.l.google.com:19302",
+        "stun:stun4.l.google.com:19302",
+      ],
+    },
+  ];
   const urls = String(env.IRIS_TURN_URLS || "").split(",").map((u) => u.trim()).filter(Boolean);
   const username = String(env.IRIS_TURN_USERNAME || "").trim();
   const credential = String(env.IRIS_TURN_CREDENTIAL || "").trim();

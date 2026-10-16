@@ -52,7 +52,17 @@ const log = (t) => { $('status').textContent = 'Status: ' + t; console.log('[pho
 // hợp lệ; trước đó chỉ dùng STUN công cộng. TURN cấu hình bằng IRIS_TURN_URLS /
 // IRIS_TURN_USERNAME / IRIS_TURN_CREDENTIAL trong .env của máy chủ.
 const RTC_CFG = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  iceServers: [
+    {
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun2.l.google.com:19302',
+        'stun:stun3.l.google.com:19302',
+        'stun:stun4.l.google.com:19302',
+      ],
+    },
+  ],
   iceCandidatePoolSize: 4,
 };
 
@@ -77,6 +87,28 @@ function applyMicWanted() {
   $('mic-status').style.display = micWanted ? 'none' : 'block';
 }
 
+async function getNextCameraConstraint(targetFacing) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+    if (videoDevices.length > 1) {
+      const isBack = targetFacing === 'environment';
+      const matched = videoDevices.find((d) => {
+        const label = (d.label || '').toLowerCase();
+        if (isBack) {
+          return label.includes('back') || label.includes('rear') || label.includes('sau') || label.includes('environment');
+        } else {
+          return label.includes('front') || label.includes('user') || label.includes('trước');
+        }
+      });
+      if (matched && matched.deviceId) {
+        return { deviceId: { exact: matched.deviceId } };
+      }
+    }
+  } catch (e) {}
+  return { facingMode: { ideal: targetFacing } };
+}
+
 async function getCam(constraints) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     alert("LỖI BẢO MẬT: Trình duyệt chặn quyền Camera/Mic vì link này không an toàn (HTTP). Bạn vui lòng dùng link HTTPS (ngrok tunnel) hoặc dùng Safari trên kết nối HTTPS.");
@@ -84,19 +116,84 @@ async function getCam(constraints) {
   }
 
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
-  localStream = await navigator.mediaDevices.getUserMedia(constraints || {
-    video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
-    audio: { echoCancellation: true, noiseSuppression: true }
-  });
+
+  let stream = null;
+  const videoConstraint = await getNextCameraConstraint(facing);
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints || {
+      video: { ...videoConstraint, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+      audio: { echoCancellation: true, noiseSuppression: true }
+    });
+  } catch (err1) {
+    stream = await navigator.mediaDevices.getUserMedia(constraints || {
+      video: { facingMode: facing },
+      audio: true
+    });
+  }
+
+  localStream = stream;
   const vt = vtrack();
   if (vt) vt.contentHint = 'motion';
   $('preview').srcObject = localStream;
   $('preview').style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
-  // FEAT-COMP-MIC-01: getUserMedia() luôn tạo audio track MỚI ở trạng thái
-  // enabled=true mặc định — nếu người dùng đã tắt mic từ PC trước đó rồi
-  // sau đó bấm "Flip Camera" (gọi lại getCam()), track mới phải bị tắt lại
-  // ngay để không vô tình "bật mic trở lại" ngoài ý muốn của PC.
   applyMicWanted();
+}
+
+async function flipCamera() {
+  const targetFacing = facing === 'environment' ? 'user' : 'environment';
+  log(`Đang chuyển sang camera ${targetFacing === 'environment' ? 'sau' : 'trước'}...`);
+
+  let newVideoStream = null;
+  const videoConstraint = await getNextCameraConstraint(targetFacing);
+
+  try {
+    newVideoStream = await navigator.mediaDevices.getUserMedia({
+      video: { ...videoConstraint, width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+  } catch (err1) {
+    try {
+      newVideoStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: targetFacing }
+      });
+    } catch (err2) {
+      newVideoStream = await navigator.mediaDevices.getUserMedia({
+        video: true
+      });
+    }
+  }
+
+  const newVideoTrack = newVideoStream.getVideoTracks()[0];
+  if (!newVideoTrack) {
+    throw new Error("Không lấy được luồng video mới");
+  }
+  newVideoTrack.contentHint = 'motion';
+
+  // Dừng video track cũ, giữ nguyên audio track đang phát
+  const oldVideoTrack = vtrack();
+  if (oldVideoTrack) {
+    oldVideoTrack.stop();
+    if (localStream) localStream.removeTrack(oldVideoTrack);
+  }
+
+  if (localStream) {
+    localStream.addTrack(newVideoTrack);
+  } else {
+    localStream = newVideoStream;
+  }
+
+  facing = targetFacing;
+  $('preview').srcObject = localStream;
+  $('preview').style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+
+  // Nếu WebRTC đang chạy, chỉ cần thay thế video track trên sender
+  if (pc) {
+    const vs = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+    if (vs) {
+      await vs.replaceTrack(newVideoTrack);
+    }
+  }
+
+  log(`Đã chuyển sang camera ${facing === 'environment' ? 'sau' : 'trước'}`);
 }
 
 async function swapTracks() {
@@ -246,14 +343,16 @@ $('start').onclick = async () => {
 };
 
 $('flip').onclick = async () => {
-  facing = facing === 'environment' ? 'user' : 'environment';
-  try { 
-    await getCam(); 
-    if (started) {
-      await swapTracks();
+  try {
+    if (localStream) {
+      await flipCamera();
+    } else {
+      facing = facing === 'environment' ? 'user' : 'environment';
+      await getCam();
     }
+  } catch (e) {
+    log('Lỗi xoay camera: ' + (e.message || e));
   }
-  catch (e) { log('Flip error: ' + e.message); }
 };
 
 // FEAT-COMP-CONTROL-01: gõ/nói lệnh điều khiển Iris. Dùng chung `ws` với
