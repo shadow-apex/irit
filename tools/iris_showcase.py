@@ -43,7 +43,7 @@ from sys_control import encode_ps  # noqa: E402
 TOTAL_STEPS = 11
 
 INTRO_SPEECH = (
-    "Xin chào, tôi là Iris, một trợ lý thông minh. "
+    "Tôi là Iris, một trợ lý thông minh. "
     "Tôi có thể giúp bạn điều khiển máy tính bằng giọng nói. "
     "Sau đây là một vài ví dụ."
 )
@@ -224,8 +224,24 @@ def update_notepad(h_edit, text_content):
     user32.SendMessageW(h_edit, 0x00B7, 0, 0)
 
 
+def type_text_into_notepad(h_edit, text, char_delay=0.03):
+    """Gõ thủ công từng ký tự của `text` vào Edit control với hiệu ứng typewriter."""
+    if not h_edit or not text:
+        return
+    user32 = ctypes.windll.user32
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+
+    user32.SendMessageW(h_edit, 0x00B1, -1, -1)  # EM_SETSEL: đưa con trỏ về cuối
+    for ch in text:
+        c_buf = ctypes.create_unicode_buffer(ch)
+        user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(c_buf))  # EM_REPLACESEL
+        user32.SendMessageW(h_edit, 0x00B7, 0, 0)  # EM_SCROLLCARET
+        time.sleep(char_delay)
+
+
 def type_step_into_notepad(h_edit, step_num, total_steps, note_text, char_delay=0.025):
-    """Dán nhanh tiền tố '[stt/10] ' rồi gõ thủ công từng chữ của note_text với hiệu ứng gõ phím."""
+    """Dán nhanh tiền tố '[stt/N] ' rồi gõ thủ công từng chữ của note_text với hiệu ứng gõ phím."""
     if not h_edit:
         return
     user32 = ctypes.windll.user32
@@ -235,18 +251,14 @@ def type_step_into_notepad(h_edit, step_num, total_steps, note_text, char_delay=
     # 1. Đưa con trỏ văn bản về cuối: EM_SETSEL (0x00B1)
     user32.SendMessageW(h_edit, 0x00B1, -1, -1)
 
-    # 2. Dán nhanh tiền tố: "\n[stt/10] " qua EM_REPLACESEL (0x00C2)
+    # 2. Dán nhanh tiền tố: "\n[stt/N] " qua EM_REPLACESEL (0x00C2)
     prefix = f"\n[{step_num}/{total_steps}] "
     p_buf = ctypes.create_unicode_buffer(prefix)
     user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(p_buf))
     user32.SendMessageW(h_edit, 0x00B7, 0, 0)  # EM_SCROLLCARET
 
     # 3. Gõ thủ công từng chữ (char-by-char) đảm bảo tốc độ mượt mà, không quá chậm
-    for ch in note_text:
-        c_buf = ctypes.create_unicode_buffer(ch)
-        user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(c_buf))
-        user32.SendMessageW(h_edit, 0x00B7, 0, 0)
-        time.sleep(char_delay)
+    type_text_into_notepad(h_edit, note_text, char_delay)
 
 
 def wait_notepad(keyword, timeout=4.0):
@@ -570,32 +582,44 @@ def run_showcase():
 
     temp_path = os.path.join(tempfile.gettempdir(), "iris_live_showcase.txt")
 
-    content = (
+    header = (
         "============================================================\n"
         "              IRIS - TRỢ LÝ THÔNG MINH\n"
         "============================================================\n"
+    )
+    content = header
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # Khởi động Notepad
+    subprocess.Popen(["notepad.exe", temp_path])
+
+    # 4. Căn chỉnh vị trí Notepad ban đầu ngay khi xuất hiện (~0.2s)
+    notepad_hwnd, hedit = wait_notepad("iris_live_showcase", timeout=3.0)
+    if notepad_hwnd:
+        _winutil.move_resize(notepad_hwnd, *NOTEPAD_RECT)
+        _winutil.foreground(notepad_hwnd)
+    else:
+        warnings.append("Không tìm thấy cửa sổ Notepad nên bỏ qua phần ghi chú và các thao tác cửa sổ.")
+
+    # 5. Vừa gõ thủ công lời giới thiệu vào Notepad vừa phát giọng giới thiệu Iris
+    intro_text = (
         "Tôi là Iris, một trợ lý thông minh.\n"
         "Tôi có thể giúp bạn điều khiển máy tính bằng giọng nói.\n"
         "Sau đây là một vài ví dụ:\n"
     )
 
-    with open(temp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-    # Khởi động Notepad song song
-    subprocess.Popen(["notepad.exe", temp_path])
-
-    # 4. Phát giọng giới thiệu Iris ngay lập tức (không đợi PowerShell độ sáng hay Notepad)
+    t_intro_type = threading.Thread(
+        target=type_text_into_notepad,
+        args=(hedit, intro_text, 0.032),
+        daemon=True,
+    )
+    t_intro_type.start()
     speak_phrase(INTRO_SPEECH)
+    t_intro_type.join(timeout=4.0)
+    content += intro_text
     time.sleep(0.3)
-
-    # 5. Căn chỉnh vị trí Notepad ban đầu sau khi nó đã mở trong lúc Iris nói
-    notepad_hwnd, hedit = wait_notepad("iris_live_showcase", timeout=3.0)
-    if notepad_hwnd:
-        _winutil.move_resize(notepad_hwnd, *NOTEPAD_RECT)
-        update_notepad(hedit, content)
-    else:
-        warnings.append("Không tìm thấy cửa sổ Notepad nên bỏ qua phần ghi chú và các thao tác cửa sổ.")
 
     # 6. Đợi thread đo độ sáng hoàn tất trước khi bước 1 (Giảm độ sáng) bắt đầu
     t_bright.join(timeout=4.0)
