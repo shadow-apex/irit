@@ -608,11 +608,11 @@ def run_showcase():
     # -------------------------------------------------------------
     content += (
         "\n------------------------------------------------------------\n"
-        "==> HOÀN TẤT! Iris luôn sẵn sàng hỗ trợ bạn.\n"
+        "==> Tôi có thể làm được nhiều hơn bạn nghĩ đấy và tôi luôn sẵn sàng giúp đỡ bạn.\n"
         "============================================================\n"
     )
     update_notepad(hedit, content)
-    speak_phrase("Đã hoàn tất. Iris luôn sẵn sàng hỗ trợ bạn.")
+    speak_phrase("Tôi có thể làm được nhiều hơn bạn nghĩ đấy, và tôi luôn sẵn sàng giúp đỡ bạn.")
 
     # Đảm bảo ghi lại file đầy đủ
     with open(temp_path, "w", encoding="utf-8") as f:
