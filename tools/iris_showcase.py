@@ -87,15 +87,15 @@ def _hotkey(mod_vk, key_vk):
     ctypes.windll.user32.keybd_event(mod_vk, 0, KEYEVENTF_KEYUP, 0)
 
 
-def speak_phrase(text):
-    """Phát âm thanh tiếng Việt tự nhiên chuẩn AI (giọng nữ Hoài My Neural giống Iris), fallback sang winsdk/SAPI."""
+def speak_phrase(text, on_start=None, rate="+15%"):
+    """Phát âm thanh tiếng Việt tự nhiên chuẩn AI (giọng nữ Hoài My Neural giống Iris), đồng bộ với on_start."""
     # 1. Thử qua Edge-TTS Neural Voice (giọng AI tiếng Việt tự nhiên, ấm áp, truyền cảm giống Iris)
     if _HAS_EDGE_TTS:
         try:
             tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}_{int(time.time() * 1000)}.mp3")
 
             async def _edge():
-                comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural")
+                comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural", rate=rate)
                 await comm.save(tmp_mp3)
 
             asyncio.run(_edge())
@@ -104,6 +104,9 @@ def speak_phrase(text):
                 alias = f"iristts_{os.getpid()}_{int(time.time() * 1000)}"
                 try:
                     winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
+                    # Kích hoạt gõ chữ ngay thời điểm âm thanh bắt đầu phát
+                    if on_start:
+                        on_start()
                     winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
                 finally:
                     winmm.mciSendStringW(f"close {alias}", None, 0, None)
@@ -135,6 +138,8 @@ def speak_phrase(text):
             return bytes(data)
 
         wav_bytes = asyncio.run(_synth())
+        if on_start:
+            on_start()
         winsound.PlaySound(wav_bytes, winsound.SND_MEMORY)
         return
     except Exception as e:
@@ -150,6 +155,8 @@ def speak_phrase(text):
             "$text = [Console]::In.ReadToEnd(); "
             "if ($text) { $s.Speak($text) }"
         )
+        if on_start:
+            on_start()
         subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps_code],
             input=text,
@@ -607,21 +614,27 @@ def run_showcase():
     else:
         warnings.append("Không tìm thấy cửa sổ Notepad nên bỏ qua phần ghi chú và các thao tác cửa sổ.")
 
-    # 5. Vừa gõ thủ công lời giới thiệu vào Notepad vừa phát giọng giới thiệu Iris
+    # 5. Vừa gõ thủ công lời giới thiệu vào Notepad vừa phát giọng giới thiệu Iris đồng thời
     intro_text = (
         "Tôi là Iris, một trợ lý thông minh.\n"
         "Tôi có thể giúp bạn điều khiển máy tính bằng giọng nói.\n"
         "Sau đây là một vài ví dụ:\n"
     )
 
-    t_intro_type = threading.Thread(
-        target=type_text_into_notepad,
-        args=(hedit, intro_text, 0.032),
-        daemon=True,
-    )
-    t_intro_type.start()
-    speak_phrase(INTRO_SPEECH)
-    t_intro_type.join(timeout=4.0)
+    t_intro_type = None
+
+    def _start_intro_typing():
+        nonlocal t_intro_type
+        t_intro_type = threading.Thread(
+            target=type_text_into_notepad,
+            args=(hedit, intro_text, 0.03),
+            daemon=True,
+        )
+        t_intro_type.start()
+
+    speak_phrase(INTRO_SPEECH, on_start=_start_intro_typing, rate="+15%")
+    if t_intro_type:
+        t_intro_type.join(timeout=5.0)
     content += intro_text
     time.sleep(0.3)
 
@@ -631,20 +644,25 @@ def run_showcase():
     brightness_ok = original_brightness is not None
 
     def announce(step_num, title, speech, note):
-        """Báo bước cho giao diện, dán '[stt/10] ' rồi gõ thủ công từng chữ vào Notepad, phát câu giới thiệu ngắn."""
+        """Báo bước cho giao diện, dán '[stt/N] ' rồi gõ thủ công từng chữ vào Notepad đồng thời khi giọng nói phát."""
         nonlocal content
         report_step(step_num, title, speech)
         content += f"\n[{step_num}/{TOTAL_STEPS}] {note}"
 
-        # Dán [stt/10] rồi gõ thủ công từng chữ trên luồng song song cùng lúc với giọng nói
-        t_type = threading.Thread(
-            target=type_step_into_notepad,
-            args=(hedit, step_num, TOTAL_STEPS, note, 0.025),
-            daemon=True,
-        )
-        t_type.start()
-        speak_phrase(speech)
-        t_type.join(timeout=3.0)
+        t_type = None
+
+        def _start_step_typing():
+            nonlocal t_type
+            t_type = threading.Thread(
+                target=type_step_into_notepad,
+                args=(hedit, step_num, TOTAL_STEPS, note, 0.035),
+                daemon=True,
+            )
+            t_type.start()
+
+        speak_phrase(speech, on_start=_start_step_typing, rate="+15%")
+        if t_type:
+            t_type.join(timeout=3.0)
         time.sleep(0.3)
 
     current_brightness = original_brightness
@@ -752,7 +770,7 @@ def run_showcase():
         "============================================================\n"
     )
     update_notepad(hedit, content)
-    speak_phrase("Tôi có thể làm được nhiều hơn bạn nghĩ đấy, và tôi luôn sẵn sàng giúp đỡ bạn.")
+    speak_phrase("Tôi có thể làm được nhiều hơn bạn nghĩ đấy, và tôi luôn sẵn sàng giúp đỡ bạn.", rate="+15%")
 
     # Đảm bảo ghi lại file đầy đủ
     with open(temp_path, "w", encoding="utf-8") as f:
