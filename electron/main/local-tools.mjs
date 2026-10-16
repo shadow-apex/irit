@@ -642,14 +642,17 @@ export async function irisShowcaseTool(_args = {}) {
         try {
           const payload = JSON.parse(line.slice("IRIS_SHOWCASE_STEP:".length));
           emitEvent({ type: "audio_state", state: "speaking" });
-          emitEvent({ type: "transcript", speaker: "iris", text: `[${payload.step}/6] ${payload.speech}` });
+          // step 0 = lời giới thiệu Iris (không đánh số); các bước sau hiển thị [n/tổng]
+          const prefix = payload.step > 0 ? `[${payload.step}/${payload.total ?? 10}] ` : "";
+          emitEvent({ type: "transcript", speaker: "iris", text: `${prefix}${payload.speech}` });
         } catch {
           // bỏ qua nếu lỗi parse
         }
       }
     };
 
-    const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 65000, onLine });
+    // 10 bước + lời giới thiệu (mỗi bước có giọng đọc) chạy ~1 phút; đệm rộng để không bị kill khi độ sáng đang giảm.
+    const run = await runPythonTool("iris_showcase.py", [], { timeoutMs: 120000, onLine });
     const res = buildToolResponse(run, "iris_showcase.py thất bại.");
 
     const { liveStatus } = await import("./gemini-live.mjs");

@@ -249,5 +249,28 @@ class ImageViewer(unittest.TestCase):
             self.assertEqual([os.path.basename(x) for x in iv.list_images(d)], ["d.jpeg", "b.jpg", "a.png"])
 
 
+import iris_showcase as isc  # noqa: E402
+
+
+class IrisShowcasePureHelpers(unittest.TestCase):
+    def test_brightness_plan(self):
+        self.assertEqual(isc.brightness_plan(70, drop=30, floor=10), (40, 70))
+        low, high = isc.brightness_plan(15, drop=30, floor=10)
+        self.assertEqual(low, 10)
+        self.assertGreater(high, low)
+        self.assertEqual(isc.brightness_plan(150), isc.brightness_plan(100))
+        self.assertEqual(isc.brightness_plan(-50), isc.brightness_plan(0))
+
+    def test_circle_points(self):
+        pts = isc.circle_points(500, 300, 100, 50, step_deg=90)
+        self.assertEqual(len(pts), 5)
+        self.assertEqual(pts[0], pts[-1])
+        self.assertEqual(pts[0], (600, 300))
+
+    def test_slide_positions(self):
+        self.assertEqual(isc.slide_positions(60, 120, 30), [60, 90, 120])
+        self.assertEqual(isc.slide_positions(120, 60, 30), [120, 90, 60])
+
+
 if __name__ == "__main__":
     unittest.main()
