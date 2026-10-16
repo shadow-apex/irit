@@ -232,7 +232,9 @@ def type_text_into_notepad(h_edit, text, char_delay=0.03):
     user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user32.SendMessageW.restype = ctypes.c_ssize_t
 
-    user32.SendMessageW(h_edit, 0x00B1, -1, -1)  # EM_SETSEL: đưa con trỏ về cuối
+    # Đưa con trỏ văn bản về cuối qua WM_GETTEXTLENGTH (0x000E) và EM_SETSEL (0x00B1)
+    t_len = user32.SendMessageW(h_edit, 0x000E, 0, 0)
+    user32.SendMessageW(h_edit, 0x00B1, t_len, t_len)
     for ch in text:
         c_buf = ctypes.create_unicode_buffer(ch)
         user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(c_buf))  # EM_REPLACESEL
@@ -248,8 +250,9 @@ def type_step_into_notepad(h_edit, step_num, total_steps, note_text, char_delay=
     user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user32.SendMessageW.restype = ctypes.c_ssize_t
 
-    # 1. Đưa con trỏ văn bản về cuối: EM_SETSEL (0x00B1)
-    user32.SendMessageW(h_edit, 0x00B1, -1, -1)
+    # 1. Đưa con trỏ văn bản về cuối qua WM_GETTEXTLENGTH (0x000E): EM_SETSEL (0x00B1)
+    t_len = user32.SendMessageW(h_edit, 0x000E, 0, 0)
+    user32.SendMessageW(h_edit, 0x00B1, t_len, t_len)
 
     # 2. Dán nhanh tiền tố: "\n[stt/N] " qua EM_REPLACESEL (0x00C2)
     prefix = f"\n[{step_num}/{total_steps}] "
@@ -600,6 +603,7 @@ def run_showcase():
     if notepad_hwnd:
         _winutil.move_resize(notepad_hwnd, *NOTEPAD_RECT)
         _winutil.foreground(notepad_hwnd)
+        update_notepad(hedit, header)
     else:
         warnings.append("Không tìm thấy cửa sổ Notepad nên bỏ qua phần ghi chú và các thao tác cửa sổ.")
 
