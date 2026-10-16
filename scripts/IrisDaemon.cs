@@ -152,29 +152,17 @@ static class IrisDaemon
                 // Initial hotkey registration
                 TryRegisterHotkeys();
 
-                // Periodic timer to retry registration if another app (like previous Electron) held it and later closed
-                UIntPtr timerId = SetTimer(IntPtr.Zero, UIntPtr.Zero, 2000, IntPtr.Zero);
-
                 MSG msg;
                 while (GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
                 {
                     if (msg.message == WM_HOTKEY)
                     {
-                        Log("WM_HOTKEY received! Triggering HandleHotkey()");
                         HandleHotkey();
-                    }
-                    else if (msg.message == WM_TIMER)
-                    {
-                        if (!reg1 || !reg2 || !reg3)
-                        {
-                            TryRegisterHotkeys();
-                        }
                     }
                     TranslateMessage(ref msg);
                     DispatchMessage(ref msg);
                 }
 
-                KillTimer(IntPtr.Zero, timerId);
                 UnregisterHotKey(IntPtr.Zero, 1);
                 UnregisterHotKey(IntPtr.Zero, 2);
                 UnregisterHotKey(IntPtr.Zero, 3);

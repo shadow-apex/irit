@@ -31,8 +31,7 @@ if ($startup -and (Test-Path $startup)) {
   $s1.Arguments = "`"$vbsPath`""
   $s1.WorkingDirectory = $rootDir
   $s1.IconLocation = "$iconPath,0"
-  $s1.Description = "Iris AI Assistant (Ctrl+Shift+I / Ctrl+Alt+I)"
-  $s1.Hotkey = "CTRL+ALT+I"
+  $s1.Description = "Iris AI Assistant"
   $s1.Save()
 }
 
@@ -43,8 +42,7 @@ if ($desktop -and (Test-Path $desktop)) {
   $s2.Arguments = "`"$vbsPath`""
   $s2.WorkingDirectory = $rootDir
   $s2.IconLocation = "$iconPath,0"
-  $s2.Description = "Iris AI Assistant (Ctrl+Shift+I / Ctrl+Alt+I)"
-  $s2.Hotkey = "CTRL+ALT+I"
+  $s2.Description = "Iris AI Assistant"
   $s2.Save()
 }
 
@@ -57,8 +55,7 @@ if ((Test-Path $localDesktop) -and ($localDesktop -ne $desktop)) {
     $s2b.Arguments = "`"$vbsPath`""
     $s2b.WorkingDirectory = $rootDir
     $s2b.IconLocation = "$iconPath,0"
-    $s2b.Description = "Iris AI Assistant (Ctrl+Shift+I / Ctrl+Alt+I)"
-    $s2b.Hotkey = "CTRL+ALT+I"
+    $s2b.Description = "Iris AI Assistant"
     $s2b.Save()
   } catch {}
 }
@@ -70,8 +67,7 @@ if ($programs -and (Test-Path $programs)) {
   $s3.Arguments = "`"$vbsPath`""
   $s3.WorkingDirectory = $rootDir
   $s3.IconLocation = "$iconPath,0"
-  $s3.Description = "Iris AI Assistant (Ctrl+Shift+I / Ctrl+Alt+I)"
-  $s3.Hotkey = "CTRL+ALT+I"
+  $s3.Description = "Iris AI Assistant"
   $s3.Save()
 }
 

@@ -61,12 +61,16 @@ export function setupWindowsStartup() {
       }
     }
 
-    const psFile = path.join(rootDir, "scripts", "create-shortcuts.ps1");
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`, {
-      stdio: "pipe",
-      windowsHide: true,
-    });
-    console.log("[Startup] Da cai dat IrisDaemon va loi tat Iris tai Startup, Desktop, Start Menu (Ctrl+Shift+I / Ctrl+Alt+I).");
+    const markerFile = path.join(rootDir, "scripts", ".startup-installed");
+    if (!fs.existsSync(markerFile)) {
+      const psFile = path.join(rootDir, "scripts", "create-shortcuts.ps1");
+      execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psFile}"`, {
+        stdio: "pipe",
+        windowsHide: true,
+      });
+      try { fs.writeFileSync(markerFile, "1\n", "ascii"); } catch {}
+      console.log("[Startup] Da cai dat IrisDaemon va loi tat Iris tai Startup, Desktop, Start Menu.");
+    }
   } catch (err) {
     console.warn("[Startup] Khong the tu dong tao loi tat khoi dong:", err?.message || err);
   }
