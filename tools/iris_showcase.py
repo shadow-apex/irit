@@ -23,8 +23,16 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import webbrowser
+
+try:
+    import asyncio
+    import edge_tts
+    _HAS_EDGE_TTS = True
+except Exception:
+    _HAS_EDGE_TTS = False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
@@ -81,33 +89,30 @@ def _hotkey(mod_vk, key_vk):
 def speak_phrase(text):
     """Phát âm thanh tiếng Việt tự nhiên chuẩn AI (giọng nữ Hoài My Neural giống Iris), fallback sang winsdk/SAPI."""
     # 1. Thử qua Edge-TTS Neural Voice (giọng AI tiếng Việt tự nhiên, ấm áp, truyền cảm giống Iris)
-    try:
-        import asyncio
-        import edge_tts
-        import tempfile
+    if _HAS_EDGE_TTS:
+        try:
+            tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}_{int(time.time() * 1000)}.mp3")
 
-        tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}_{int(time.time() * 1000)}.mp3")
+            async def _edge():
+                comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural")
+                await comm.save(tmp_mp3)
 
-        async def _edge():
-            comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural")
-            await comm.save(tmp_mp3)
-
-        asyncio.run(_edge())
-        if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
-            winmm = ctypes.windll.winmm
-            alias = f"iristts_{os.getpid()}_{int(time.time() * 1000)}"
-            try:
-                winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
-                winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
-            finally:
-                winmm.mciSendStringW(f"close {alias}", None, 0, None)
+            asyncio.run(_edge())
+            if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
+                winmm = ctypes.windll.winmm
+                alias = f"iristts_{os.getpid()}_{int(time.time() * 1000)}"
                 try:
-                    os.remove(tmp_mp3)
-                except Exception:
-                    pass
-            return
-    except Exception as e:
-        sys.stderr.write(f"[TTS edge: {e}]\n")
+                    winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
+                    winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
+                finally:
+                    winmm.mciSendStringW(f"close {alias}", None, 0, None)
+                    try:
+                        os.remove(tmp_mp3)
+                    except Exception:
+                        pass
+                return
+        except Exception as e:
+            sys.stderr.write(f"[TTS edge: {e}]\n")
 
     # 2. Fallback qua winsdk (Microsoft An)
     try:
@@ -432,11 +437,23 @@ def run_showcase():
 
     warnings = []
 
-    # Đóng cửa sổ Notepad trình diễn cũ nếu còn tồn tại từ phiên trước
+    # 1. Báo cáo ngay bước 0 cho quả cầu năng lượng và giao diện sáng lên TỨC THÌ (0ms), không bị khựng
+    report_step(0, "Giới thiệu", INTRO_SPEECH)
+
+    # 2. Đọc độ sáng hiện tại trong thread chạy ngầm (PowerShell mất ~1.5s)
+    #    Trong lúc Iris đọc lời giới thiệu (mất ~4s), thread này chạy song song nên không gây trễ 1s nào
+    brightness_container = [None]
+
+    def _read_brightness_bg():
+        brightness_container[0] = get_brightness()
+
+    t_bright = threading.Thread(target=_read_brightness_bg, daemon=True)
+    t_bright.start()
+
+    # 3. Đóng cửa sổ Notepad trình diễn cũ nếu còn tồn tại từ phiên trước
     old_hwnd, _ = find_notepad_edit("iris_live_showcase")
     if old_hwnd:
         ctypes.windll.user32.PostMessageW(old_hwnd, WM_CLOSE, 0, 0)
-        time.sleep(0.3)
 
     temp_path = os.path.join(tempfile.gettempdir(), "iris_live_showcase.txt")
 
@@ -452,17 +469,25 @@ def run_showcase():
     with open(temp_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    # Khởi động Notepad; trong lúc nó mở thì đọc độ sáng hiện tại (PowerShell mất ~1 giây)
+    # Khởi động Notepad song song
     subprocess.Popen(["notepad.exe", temp_path])
-    original_brightness = get_brightness()
-    brightness_ok = original_brightness is not None
 
-    notepad_hwnd, hedit = wait_notepad("iris_live_showcase")
+    # 4. Phát giọng giới thiệu Iris ngay lập tức (không đợi PowerShell độ sáng hay Notepad)
+    speak_phrase(INTRO_SPEECH)
+    time.sleep(0.3)
+
+    # 5. Căn chỉnh vị trí Notepad ban đầu sau khi nó đã mở trong lúc Iris nói
+    notepad_hwnd, hedit = wait_notepad("iris_live_showcase", timeout=3.0)
     if notepad_hwnd:
-        # Căn chỉnh vị trí Notepad ban đầu ở góc trái màn hình
         _winutil.move_resize(notepad_hwnd, *NOTEPAD_RECT)
+        update_notepad(hedit, content)
     else:
         warnings.append("Không tìm thấy cửa sổ Notepad nên bỏ qua phần ghi chú và các thao tác cửa sổ.")
+
+    # 6. Đợi thread đo độ sáng hoàn tất trước khi bước 1 (Giảm độ sáng) bắt đầu
+    t_bright.join(timeout=4.0)
+    original_brightness = brightness_container[0]
+    brightness_ok = original_brightness is not None
 
     def announce(step_num, title, speech, note):
         """Báo bước cho giao diện, ghi một dòng vào Notepad rồi đọc câu giới thiệu ngắn."""
@@ -472,14 +497,6 @@ def run_showcase():
         update_notepad(hedit, content)
         speak_phrase(speech)
         time.sleep(0.3)
-
-    # -------------------------------------------------------------
-    # GIỚI THIỆU IRIS
-    # -------------------------------------------------------------
-    report_step(0, "Giới thiệu", INTRO_SPEECH)
-    update_notepad(hedit, content)
-    speak_phrase(INTRO_SPEECH)
-    time.sleep(0.4)
 
     current_brightness = original_brightness
     low_level, high_level = brightness_plan(original_brightness) if brightness_ok else (None, None)

@@ -628,7 +628,7 @@ export async function irisShowcaseTool(_args = {}) {
   try {
     // Vào chế độ Glass HUD (Alt + Space) trước khi trình diễn
     enterHud();
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 100));
 
     emitEvent({ type: "audio_state", state: "speaking" });
     emitEvent({
