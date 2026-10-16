@@ -1565,8 +1565,15 @@ export default function App() {
       (msg: { title: string; content: string; copilotHistory?: TeleprompterCopilotEntry[]; copilotStatus?: string }) => {
         const now = Date.now();
         const last = lastHudMsgRef.current;
-        // Ignore identical messages sent within the last 15 seconds
-        if (last && last.title === msg.title && last.content === msg.content && now - last.time < 15000) {
+        // Ignore identical messages sent within the last 15 seconds.
+        // Live Teleprompter is exempted because it continuously streams transcripts, translations, and copilot suggestions.
+        if (
+          msg.title !== "Live Teleprompter" &&
+          last &&
+          last.title === msg.title &&
+          last.content === msg.content &&
+          now - last.time < 15000
+        ) {
           return;
         }
         lastHudMsgRef.current = { title: msg.title, content: msg.content, time: now };
