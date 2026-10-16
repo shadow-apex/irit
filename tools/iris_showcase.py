@@ -359,7 +359,87 @@ def open_browser(url="https://www.google.com", wait=2.5):
     return new_windows
 
 
-def close_browser(opened):
+def get_work_area():
+    """Lấy vùng hiển thị khả dụng của màn hình chính (trừ thanh taskbar)."""
+    u = ctypes.windll.user32
+    rect = wintypes.RECT()
+    # SPI_GETWORKAREA = 0x0030
+    if u.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+        return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+    return (0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1))
+
+
+def snap_window_left(hwnd):
+    """Khôi phục cửa sổ (nếu đang phóng to) và đặt vào nửa bên trái màn hình."""
+    if not hwnd or not _winutil.is_window(hwnd):
+        return
+    u = ctypes.windll.user32
+    wx, wy, ww, wh = get_work_area()
+    half_w = ww // 2
+    u.ShowWindow(wintypes.HWND(hwnd), _winutil.SW_RESTORE)
+    _winutil.move_resize(hwnd, wx, wy, half_w, wh)
+    _winutil.foreground(hwnd)
+
+
+def snap_window_right(hwnd):
+    """Khôi phục cửa sổ (nếu đang phóng to) và đặt vào nửa bên phải màn hình."""
+    if not hwnd or not _winutil.is_window(hwnd):
+        return
+    u = ctypes.windll.user32
+    wx, wy, ww, wh = get_work_area()
+    half_w = ww // 2
+    u.ShowWindow(wintypes.HWND(hwnd), _winutil.SW_RESTORE)
+    _winutil.move_resize(hwnd, wx + half_w, wy, ww - half_w, wh)
+    _winutil.foreground(hwnd)
+
+
+def _explorer_hwnds():
+    """Tập HWND các cửa sổ File Explorer đang hiển thị."""
+    try:
+        return {
+            w["hwnd"]
+            for w in _winutil.enum_windows()
+            if str(w.get("exe", "")).lower() == "explorer.exe"
+        }
+    except Exception as e:
+        sys.stderr.write(f"[explorer enum: {e}]\n")
+        return set()
+
+
+def open_downloads_folder(wait=3.0):
+    """Mở thư mục Downloads bằng File Explorer trong một cửa sổ riêng và trả về danh sách HWND mới."""
+    downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+    before = _explorer_hwnds()
+    try:
+        subprocess.Popen(["explorer.exe", f"/n,{downloads_path}"])
+    except Exception as e:
+        sys.stderr.write(f"[explorer open: {e}]\n")
+        return []
+    deadline = time.time() + wait
+    new_windows = []
+    while time.time() < deadline:
+        time.sleep(0.25)
+        new_windows = sorted(_explorer_hwnds() - before)
+        if new_windows:
+            break
+    if not new_windows:
+        for w in _winutil.enum_windows():
+            if str(w.get("exe", "")).lower() == "explorer.exe" and "download" in str(w.get("title", "")).lower():
+                new_windows = [w["hwnd"]]
+                break
+    return new_windows
+
+
+def close_window(hwnd):
+    """Đóng cửa sổ an toàn bằng SC_CLOSE và WM_CLOSE."""
+    if not hwnd or not _winutil.is_window(hwnd):
+        return
+    u = ctypes.windll.user32
+    u.PostMessageW(wintypes.HWND(hwnd), 0x0112, 0xF060, 0)  # WM_SYSCOMMAND SC_CLOSE
+    u.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0)        # WM_CLOSE
+
+
+def close_browser(opened, target_hwnd=None):
     """Đóng đúng cửa sổ trình duyệt do Iris vừa mở. Trả về "window" | "tab" | None (không đóng được).
 
     Không dùng kill tiến trình và không đóng cửa sổ có sẵn của người dùng. Khi không nhận ra cửa sổ mới
@@ -367,14 +447,22 @@ def close_browser(opened):
     khi đó tab đang hiển thị chính là tab Iris vừa mở.
     """
     closed = 0
+    u = ctypes.windll.user32
     for hwnd in opened:
         if _winutil.is_window(hwnd):
-            ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd), WM_CLOSE, 0, 0)
+            u.PostMessageW(wintypes.HWND(hwnd), 0x0112, 0xF060, 0)
+            u.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0)
             closed += 1
     if closed:
         return "window"
-    fg = _winutil.foreground_window()
-    if fg and str(fg.get("exe", "")).lower() in BROWSER_EXES:
+    target = target_hwnd
+    if not target:
+        fg = _winutil.foreground_window()
+        if fg and str(fg.get("exe", "")).lower() in BROWSER_EXES:
+            target = fg["hwnd"]
+    if target and _winutil.is_window(target):
+        _winutil.foreground(target)
+        time.sleep(0.3)
         _hotkey(VK_CONTROL, VK_W)
         return "tab"
     return None
@@ -565,14 +653,36 @@ def run_showcase():
         _press_keys(VK_VOLUME_UP, 6)
         time.sleep(0.8)
 
-        # 5. MỞ TRÌNH DUYỆT
+        # 5. MỞ TRÌNH DUYỆT VÀ THƯ MỤC DOWNLOADS (CHIA ĐÔI TRÁI - PHẢI)
         announce(5, "Mở trình duyệt", "Tôi có thể mở trình duyệt.", "Mở trình duyệt")
-        opened = open_browser()
+        opened_browsers = open_browser()
+        browser_target = opened_browsers[0] if opened_browsers else None
+        if not browser_target:
+            fg = _winutil.foreground_window()
+            if fg and str(fg.get("exe", "")).lower() in BROWSER_EXES:
+                browser_target = fg["hwnd"]
+            elif _browser_hwnds():
+                browser_target = next(iter(_browser_hwnds()))
+
+        if browser_target:
+            snap_window_left(browser_target)
+        time.sleep(0.8)
+
+        # Mở thư mục Downloads và đặt sang bên phải
+        opened_explorers = open_downloads_folder()
+        if opened_explorers:
+            snap_window_right(opened_explorers[0])
         time.sleep(1.2)
 
-        # 6. ĐÓNG TRÌNH DUYỆT (chỉ cửa sổ/tab do Iris vừa mở)
+        # 6. ĐÓNG CẢ HAI (TRÌNH DUYỆT VÀ THƯ MỤC DOWNLOADS)
         announce(6, "Đóng trình duyệt", "Tôi có thể đóng trình duyệt.", "Đóng trình duyệt")
-        if close_browser(opened) is None:
+        # Đóng cửa sổ thư mục Downloads
+        for ehwnd in opened_explorers:
+            close_window(ehwnd)
+        time.sleep(0.4)
+
+        # Đóng trình duyệt (cửa sổ mới hoặc tab do Iris mở)
+        if close_browser(opened_browsers, browser_target) is None:
             warnings.append("Không tự đóng được trình duyệt (không nhận ra cửa sổ do Iris mở) — bạn hãy tự đóng.")
         time.sleep(1.0)
 

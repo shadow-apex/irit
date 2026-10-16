@@ -89,6 +89,14 @@ def enum_windows(visible_only=True):
         return True
 
     u.EnumWindows(proc_t(cb), 0)
+    if not out and hasattr(u, "OpenInputDesktop"):
+        try:
+            hdesk = u.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                u.EnumDesktopWindows(hdesk, proc_t(cb), 0)
+                u.CloseDesktop(hdesk)
+        except Exception:
+            pass
     return out
 
 
@@ -130,6 +138,14 @@ def foreground_window():
     u = ctypes.windll.user32
     u.GetForegroundWindow.restype = wintypes.HWND
     h = u.GetForegroundWindow()
+    if not h and hasattr(u, "OpenInputDesktop"):
+        try:
+            hdesk = u.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                u.SetThreadDesktop(hdesk)
+                h = u.GetForegroundWindow()
+        except Exception:
+            pass
     if not h:
         return None
     pid = window_pid(int(h))
