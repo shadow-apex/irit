@@ -644,6 +644,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [sidecarRunning, hasBridge, secondBrainActive, isFullscreen, uiMode]);
 
+  useEffect(() => {
+    const handleOpenQR = () => setShowCompanionQR(true);
+    window.addEventListener("companion:open-qr", handleOpenQR);
+    return () => window.removeEventListener("companion:open-qr", handleOpenQR);
+  }, []);
+
   // Scoped autoscroll: scrollIntoView would also scroll every scrollable
   // ancestor (the rounded deck clips with overflow:hidden), shifting the whole
   // layout up. Scroll the comms panel directly instead.

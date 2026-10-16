@@ -1,39 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import DraggablePiP from "./DraggablePiP";
-import { Smartphone, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { Smartphone, Mic, MicOff, Volume2, VolumeX, QrCode } from "lucide-react";
 import { companionStream } from "../lib/companionStream";
 
-// BUGFIX-COMP-PIP-01: Component này (Alt+C, PiP nhỏ) trước đây hiển thị 1
-// <iframe> trỏ tới OBS_SOURCE_URL (http://localhost:8080/source.html) —
-// một trang hoàn toàn KHÔNG liên quan gì tới luồng WebRTC thật (không video,
-// không audio, không nút mic nào có tác dụng). Trong khi đó comment trong
-// companionStream.ts và App.tsx đều mô tả rằng PiP Alt+C phải hiển thị
-// đúng `companionStream` (nguồn sự thật duy nhất, được nuôi bởi
-// CompanionWebRTC.tsx) — giống hệt cách CompanionLiveView.tsx (modal lớn)
-// đang làm. Sửa lại để dùng đúng companionStream + thêm nút tắt/mở mic
-// điện thoại ngay trên PiP này (không cần mở modal lớn mới tắt được mic).
 export default function CompanionVideo({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasStream, setHasStream] = useState(() => Boolean(companionStream.getStream()));
-  // BUGFIX-COMP-ICE-01: `hasStream` chỉ nói lên việc đã CÓ một đối tượng
-  // MediaStream (tức SDP negotiation xong, pc.ontrack đã fire) — KHÔNG đảm
-  // bảo media thực sự đang chảy (ICE có thể vẫn đang "checking"/"failed" do
-  // client isolation / NAT hairpin, xem CompanionWebRTC.tsx). Thêm cờ riêng
-  // để phân biệt 2 trạng thái này trên UI, tránh gây hiểu lầm "connected"
-  // trong khi thực chất vẫn đang chờ (hoặc sẽ không bao giờ) có hình.
   const [hasFrame, setHasFrame] = useState(false);
   const [micEnabled, setMicEnabled] = useState(() => companionStream.getMicEnabled());
   const [speakerMuted, setSpeakerMuted] = useState(true);
-  // BUGFIX-COMP-PIP-02: Đã bỏ hẳn chế độ "obs" (nút MonitorPlay + <iframe
-  // src="http://localhost:8080/source.html">) — chế độ này KHÔNG BAO GIỜ
-  // hoạt động khi Iris đang chạy: companion-server.mjs chiếm cổng 8080 và
-  // chỉ phục vụ '/' và '/companion.html' (xem electron/companion-server.mjs),
-  // nên request tới /source.html luôn trả 404 -> PiP đen kịt, không ảnh.
-  // Kể cả trong trường hợp source.html load được (chạy PHONE_CAMERA/server.js
-  // riêng, không cùng lúc với Iris vì đụng cổng 8080), trang đó cũng chủ đích
-  // dùng <video muted> — không bao giờ có âm thanh, vì nó được thiết kế làm
-  // OBS Browser Source (chỉ video), không phải nguồn A/V đầy đủ như luồng
-  // WebRTC thật (companionStream) mà PiP này đang dùng làm mặc định.
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeStream((stream) => {
@@ -49,24 +24,30 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
     return unsubscribe;
   }, []);
 
-  // BUGFIX-COMP-ICE-01: đợi frame video THẬT SỰ decode được (loadedmetadata /
-  // canplay) trước khi coi là "đã có hình" — đây là tín hiệu đáng tin cậy hơn
-  // nhiều so với chỉ dựa vào việc srcObject đã được gán. Nếu sự kiện này
-  // không bao giờ bắn ra dù hasStream=true, đó chính là bằng chứng ICE chưa
-  // thông (relay/TURN chưa hoạt động) chứ không phải lỗi ở component này.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const onFrame = () => setHasFrame(true);
-    video.addEventListener('loadedmetadata', onFrame);
-    video.addEventListener('canplay', onFrame);
-    video.addEventListener('playing', onFrame);
-    return () => {
-      video.removeEventListener('loadedmetadata', onFrame);
-      video.removeEventListener('canplay', onFrame);
-      video.removeEventListener('playing', onFrame);
+    const onFrame = () => {
+      setHasFrame(true);
     };
-  }, []);
+
+    if (video.readyState >= 2 || video.videoWidth > 0 || (video.currentTime > 0 && !video.paused)) {
+      setHasFrame(true);
+    }
+
+    video.addEventListener("loadedmetadata", onFrame);
+    video.addEventListener("canplay", onFrame);
+    video.addEventListener("playing", onFrame);
+    video.addEventListener("timeupdate", onFrame);
+    video.addEventListener("loadeddata", onFrame);
+    return () => {
+      video.removeEventListener("loadedmetadata", onFrame);
+      video.removeEventListener("canplay", onFrame);
+      video.removeEventListener("playing", onFrame);
+      video.removeEventListener("timeupdate", onFrame);
+      video.removeEventListener("loadeddata", onFrame);
+    };
+  }, [hasStream]);
 
   useEffect(() => {
     const unsubscribe = companionStream.subscribeMicState((enabled) => {
@@ -107,45 +88,82 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            display: hasFrame ? "block" : "none",
+            display: hasStream ? "block" : "none",
           }}
         />
+
         {!hasStream && (
           <div
             style={{
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: 8,
-              color: "rgb(40, 205, 170)",
+              justifyContent: "center",
+              gap: 10,
+              color: "#aaa",
               fontSize: 12,
               textAlign: "center",
-              padding: "0 16px",
+              padding: "0 20px",
             }}
           >
-            <Smartphone size={22} style={{ opacity: 0.6 }} />
-            Đang chờ điện thoại kết nối...
+            <Smartphone size={26} style={{ color: "rgb(40, 205, 170)", opacity: 0.8 }} />
+            <div>
+              <div style={{ color: "#fff", fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+                Chưa có tín hiệu từ điện thoại
+              </div>
+              <div style={{ color: "#888", fontSize: 11, lineHeight: 1.4 }}>
+                Quét mã QR để mở trang kết nối camera & micro trên điện thoại
+              </div>
+            </div>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("companion:open-qr"))}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 14px",
+                borderRadius: 8,
+                backgroundColor: "rgba(40, 205, 170, 0.15)",
+                border: "1px solid rgb(40, 205, 170)",
+                color: "rgb(40, 205, 170)",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(40, 205, 170, 0.25)")}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "rgba(40, 205, 170, 0.15)")}
+            >
+              <QrCode size={14} /> Quét mã QR kết nối (Alt+Q)
+            </button>
+            <span style={{ fontSize: 10, color: "#666" }}>
+              Sau khi quét, bấm &quot;CONNECT TO IRIS&quot; trên màn hình điện thoại
+            </span>
           </div>
         )}
+
         {hasStream && !hasFrame && (
           <div
             style={{
+              position: "absolute",
+              inset: 0,
+              backgroundColor: "rgba(0,0,0,0.75)",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
+              justifyContent: "center",
               gap: 8,
               color: "rgb(230, 180, 60)",
               fontSize: 12,
               textAlign: "center",
               padding: "0 16px",
+              zIndex: 5,
             }}
           >
-            <Smartphone size={22} style={{ opacity: 0.6 }} />
-            Đã bắt tay xong, đang thiết lập kết nối media...
+            <Smartphone size={22} style={{ opacity: 0.8 }} />
+            <span>Đã nhận luồng, đang giải mã hình ảnh...</span>
             <span style={{ opacity: 0.7, fontSize: 11 }}>
-              Nếu treo ở đây quá 10-15s: điện thoại và PC có thể không
-              &quot;thấy&quot; nhau trên mạng (kiểm tra Client Isolation trên
-              router, hoặc dùng TURN).
+              Nếu đợi quá 10s: kiểm tra kết nối mạng cùng Wi-Fi hoặc mở lại kết nối trên điện thoại.
             </span>
           </div>
         )}
