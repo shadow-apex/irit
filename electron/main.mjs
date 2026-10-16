@@ -592,31 +592,6 @@ app.whenReady().then(() => {
     });
   } catch (e) {}
 
-  // Phím tắt Ctrl+Alt+I và Ctrl+Shift+I bổ trợ mở Iris
-  try {
-    globalShortcut.register("CommandOrControl+Alt+I", () => {
-      if (!mainWindow) {
-        createWindow();
-        return;
-      }
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    });
-  } catch (e) {}
-
-  try {
-    globalShortcut.register("CommandOrControl+Shift+I", () => {
-      if (!mainWindow) {
-        createWindow();
-        return;
-      }
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    });
-  } catch (e) {}
-
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
