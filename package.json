@@ -33,6 +33,7 @@
     "test": "node --test --test-concurrency=1 scripts/tests/*.test.mjs",
     "setup:mediapipe": "node scripts/prepare-mediapipe.mjs",
     "setup:ort": "node scripts/prepare-ort.mjs",
+    "setup:cmd": "scripts/setup-cmd.bat",
     "test:py": "python -m unittest discover -s tools/tests"
   },
   "dependencies": {
