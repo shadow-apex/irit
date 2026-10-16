@@ -10,17 +10,25 @@ export function setupWindowsStartup() {
   if (process.platform !== "win32") return;
 
   try {
+    const batPath = path.join(rootDir, "scripts", "launch-iris.bat");
+    const batContent = [
+      "@echo off",
+      'cd /d "%~dp0\\.."',
+      'set "PATH=%PATH%;C:\\Program Files\\nodejs;%APPDATA%\\npm"',
+      "call npm run dev",
+      "",
+    ].join("\r\n");
+    fs.writeFileSync(batPath, batContent, "ascii");
+
     const vbsPath = path.join(rootDir, "scripts", "launch-iris.vbs");
     const vbsContent = [
       'Set WshShell = CreateObject("WScript.Shell")',
       'Set fso = CreateObject("Scripting.FileSystemObject")',
       'scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)',
-      'rootDir = fso.GetParentFolderName(scriptDir)',
-      'WshShell.CurrentDirectory = rootDir',
-      'WshShell.Run "cmd.exe /c npm run dev", 0, False',
+      'batPath = scriptDir & "\\launch-iris.bat"',
+      'WshShell.Run "cmd.exe /c """ & batPath & """", 0, False',
       '',
     ].join("\r\n");
-
     fs.writeFileSync(vbsPath, vbsContent, "ascii");
 
     const psFile = path.join(rootDir, "scripts", "create-shortcuts.ps1");

@@ -16,7 +16,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "npx --yes kill-port 5173 8080 8081 4040 8444 8000 || exit 0 && node scripts/prepare-mediapipe.mjs",
+    "predev": "node scripts/kill-ports.mjs && node scripts/prepare-mediapipe.mjs",
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
     "dev:with-legacy-obs-cam": "concurrently -k -n VITE,ELECTRON,PHONE -c cyan,magenta,yellow \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\" \"npm run camera\"",
     "camera": "node -e \"require('fs').existsSync('PHONE_CAMERA/node_modules')||require('child_process').execSync('npm install',{cwd:'PHONE_CAMERA',stdio:'inherit'})\" && node PHONE_CAMERA/server.js",
