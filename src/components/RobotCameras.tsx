@@ -370,7 +370,10 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
       title={
         <>
           <Bot size={16} style={{ color: "rgb(40, 205, 170)" }} />
-          Live: Đội Hình Robot
+          <span>Live: Đội Hình Robot</span>
+          <span style={{ fontSize: 11, fontWeight: "normal", color: "#888", marginLeft: 8 }}>
+            (Phím 1..9 để chọn)
+          </span>
         </>
       }
       onClose={onClose}
@@ -452,9 +455,10 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
         {/* Danh sách camera từng robot */}
         {!loading &&
           !loadError &&
-          robotList.map(([id, config]: any) => {
+          robotList.map(([id, config]: any, index: number) => {
             if (expandedId && expandedId !== id) return null;
 
+            const robotIndex = index + 1;
             const hasUrl = Boolean(config?.camera_url);
             const isStream = hasUrl && isStreamUrl(config.camera_url);
 
@@ -483,7 +487,7 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
                   transition: "all 0.2s"
                 }}
                 onClick={() => setExpandedId(expandedId === id ? null : id)}
-                title={expandedId === id ? "Thu nhỏ" : "Phóng to"}
+                title={expandedId === id ? "Thu nhỏ" : `Phóng to robot #${robotIndex} (Phím ${robotIndex})`}
               >
                 {/* Thanh tiêu đề mỗi camera */}
                 <div
@@ -498,7 +502,29 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
                     alignItems: "center",
                   }}
                 >
-                  <span>{config?.name || id} {expandedId === id && <span style={{ color: '#4ade80', fontSize: 11, marginLeft: 8 }}>(WASD to move)</span>}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minWidth: 20,
+                        height: 20,
+                        padding: "0 6px",
+                        borderRadius: 10,
+                        backgroundColor: "rgba(40, 205, 170, 0.18)",
+                        color: "rgb(40, 205, 170)",
+                        border: "1px solid rgba(40, 205, 170, 0.4)",
+                        fontSize: 11,
+                        fontWeight: "bold",
+                        fontFamily: "monospace",
+                      }}
+                      title={`Robot #${robotIndex} (Bấm phím ${robotIndex} hoặc nói "robot ${robotIndex}")`}
+                    >
+                      #{robotIndex}
+                    </span>
+                    <span>{config?.name || id} {expandedId === id && <span style={{ color: '#4ade80', fontSize: 11, marginLeft: 8 }}>(WASD to move)</span>}</span>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span
                       style={{
@@ -528,6 +554,33 @@ export default function RobotCameras({ onClose }: { onClose: () => void }) {
                     position: "relative",
                   }}
                 >
+                  {/* Badge số nhỏ nổi trên camera feed để dễ nhận diện và gọi */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 8,
+                      left: 8,
+                      zIndex: 6,
+                      backgroundColor: "rgba(0, 0, 0, 0.65)",
+                      border: "1px solid rgba(40, 205, 170, 0.5)",
+                      borderRadius: 4,
+                      padding: "2px 6px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: "#fff",
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+                      pointerEvents: "none",
+                      backdropFilter: "blur(4px)",
+                    }}
+                  >
+                    <span style={{ color: "rgb(40, 205, 170)" }}>#{robotIndex}</span>
+                    <span style={{ color: "#94a3b8", fontSize: 10, fontWeight: 500 }}>
+                      [Phím {robotIndex}]
+                    </span>
+                  </div>
                   {/* Hiển thị ảnh camera nếu có URL và không lỗi.
                       Key thay đổi mỗi khi timestamp đổi → force React re-mount img
                       → trình duyệt fetch ảnh mới hoàn toàn thay vì dùng cache. */}
