@@ -18,6 +18,7 @@ An toàn cho máy người dùng:
 """
 import ctypes
 from ctypes import wintypes
+import hashlib
 import json
 import math
 import os
@@ -47,6 +48,129 @@ INTRO_SPEECH = (
     "Tôi có thể giúp bạn điều khiển máy tính bằng giọng nói. "
     "Sau đây là một vài ví dụ."
 )
+
+_AUDIO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "iris_showcase_tts_cache")
+try:
+    os.makedirs(_AUDIO_CACHE_DIR, exist_ok=True)
+except Exception:
+    pass
+
+_SYNTH_LOCKS = {}
+_SYNTH_GLOBAL_LOCK = threading.Lock()
+
+SHOWCASE_PHRASES = (
+    INTRO_SPEECH,
+    "Tôi có thể giảm độ sáng màn hình.",
+    "Tôi có thể tăng độ sáng.",
+    "Tôi có thể giảm âm lượng.",
+    "Tôi có thể tăng âm lượng.",
+    "Tôi có thể mở trình duyệt.",
+    "Tôi có thể mở thư mục.",
+    "Tôi có thể đóng thư mục và trình duyệt.",
+    "Tôi có thể điều khiển chuột.",
+    "Tôi có thể phóng to cửa sổ.",
+    "Tôi có thể thu nhỏ cửa sổ.",
+    "Tôi có thể di chuyển cửa sổ.",
+    "Tôi có thể làm được nhiều hơn bạn nghĩ đấy, và tôi luôn sẵn sàng giúp đỡ bạn.",
+)
+
+
+def _get_audio_cache_path(text, voice="vi-VN-HoaiMyNeural", rate="+15%"):
+    key = hashlib.sha256(f"{voice}:{rate}:{text}".encode("utf-8")).hexdigest()
+    return os.path.join(_AUDIO_CACHE_DIR, f"{key}.mp3")
+
+
+def ensure_audio_file(text, voice="vi-VN-HoaiMyNeural", rate="+15%"):
+    """Lấy đường dẫn MP3 đã cache trên đĩa hoặc tổng hợp nhanh qua Edge-TTS (đồng bộ hóa chống gọi trùng)."""
+    if not _HAS_EDGE_TTS:
+        return None
+    cache_path = _get_audio_cache_path(text, voice, rate)
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 100:
+        return cache_path
+
+    with _SYNTH_GLOBAL_LOCK:
+        if text not in _SYNTH_LOCKS:
+            _SYNTH_LOCKS[text] = threading.Event()
+            is_synthesizer = True
+        else:
+            is_synthesizer = False
+            ev = _SYNTH_LOCKS[text]
+
+    if not is_synthesizer:
+        ev.wait(timeout=10.0)
+        if os.path.exists(cache_path) and os.path.getsize(cache_path) > 100:
+            return cache_path
+
+    tmp_path = os.path.join(
+        _AUDIO_CACHE_DIR,
+        f"tmp_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}.mp3",
+    )
+    try:
+        async def _edge():
+            comm = edge_tts.Communicate(text, voice, rate=rate)
+            await comm.save(tmp_path)
+
+        asyncio.run(_edge())
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 100:
+            os.replace(tmp_path, cache_path)
+            return cache_path
+    except Exception as e:
+        sys.stderr.write(f"[TTS synth error: {e}]\n")
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        with _SYNTH_GLOBAL_LOCK:
+            if text in _SYNTH_LOCKS:
+                _SYNTH_LOCKS[text].set()
+
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 100:
+        return cache_path
+    return None
+
+
+def prefetch_showcase_audio():
+    """Tải trước toàn bộ âm thanh của 11 bước chạy ngầm để phát tức thì 0ms, loại bỏ hoàn toàn độ trễ mạng."""
+    if not _HAS_EDGE_TTS:
+        return
+
+    def _worker():
+        async def _fetch_one(text):
+            try:
+                target = _get_audio_cache_path(text)
+                if os.path.exists(target) and os.path.getsize(target) > 100:
+                    return
+                tmp = os.path.join(
+                    _AUDIO_CACHE_DIR,
+                    f"pre_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}.mp3",
+                )
+                comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural", rate="+15%")
+                await comm.save(tmp)
+                if os.path.exists(tmp) and os.path.getsize(tmp) > 100:
+                    os.replace(tmp, target)
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+
+        async def _run_all():
+            tasks = [_fetch_one(p) for p in SHOWCASE_PHRASES]
+            await asyncio.gather(*tasks)
+
+        try:
+            asyncio.run(_run_all())
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_worker, daemon=True, name="TTS-Prefetch")
+    t.start()
+
 
 NOTEPAD_RECT = (60, 90, 680, 520)  # x, y, rộng, cao — vị trí Notepad lúc bắt đầu
 
@@ -89,31 +213,21 @@ def _hotkey(mod_vk, key_vk):
 
 def speak_phrase(text, on_start=None, rate="+15%"):
     """Phát âm thanh tiếng Việt tự nhiên chuẩn AI (giọng nữ Hoài My Neural giống Iris), đồng bộ với on_start."""
-    # 1. Thử qua Edge-TTS Neural Voice (giọng AI tiếng Việt tự nhiên, ấm áp, truyền cảm giống Iris)
+    # 1. Thử qua Edge-TTS Neural Voice (đã có cache sẵn trên đĩa hoặc tổng hợp lưu cache)
     if _HAS_EDGE_TTS:
         try:
-            tmp_mp3 = os.path.join(tempfile.gettempdir(), f"iris_tts_{os.getpid()}_{int(time.time() * 1000)}.mp3")
-
-            async def _edge():
-                comm = edge_tts.Communicate(text, "vi-VN-HoaiMyNeural", rate=rate)
-                await comm.save(tmp_mp3)
-
-            asyncio.run(_edge())
-            if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
+            mp3_path = ensure_audio_file(text, voice="vi-VN-HoaiMyNeural", rate=rate)
+            if mp3_path and os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 100:
                 winmm = ctypes.windll.winmm
                 alias = f"iristts_{os.getpid()}_{int(time.time() * 1000)}"
                 try:
-                    winmm.mciSendStringW(f'open "{tmp_mp3}" type mpegvideo alias {alias}', None, 0, None)
+                    winmm.mciSendStringW(f'open "{mp3_path}" type mpegvideo alias {alias}', None, 0, None)
                     # Kích hoạt gõ chữ ngay thời điểm âm thanh bắt đầu phát
                     if on_start:
                         on_start()
                     winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
                 finally:
                     winmm.mciSendStringW(f"close {alias}", None, 0, None)
-                    try:
-                        os.remove(tmp_mp3)
-                    except Exception:
-                        pass
                 return
         except Exception as e:
             sys.stderr.write(f"[TTS edge: {e}]\n")
@@ -541,12 +655,12 @@ def shrink_window(hwnd):
     """Thu nhỏ: hạ cửa sổ về kích thước thường, thu xuống thanh tác vụ, rồi đưa lại về chỗ cũ."""
     x, y, w, h = NOTEPAD_RECT
     _winutil.show_window(hwnd, _winutil.SW_RESTORE)  # hạ từ trạng thái phóng to
-    time.sleep(0.6)
+    time.sleep(0.3)
     _winutil.move_resize(hwnd, x, y, w, h)
     _winutil.show_window(hwnd, SW_MINIMIZE)  # thu xuống taskbar
-    time.sleep(0.9)
+    time.sleep(0.4)
     _winutil.show_window(hwnd, _winutil.SW_RESTORE)  # từ taskbar → về lại kích thước thường (không phóng to)
-    time.sleep(0.6)
+    time.sleep(0.3)
     _winutil.move_resize(hwnd, x, y, w, h)
 
 
@@ -571,6 +685,9 @@ def run_showcase():
         }
 
     warnings = []
+
+    # Khởi động tải trước toàn bộ audio trong background để phát tức thì 0ms, xóa sạch khoảng cách chờ
+    prefetch_showcase_audio()
 
     # 1. Báo cáo ngay bước 0 cho quả cầu năng lượng và giao diện sáng lên TỨC THÌ (0ms), không bị khựng
     report_step(0, "Giới thiệu", INTRO_SPEECH)
@@ -636,7 +753,7 @@ def run_showcase():
     if t_intro_type:
         t_intro_type.join(timeout=5.0)
     content += intro_text
-    time.sleep(0.3)
+    time.sleep(0.1)
 
     # 6. Đợi thread đo độ sáng hoàn tất trước khi bước 1 (Giảm độ sáng) bắt đầu
     t_bright.join(timeout=4.0)
@@ -663,7 +780,7 @@ def run_showcase():
         speak_phrase(speech, on_start=_start_step_typing, rate="+15%")
         if t_type:
             t_type.join(timeout=3.0)
-        time.sleep(0.3)
+        time.sleep(0.05)
 
     current_brightness = original_brightness
     low_level, high_level = brightness_plan(original_brightness) if brightness_ok else (None, None)
@@ -679,7 +796,7 @@ def run_showcase():
                 current_brightness = low_level
             else:
                 warnings.append("Không giảm được độ sáng.")
-            time.sleep(1.0)
+            time.sleep(0.3)
 
         # 2. TĂNG ĐỘ SÁNG
         announce(2, "Tăng độ sáng", "Tôi có thể tăng độ sáng.", "Tăng độ sáng" + unsupported)
@@ -688,17 +805,17 @@ def run_showcase():
                 current_brightness = high_level
             else:
                 warnings.append("Không tăng được độ sáng.")
-            time.sleep(0.8)
+            time.sleep(0.3)
 
         # 3. GIẢM ÂM LƯỢNG
         announce(3, "Giảm âm lượng", "Tôi có thể giảm âm lượng.", "Giảm âm lượng")
         _press_keys(VK_VOLUME_DOWN, 6)
-        time.sleep(0.8)
+        time.sleep(0.3)
 
         # 4. TĂNG ÂM LƯỢNG
         announce(4, "Tăng âm lượng", "Tôi có thể tăng âm lượng.", "Tăng âm lượng")
         _press_keys(VK_VOLUME_UP, 6)
-        time.sleep(0.8)
+        time.sleep(0.3)
 
         # 5. MỞ TRÌNH DUYỆT (GÓC TRÁI)
         announce(5, "Mở trình duyệt", "Tôi có thể mở trình duyệt.", "Mở trình duyệt")
@@ -713,48 +830,49 @@ def run_showcase():
 
         if browser_target:
             snap_window_left(browser_target)
-        time.sleep(0.8)
+        time.sleep(0.3)
 
         # 6. MỞ THƯ MỤC (GÓC PHẢI)
         announce(6, "Mở thư mục", "Tôi có thể mở thư mục.", "Mở thư mục")
         opened_explorers = open_downloads_folder()
         if opened_explorers:
             snap_window_right(opened_explorers[0])
-        time.sleep(1.0)
+        time.sleep(0.3)
 
         # 7. ĐÓNG THƯ MỤC VÀ ĐÓNG TRÌNH DUYỆT
         announce(7, "Đóng thư mục và trình duyệt", "Tôi có thể đóng thư mục và trình duyệt.", "đóng thư mục và Đóng trình duyệt")
         # Đóng cửa sổ thư mục Downloads
         for ehwnd in opened_explorers:
             close_window(ehwnd)
-        time.sleep(0.4)
+        time.sleep(0.2)
 
         # Đóng trình duyệt (cửa sổ mới hoặc tab do Iris mở)
         if close_browser(opened_browsers, browser_target) is None:
             warnings.append("Không tự đóng được trình duyệt (không nhận ra cửa sổ do Iris mở) — bạn hãy tự đóng.")
-        time.sleep(1.0)
+        time.sleep(0.3)
 
         # 8. ĐIỀU KHIỂN CHUỘT
         announce(8, "Điều khiển chuột", "Tôi có thể điều khiển chuột.", "Điều khiển chuột")
         demo_mouse()
-        time.sleep(0.6)
+        time.sleep(0.3)
 
         # 9. PHÓNG TO CỬA SỔ NOTEPAD
         announce(9, "Phóng to cửa sổ", "Tôi có thể phóng to cửa sổ.", "Phóng to cửa sổ Notepad")
         if notepad_hwnd:
             maximize_window(notepad_hwnd)
-        time.sleep(1.3)
+        time.sleep(0.4)
 
         # 10. THU NHỎ CỬA SỔ NOTEPAD
         announce(10, "Thu nhỏ cửa sổ", "Tôi có thể thu nhỏ cửa sổ.", "Thu nhỏ cửa sổ Notepad")
         if notepad_hwnd:
             shrink_window(notepad_hwnd)
+        time.sleep(0.3)
 
         # 11. DI CHUYỂN CỬA SỔ NOTEPAD
         announce(11, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ.", "Di chuyển cửa sổ Notepad")
         if notepad_hwnd:
             move_notepad(notepad_hwnd)
-        time.sleep(0.6)
+        time.sleep(0.3)
     finally:
         # Luôn trả độ sáng về mức người dùng đang dùng, kể cả khi trình diễn lỗi giữa chừng
         if brightness_ok and current_brightness != original_brightness:
