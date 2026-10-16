@@ -592,9 +592,21 @@ app.whenReady().then(() => {
     });
   } catch (e) {}
 
-  // Phím tắt Ctrl+Alt+I bổ trợ mở Iris (đồng bộ với Hotkey của Windows shortcut Iris.lnk)
+  // Phím tắt Ctrl+Alt+I và Ctrl+Shift+I bổ trợ mở Iris
   try {
     globalShortcut.register("CommandOrControl+Alt+I", () => {
+      if (!mainWindow) {
+        createWindow();
+        return;
+      }
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    });
+  } catch (e) {}
+
+  try {
+    globalShortcut.register("CommandOrControl+Shift+I", () => {
       if (!mainWindow) {
         createWindow();
         return;

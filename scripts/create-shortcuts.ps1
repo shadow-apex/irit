@@ -31,6 +31,21 @@ if ($desktop -and (Test-Path $desktop)) {
   $s2.Save()
 }
 
+# Also ensure local Desktop has Iris.lnk if OneDrive redirected Desktop
+$localDesktop = "C:\Users\$env:USERNAME\Desktop"
+if ((Test-Path $localDesktop) -and ($localDesktop -ne $desktop)) {
+  try {
+    $s2b = $ws.CreateShortcut("$localDesktop\Iris.lnk")
+    $s2b.TargetPath = "wscript.exe"
+    $s2b.Arguments = "`"$vbsPath`""
+    $s2b.WorkingDirectory = $rootDir
+    $s2b.IconLocation = "$iconPath,0"
+    $s2b.Description = "Iris AI Assistant (Ctrl+Alt+I)"
+    $s2b.Hotkey = "CTRL+ALT+I"
+    $s2b.Save()
+  } catch {}
+}
+
 # 3. Programs (Start Menu)
 if ($programs -and (Test-Path $programs)) {
   $s3 = $ws.CreateShortcut("$programs\Iris.lnk")
