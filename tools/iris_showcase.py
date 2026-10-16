@@ -223,6 +223,31 @@ def update_notepad(h_edit, text_content):
     user32.SendMessageW(h_edit, 0x00B7, 0, 0)
 
 
+def type_step_into_notepad(h_edit, step_num, total_steps, note_text, char_delay=0.025):
+    """Dán nhanh tiền tố '[stt/10] ' rồi gõ thủ công từng chữ của note_text với hiệu ứng gõ phím."""
+    if not h_edit:
+        return
+    user32 = ctypes.windll.user32
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+
+    # 1. Đưa con trỏ văn bản về cuối: EM_SETSEL (0x00B1)
+    user32.SendMessageW(h_edit, 0x00B1, -1, -1)
+
+    # 2. Dán nhanh tiền tố: "\n[stt/10] " qua EM_REPLACESEL (0x00C2)
+    prefix = f"\n[{step_num}/{total_steps}] "
+    p_buf = ctypes.create_unicode_buffer(prefix)
+    user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(p_buf))
+    user32.SendMessageW(h_edit, 0x00B7, 0, 0)  # EM_SCROLLCARET
+
+    # 3. Gõ thủ công từng chữ (char-by-char) đảm bảo tốc độ mượt mà, không quá chậm
+    for ch in note_text:
+        c_buf = ctypes.create_unicode_buffer(ch)
+        user32.SendMessageW(h_edit, 0x00C2, 1, ctypes.addressof(c_buf))
+        user32.SendMessageW(h_edit, 0x00B7, 0, 0)
+        time.sleep(char_delay)
+
+
 def wait_notepad(keyword, timeout=4.0):
     """Chờ cửa sổ Notepad (và control Edit) xuất hiện thay vì ngủ cố định — máy chậm vẫn bắt được."""
     deadline = time.time() + timeout
@@ -489,12 +514,20 @@ def run_showcase():
     brightness_ok = original_brightness is not None
 
     def announce(step_num, title, speech, note):
-        """Báo bước cho giao diện, ghi một dòng vào Notepad rồi đọc câu giới thiệu ngắn."""
+        """Báo bước cho giao diện, dán '[stt/10] ' rồi gõ thủ công từng chữ vào Notepad, phát câu giới thiệu ngắn."""
         nonlocal content
         report_step(step_num, title, speech)
         content += f"\n[{step_num}/{TOTAL_STEPS}] {note}"
-        update_notepad(hedit, content)
+
+        # Dán [stt/10] rồi gõ thủ công từng chữ trên luồng song song cùng lúc với giọng nói
+        t_type = threading.Thread(
+            target=type_step_into_notepad,
+            args=(hedit, step_num, TOTAL_STEPS, note, 0.025),
+            daemon=True,
+        )
+        t_type.start()
         speak_phrase(speech)
+        t_type.join(timeout=3.0)
         time.sleep(0.3)
 
     current_brightness = original_brightness
