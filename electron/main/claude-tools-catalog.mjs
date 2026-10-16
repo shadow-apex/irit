@@ -884,7 +884,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "iris_showcase",
-          description: "Run an interactive live capability demonstration of Iris directly on the user's screen via tools/iris_showcase.py. Opens Notepad, Iris first introduces herself briefly, then introduces each feature in one short sentence and directly executes it on the machine, in this order: (1) Brightness Down, (2) Brightness Up, (3) Volume Down, (4) Volume Up, (5) Open Browser, (6) Close Browser (only the window Iris opened), (7) Smooth Mouse Cursor Movement, (8) Maximize, (9) Minimize and (10) Move the Notepad window. Takes about a minute. Invoke this whenever the user asks Iris to showcase/demonstrate what she can do (in Vietnamese: 'giới thiệu những thứ bạn có thể làm', 'demo tính năng', 'trình diễn khả năng', 'bạn làm được những gì', 'showcase').",
+          description: "Run an interactive live capability demonstration of Iris directly on the user's screen via tools/iris_showcase.py. Opens Notepad, Iris first introduces herself briefly, then introduces each feature in one short sentence and directly executes it on the machine, in this order: (1) Brightness Down, (2) Brightness Up, (3) Volume Down, (4) Volume Up, (5) Open Browser, (6) Open Folder, (7) Close Folder and Browser, (8) Smooth Mouse Cursor Movement, (9) Maximize, (10) Minimize and (11) Move the Notepad window. Takes about a minute. Invoke this whenever the user asks Iris to showcase/demonstrate what she can do (in Vietnamese: 'giới thiệu những thứ bạn có thể làm', 'demo tính năng', 'trình diễn khả năng', 'bạn làm được những gì', 'showcase').",
           parameters: { type: "object", properties: {} },
         },
         {

@@ -4,9 +4,10 @@ tools/iris_showcase.py — Trình diễn trực tiếp (Live Showcase) các kh�
 Iris tự giới thiệu ngắn gọn, rồi lần lượt giới thiệu (bằng giọng nói + ghi vào Notepad) và thực hiện:
   1. Giảm độ sáng             2. Tăng độ sáng
   3. Giảm âm lượng            4. Tăng âm lượng
-  5. Mở trình duyệt           6. Đóng trình duyệt
-  7. Điều khiển chuột
-  8. Phóng to cửa sổ Notepad  9. Thu nhỏ cửa sổ Notepad  10. Di chuyển cửa sổ Notepad
+  5. Mở trình duyệt           6. Mở thư mục
+  7. Đóng thư mục & trình duyệt
+  8. Điều khiển chuột
+  9. Phóng to cửa sổ Notepad 10. Thu nhỏ cửa sổ Notepad  11. Di chuyển cửa sổ Notepad
 
 An toàn cho máy người dùng:
  * Độ sáng được đọc trước và luôn được khôi phục về mức ban đầu; màn hình không hỗ trợ chỉnh độ sáng
@@ -39,7 +40,7 @@ import _common  # noqa: E402
 import _winutil  # noqa: E402
 from sys_control import encode_ps  # noqa: E402
 
-TOTAL_STEPS = 10
+TOTAL_STEPS = 11
 
 INTRO_SPEECH = (
     "Xin chào, tôi là Iris, một trợ lý thông minh. "
@@ -653,7 +654,7 @@ def run_showcase():
         _press_keys(VK_VOLUME_UP, 6)
         time.sleep(0.8)
 
-        # 5. MỞ TRÌNH DUYỆT VÀ THƯ MỤC DOWNLOADS (CHIA ĐÔI TRÁI - PHẢI)
+        # 5. MỞ TRÌNH DUYỆT (GÓC TRÁI)
         announce(5, "Mở trình duyệt", "Tôi có thể mở trình duyệt.", "Mở trình duyệt")
         opened_browsers = open_browser()
         browser_target = opened_browsers[0] if opened_browsers else None
@@ -668,14 +669,15 @@ def run_showcase():
             snap_window_left(browser_target)
         time.sleep(0.8)
 
-        # Mở thư mục Downloads và đặt sang bên phải
+        # 6. MỞ THƯ MỤC (GÓC PHẢI)
+        announce(6, "Mở thư mục", "Tôi có thể mở thư mục.", "Mở thư mục")
         opened_explorers = open_downloads_folder()
         if opened_explorers:
             snap_window_right(opened_explorers[0])
-        time.sleep(1.2)
+        time.sleep(1.0)
 
-        # 6. ĐÓNG CẢ HAI (TRÌNH DUYỆT VÀ THƯ MỤC DOWNLOADS)
-        announce(6, "Đóng trình duyệt", "Tôi có thể đóng trình duyệt.", "Đóng trình duyệt")
+        # 7. ĐÓNG THƯ MỤC VÀ ĐÓNG TRÌNH DUYỆT
+        announce(7, "Đóng thư mục và trình duyệt", "Tôi có thể đóng thư mục và trình duyệt.", "đóng thư mục và Đóng trình duyệt")
         # Đóng cửa sổ thư mục Downloads
         for ehwnd in opened_explorers:
             close_window(ehwnd)
@@ -686,24 +688,24 @@ def run_showcase():
             warnings.append("Không tự đóng được trình duyệt (không nhận ra cửa sổ do Iris mở) — bạn hãy tự đóng.")
         time.sleep(1.0)
 
-        # 7. ĐIỀU KHIỂN CHUỘT
-        announce(7, "Điều khiển chuột", "Tôi có thể điều khiển chuột.", "Điều khiển chuột")
+        # 8. ĐIỀU KHIỂN CHUỘT
+        announce(8, "Điều khiển chuột", "Tôi có thể điều khiển chuột.", "Điều khiển chuột")
         demo_mouse()
         time.sleep(0.6)
 
-        # 8. PHÓNG TO CỬA SỔ NOTEPAD
-        announce(8, "Phóng to cửa sổ", "Tôi có thể phóng to cửa sổ.", "Phóng to cửa sổ Notepad")
+        # 9. PHÓNG TO CỬA SỔ NOTEPAD
+        announce(9, "Phóng to cửa sổ", "Tôi có thể phóng to cửa sổ.", "Phóng to cửa sổ Notepad")
         if notepad_hwnd:
             maximize_window(notepad_hwnd)
         time.sleep(1.3)
 
-        # 9. THU NHỎ CỬA SỔ NOTEPAD
-        announce(9, "Thu nhỏ cửa sổ", "Tôi có thể thu nhỏ cửa sổ.", "Thu nhỏ cửa sổ Notepad")
+        # 10. THU NHỎ CỬA SỔ NOTEPAD
+        announce(10, "Thu nhỏ cửa sổ", "Tôi có thể thu nhỏ cửa sổ.", "Thu nhỏ cửa sổ Notepad")
         if notepad_hwnd:
             shrink_window(notepad_hwnd)
 
-        # 10. DI CHUYỂN CỬA SỔ NOTEPAD
-        announce(10, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ.", "Di chuyển cửa sổ Notepad")
+        # 11. DI CHUYỂN CỬA SỔ NOTEPAD
+        announce(11, "Di chuyển cửa sổ", "Tôi có thể di chuyển cửa sổ.", "Di chuyển cửa sổ Notepad")
         if notepad_hwnd:
             move_notepad(notepad_hwnd)
         time.sleep(0.6)
@@ -732,8 +734,8 @@ def run_showcase():
         "success": True,
         "message": (
             "Iris đã tự giới thiệu và trình diễn theo đúng thứ tự: (1) Giảm độ sáng, (2) Tăng độ sáng, "
-            "(3) Giảm âm lượng, (4) Tăng âm lượng, (5) Mở trình duyệt, (6) Đóng trình duyệt, "
-            "(7) Điều khiển chuột, (8) Phóng to, (9) Thu nhỏ, (10) Di chuyển cửa sổ Notepad."
+            "(3) Giảm âm lượng, (4) Tăng âm lượng, (5) Mở trình duyệt, (6) Mở thư mục, "
+            "(7) Đóng thư mục và Đóng trình duyệt, (8) Điều khiển chuột, (9) Phóng to, (10) Thu nhỏ, (11) Di chuyển cửa sổ Notepad."
         ),
         "steps": [
             "Giảm độ sáng",
@@ -741,7 +743,8 @@ def run_showcase():
             "Giảm âm lượng (Volume Down)",
             "Tăng âm lượng (Volume Up)",
             "Mở trình duyệt",
-            "Đóng trình duyệt",
+            "Mở thư mục",
+            "Đóng thư mục và Đóng trình duyệt",
             "Điều khiển chuột (Move Mouse)",
             "Phóng to cửa sổ Notepad",
             "Thu nhỏ cửa sổ Notepad",
