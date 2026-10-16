@@ -1,18 +1,10 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { setupWindowsStartup } from "./setup-windows-startup.mjs";
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const isWindows = process.platform === "win32";
 const electronCli = path.join(root, "node_modules", "electron", "cli.js");
-
-if (isWindows) {
-  try {
-    setupWindowsStartup();
-  } catch {}
-}
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
