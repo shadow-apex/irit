@@ -506,6 +506,28 @@ app.whenReady().then(() => {
     if (mainWindow) mainWindow.webContents.send(channel);
   };
   const hotkeyActions = {
+    toggleDeck: {
+      label: "Show / Toggle Iris",
+      run: () => {
+        if (!mainWindow) {
+          createWindow();
+          return;
+        }
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        } else if (!mainWindow.isVisible()) {
+          mainWindow.show();
+          mainWindow.focus();
+        } else if (mainWindow.isFocused()) {
+          mainWindow.minimize();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+    },
     screenVision: { label: "Screen Vision", run: () => toggleScreenVision() },
     resetToBoot: {
       label: "Reset to boot",
@@ -567,6 +589,19 @@ app.whenReady().then(() => {
   try {
     globalShortcut.register("Alt+S", () => {
       toggleScreenVision();
+    });
+  } catch (e) {}
+
+  // Phím tắt Ctrl+Alt+I bổ trợ mở Iris (đồng bộ với Hotkey của Windows shortcut Iris.lnk)
+  try {
+    globalShortcut.register("CommandOrControl+Alt+I", () => {
+      if (!mainWindow) {
+        createWindow();
+        return;
+      }
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     });
   } catch (e) {}
 

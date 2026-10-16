@@ -10,6 +10,7 @@
 //   chiếm phím của mọi ứng dụng khác / thường bị HĐH giữ → nên đổi qua IRIS_HOTKEYS nếu bị xung đột.
 
 export const DEFAULT_HOTKEYS = Object.freeze({
+  toggleDeck: "CommandOrControl+I",
   screenVision: "Super+Shift+V",
   resetToBoot: "Super+Shift+R",
   localChat: "Super+Shift+L",
