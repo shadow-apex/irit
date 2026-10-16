@@ -267,16 +267,16 @@ static class IrisDaemon
                 batPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launch-iris.bat");
             }
 
-            Log("No active Iris process found. Launching Iris from: " + batPath);
+            Log("No active Iris process found. Launching Iris with visible CMD from: " + batPath);
             if (File.Exists(batPath))
             {
                 ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + batPath + "\"\"");
                 psi.WorkingDirectory = rootDir;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
+                psi.WindowStyle = ProcessWindowStyle.Normal;
+                psi.CreateNoWindow = false;
+                psi.UseShellExecute = true;
                 Process.Start(psi);
-                Log("Launched cmd.exe with launch-iris.bat");
+                Log("Launched cmd.exe with visible console");
             }
         }
         catch (Exception ex)
