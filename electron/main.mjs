@@ -23,7 +23,6 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { repoRoot } from "./main/paths.mjs";
@@ -63,6 +62,7 @@ import {
 import {
   liveSession,
   liveStatus,
+  getLiveGeminiStatus,
   GreetGate,
   startLive,
   stopLive,
@@ -100,7 +100,7 @@ import { pickLanAddress } from "./main/network-utils.mjs";
 import { createFileLogger, installGlobalErrorHandlers } from "./main/crash-log.mjs";
 import { killTree } from "./main/process-utils.mjs";
 import { stopWebServer } from "./web-server.mjs";
-import { stopOmniServer, setOmniLogger } from "./main/omni-server.mjs";
+import { stopOmniServer, setOmniLogger, ensureOmniServer, getOmniStatus, toggleOmniServer } from "./main/omni-server.mjs";
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
 import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
@@ -218,7 +218,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
-  ipcMain.handle("sidecar:status", () => liveStatus);
+  ipcMain.handle("sidecar:status", () => ({
+    ...liveStatus,
+    geminiStatus: getLiveGeminiStatus(),
+  }));
   // S-03: logic an toàn nằm ở main/app-launcher.mjs (allowlist Desktop + http(s), không shell).
   ipcMain.handle("app:close", (_event, target) =>
     closeAppTarget(target, { desktopDir: app.getPath("desktop") }));
@@ -400,6 +403,15 @@ app.whenReady().then(() => {
   ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
   ipcMain.handle("config:test-claude", () => checkClaudeHealth());
   ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
+  ipcMain.handle("omni:status", () => getOmniStatus());
+  ipcMain.handle("omni:toggle", async (_event, payload) => {
+    const want = typeof payload?.enable === "boolean" ? payload.enable : undefined;
+    const res = await toggleOmniServer(want);
+    try {
+      writeUserConfig({ OMNIPARSER_ENABLED: res.enabled ? "true" : "false" });
+    } catch {}
+    return res;
+  });
   // prompt-review-gate (ported from myiris): deck ReviewBanner talks to the
   // gate through these three channels only.
   ipcMain.handle("prompt:status", () => ({ reviewMode: getPromptReviewMode() }));
@@ -472,6 +484,9 @@ app.whenReady().then(() => {
   // nếu đã chạy rồi (`if (wss) return;`), nên lệnh gọi lại bên trong
   // startLive() vẫn giữ nguyên, vô hại — chỉ là gọi 2 lần cho chắc.
   startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini);
+  if (String(process.env.OMNIPARSER_ENABLED ?? "true").toLowerCase() !== "false") {
+    ensureOmniServer({ timeoutMs: 25_000 }).catch(() => {});
+  }
 
   createTray();
   const hudKey = hudHotkey();

@@ -1,4 +1,5 @@
 import os
+import sys
 import io
 import hmac
 import re
@@ -9,21 +10,35 @@ import asyncio
 from typing import Optional
 from dotenv import load_dotenv
 
-# Tự động nạp biến môi trường từ file .env ở thư mục gốc (irit)
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+# Đảm bảo import thư viện nội bộ (util.utils) hoạt động độc lập với cwd
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _CURRENT_DIR not in sys.path:
+    sys.path.insert(0, _CURRENT_DIR)
 
+# Tránh lỗi UnicodeEncodeError trên console Windows (cp1252) khi in tiếng Việt
+if hasattr(sys.stdout, "reconfigure"):
+    try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
+if hasattr(sys.stderr, "reconfigure"):
+    try: sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
+
+# Tự động nạp biến môi trường từ file .env ở thư mục gốc (irit)
+load_dotenv(os.path.join(_CURRENT_DIR, "..", "..", ".env"))
+
+import json
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 from PIL import Image
-import torch
 # M-02: SDK legacy `google-generativeai` đã thay bằng `google-genai`.
 from google import genai
 from google.genai import types as genai_types
-import anthropic
-
-from util.utils import check_ocr_box, get_yolo_model, get_som_labeled_img
+try:
+    import anthropic
+except Exception:
+    anthropic = None
 
 # ---------------------------------------------------------------------------
 # S-01 — Bảo mật: server này điều khiển chuột/bàn phím (pyautogui) nên
@@ -67,13 +82,21 @@ async def _read_upload_limited(file: UploadFile) -> bytes:
 
 # ---------------------------------------------------------------------------
 # Model startup — khởi tạo YOLO + VLM clients MỘT LẦN duy nhất lúc boot.
-# BUG-2 FIX: genai.GenerativeModel() và anthropic client KHÔNG được tạo lại
-# mỗi request vì (a) tốn CPU mỗi lần và (b) genai.configure() mutate global
-# state không thread-safe.
+# Nếu PyTorch/YOLO bị lỗi DLL trên Windows (WinError 1114) hoặc thiếu weights,
+# server vẫn chạy ổn định ở chế độ Direct Vision (Gemini/Claude VLM).
 # ---------------------------------------------------------------------------
-print("Loading YOLO Model...")
-yolo_model = get_yolo_model()
-print("YOLO Model Loaded!")
+yolo_model = None
+check_ocr_box = None
+get_som_labeled_img = None
+try:
+    print("Loading YOLO Model...")
+    from util.utils import check_ocr_box as _check_ocr_box, get_yolo_model as _get_yolo_model, get_som_labeled_img as _get_som_labeled_img
+    yolo_model = _get_yolo_model()
+    check_ocr_box = _check_ocr_box
+    get_som_labeled_img = _get_som_labeled_img
+    print("YOLO Model Loaded!")
+except Exception as _yolo_err:
+    print(f"Warning: YOLO/PyTorch unavailable ({_yolo_err}). OmniParser server running in Direct Vision (Gemini/Claude) mode.")
 
 # NOTE: gemini-1.5-flash đã bị tắt; gemini-2.5-flash dự kiến shutdown 16/10/2026 (M-02).
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-3.5-flash")
@@ -96,8 +119,8 @@ if not GEMINI_VISION_API_KEY and os.environ.get("GEMINI_API_KEY", "").strip():
 # BUG-1 FIX: Dùng AsyncAnthropic thay vì Anthropic đồng bộ.
 # anthropic.AsyncAnthropic cho phép await client.messages.create() mà không
 # block event loop — critical vì /parse có thể mất 1-4s chờ Claude trả lời.
-async_anthropic_client: Optional[anthropic.AsyncAnthropic] = None
-if ANTHROPIC_API_KEY:
+async_anthropic_client = None
+if ANTHROPIC_API_KEY and anthropic is not None:
     try:
         async_anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
         print(f"Claude vision READY (async, {CLAUDE_VISION_MODEL}) — sẽ dùng Claude trước cho /parse.")
@@ -243,6 +266,8 @@ def human_move_and_click(x_ratio: float, y_ratio: float, fast_mode: bool = False
 async def health():
     return {
         "status": "ok",
+        "mode": "yolo_som" if yolo_model is not None else "vlm_direct",
+        "yolo_ready": yolo_model is not None,
         "claude_vision": async_anthropic_client is not None,
         "claude_model": CLAUDE_VISION_MODEL if async_anthropic_client is not None else None,
         "gemini_vision": _gemini_client is not None,
@@ -371,11 +396,20 @@ async def _ask_gemini_for_target(labeled_pil: Image.Image, vision_prompt_text: s
         raise RuntimeError("Gemini client chưa được khởi tạo (thiếu GEMINI_VISION_API_KEY?)")
 
     def _call():
-        response = _gemini_client.models.generate_content(
-            model=GEMINI_MODEL_NAME,
-            contents=[vision_prompt_text, labeled_pil],
-        )
-        return (response.text or "").strip()
+        try:
+            response = _gemini_client.models.generate_content(
+                model=GEMINI_MODEL_NAME,
+                contents=[vision_prompt_text, labeled_pil],
+            )
+            return (response.text or "").strip()
+        except Exception as e:
+            if GEMINI_MODEL_NAME != "gemini-flash-latest" and ("404" in str(e) or "not found" in str(e).lower()):
+                response = _gemini_client.models.generate_content(
+                    model="gemini-flash-latest",
+                    contents=[vision_prompt_text, labeled_pil],
+                )
+                return (response.text or "").strip()
+            raise
 
     # SDK đồng bộ → chạy trong thread pool.
     return await asyncio.to_thread(_call)
@@ -434,21 +468,77 @@ def _run_ocr_and_yolo(image_input: Image.Image) -> tuple:
     return dino_labled_img, label_coordinates
 
 
+async def _parse_direct_vlm(image_input: Image.Image, prompt: Optional[str], fast_mode: bool = False):
+    """Khi YOLO/PyTorch không khả dụng, dùng trực tiếp Gemini Vision (hoặc Claude) để tìm toạ độ mục tiêu."""
+    buf = io.BytesIO()
+    image_input.save(buf, format="PNG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    if not prompt or not prompt.strip():
+        return JSONResponse({
+            "labeled_image_base64": img_b64,
+            "coordinates": {},
+            **({"fast_mode": fast_mode} if fast_mode else {}),
+        })
+
+    if _gemini_client is None and async_anthropic_client is None:
+        return JSONResponse({
+            "error": "No vision AI key configured (GEMINI_VISION_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY).",
+            "coordinates": {},
+        })
+
+    direct_prompt = (
+        f'Find the UI element, icon, button, link, or tab on this screenshot that matches: "{prompt}".\n'
+        'Respond ONLY with valid JSON in this exact format:\n'
+        '{"found": true, "box_2d": [ymin, xmin, ymax, xmax], "label": "short name"}\n'
+        'where ymin, xmin, ymax, xmax are integers from 0 to 1000 representing the 2D bounding box on the image. '
+        'If not visible on the screen at all, return {"found": false}.'
+    )
+
+    raw_text = await _ask_gemini_for_target(image_input, direct_prompt)
+    m = re.search(r"\{[\s\S]*\}", raw_text or "")
+    if not m:
+        return JSONResponse({"error": f"Direct vision did not return JSON: {raw_text!r}", "coordinates": {}})
+    parsed = json.loads(m.group(0))
+    if not parsed.get("found") or not isinstance(parsed.get("box_2d"), list) or len(parsed["box_2d"]) != 4:
+        return JSONResponse({
+            "target_id": "-1",
+            "model_used": f"gemini_direct:{GEMINI_MODEL_NAME}",
+            "error": f"Could not find target on screen for: {prompt}",
+            "coordinates": {},
+        })
+
+    ymin, xmin, ymax, xmax = [float(v) for v in parsed["box_2d"]]
+    x_ratio = max(0.0, min(1.0, xmin / 1000.0))
+    y_ratio = max(0.0, min(1.0, ymin / 1000.0))
+    w_ratio = max(0.005, min(1.0 - x_ratio, (xmax - xmin) / 1000.0))
+    h_ratio = max(0.005, min(1.0 - y_ratio, (ymax - ymin) / 1000.0))
+    cx = x_ratio + w_ratio / 2.0
+    cy = y_ratio + h_ratio / 2.0
+    coords = {"0": [x_ratio, y_ratio, w_ratio, h_ratio]}
+    return JSONResponse({
+        "target_id": "0",
+        "target_center": [cx, cy],
+        "model_used": f"gemini_direct:{GEMINI_MODEL_NAME}",
+        "coordinates": coords,
+        **({"fast_mode": fast_mode} if fast_mode else {}),
+    })
+
+
 # ---------------------------------------------------------------------------
 # /parse — endpoint chính (PNG, full pipeline)
 # ---------------------------------------------------------------------------
 
 @app.post("/parse")
 async def parse_image(file: UploadFile = File(...), prompt: str = Form(None)):
-    """Nhận screenshot PNG, chạy OCR+YOLO, hỏi Claude/Gemini, trả về tọa độ click.
-
-    Mọi bước sync (OCR, YOLO, Gemini SDK) được bọc trong asyncio.to_thread() để
-    event loop không bị block, giữ /click và /type responsive trong khi /parse
-    đang chạy inference.
+    """Nhận screenshot PNG, chạy OCR+YOLO (hoặc Direct Vision nếu thiếu YOLO), hỏi Claude/Gemini, trả về tọa độ click.
     """
     try:
         image_bytes = await _read_upload_limited(file)
         image_input = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        if yolo_model is None:
+            return await _parse_direct_vlm(image_input, prompt, fast_mode=False)
 
         # OCR + YOLO: CPU-bound → chạy trong thread pool
         dino_labled_img, label_coordinates = await asyncio.to_thread(
@@ -561,6 +651,9 @@ async def parse_image_fast(
         image_bytes = await _read_upload_limited(file)
         # JPEG → PIL convert RGB giống như PNG, pipeline không đổi.
         image_input = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        if yolo_model is None:
+            return await _parse_direct_vlm(image_input, prompt, fast_mode=fast_mode)
 
         dino_labled_img, label_coordinates = await asyncio.to_thread(
             _run_ocr_and_yolo, image_input

@@ -13,19 +13,12 @@ import { annotateDangerousDeclarations } from "./dangerous-tools.mjs";
 export function buildClaudeTools() {
   const groups = buildClaudeToolsRaw();
   const main = groups.find((g) => Array.isArray(g.functionDeclarations));
-  // Một số tool (power_manager, media_control, desktop_manager) từng bị nối nhầm thành phần tử `tools[]`
-  // riêng với khoá `input_schema` (định dạng Claude) — không phải khai báo hợp lệ cho Gemini Live nên
-  // không gọi được. Gộp chúng vào functionDeclarations với `parameters`.
-  const flat = groups.filter((g) => !g.functionDeclarations && g.name && g.input_schema);
-  for (const t of flat) {
-    main.functionDeclarations.push({ name: t.name, description: t.description, parameters: t.input_schema });
-  }
   // Loại khai báo TRÙNG TÊN (giữ bản đầu): tên hàm trùng làm API từ chối cả bộ tool.
   const seen = new Set();
   main.functionDeclarations = main.functionDeclarations.filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)));
   // S-11: gắn quy trình xác nhận hai bước vào mô tả/tham số của các tool nguy hiểm.
   annotateDangerousDeclarations(main.functionDeclarations);
-  return groups.filter((g) => g === main || (!g.functionDeclarations && !(g.name && g.input_schema)));
+  return groups;
 }
 
 function buildClaudeToolsRaw() {
@@ -111,12 +104,12 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "open_url_or_app",
-          description: "Open a website in the default browser or open a local application on Windows. IMPORTANT: If the user asks to open a website like YouTube or Facebook, you MUST provide the full valid URL (e.g., 'https://www.youtube.com'). If they ask to open a system app, provide the executable name (e.g., 'calc.exe', 'notepad.exe'). DO NOT use this for complex GUI interaction, only for simply opening things.",
+          description: "Open ANY website in the default browser or open ANY local application installed on Windows (via Start Menu, Desktop, Registry, PATH, or Microsoft Store — e.g. 'Zalo', 'Telegram', 'Word', 'Excel', 'Visual Studio Code', 'Chrome', 'Calculator', 'Settings', 'Device Manager', 'Spotify', 'calc.exe', 'notepad.exe'). IMPORTANT: If the user asks to open a website like YouTube or Facebook, set is_url=true and provide the full valid URL (e.g. 'https://www.youtube.com'). If they ask to open a desktop/system app, set is_url=false and pass the app name or executable.",
           parameters: {
             type: "object",
             properties: {
-              target: { type: "string", description: "The full URL or executable name." },
-              is_url: { type: "boolean", description: "True if it's a website URL, false if it's a local app executable." }
+              target: { type: "string", description: "The full URL, app display name (e.g. 'Zalo', 'Word', 'Settings'), or executable name." },
+              is_url: { type: "boolean", description: "True if it's a website URL, false if it's a local application." }
             },
             required: ["target", "is_url"]
           }
@@ -888,47 +881,160 @@ function buildClaudeToolsRaw() {
           parameters: { type: "object", properties: {} },
         },
         {
+          name: "universal_app_launcher",
+          description: "Discover, search, list, or launch ANY installed application on Windows via tools/universal_app_launcher.py (scans Start Menu, Desktop, Registry App Paths, PATH, and UWP/Microsoft Store apps). Use command='launch' to open an app by its friendly name (e.g. 'Zalo', 'Telegram', 'Word', 'Excel', 'Photoshop', 'Settings'), command='search' to find matching apps, or command='list' to see installed applications.",
+          parameters: {
+            type: "object",
+            properties: {
+              command: { type: "string", description: "One of: 'launch' (default), 'search', 'list'." },
+              query: { type: "string", description: "App name, keyword, or executable to launch or search (e.g. 'Zalo', 'Visual Studio Code', 'Excel')." },
+              args: { type: "string", description: "Optional command-line arguments when launching." },
+              limit: { type: "integer", description: "Max results to return for search/list (default 20)." },
+            },
+            required: ["command"],
+          },
+        },
+        {
+          name: "run_terminal_command",
+          description: "Execute a PowerShell, CMD, or Python command/script directly on the user's computer via tools/terminal_executor.py and return stdout, stderr, and exit_code immediately. Use this for system automation, checking git/node/python/docker status, running scripts, inspecting system configurations, or performing any power-user task directly without waiting for Claude.",
+          parameters: {
+            type: "object",
+            properties: {
+              command: { type: "string", description: "The exact PowerShell, CMD, or Python code to execute." },
+              shell: { type: "string", description: "Shell environment: 'powershell' (default), 'cmd', or 'python'." },
+              cwd: { type: "string", description: "Optional working directory path." },
+              timeout: { type: "integer", description: "Timeout in seconds (default 30, max 300)." },
+            },
+            required: ["command"],
+          },
+        },
+        {
+          name: "filesystem_ops",
+          description: "Comprehensive file and directory operations via tools/filesystem_ops.py: 'list' directory contents, 'read' file text, 'write' (create/overwrite) file, 'append' to file, 'mkdir' (create folder), 'copy', 'move', 'rename', 'delete' file/folder, 'info' (size/dates/sha256), 'zip' (compress file/folder into .zip), 'unzip' (extract .zip archive). Supports folder shortcuts like 'desktop', 'downloads', 'documents', 'pictures', 'music', 'videos', 'temp'.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: list, read, write, append, mkdir, copy, move, rename, delete, info, zip, unzip." },
+              path: { type: "string", description: "Target file or folder path (or source path for copy/move/rename/zip/unzip)." },
+              dest: { type: "string", description: "Destination path (for copy, move, zip, unzip) or new filename (for rename)." },
+              content: { type: "string", description: "Text content to write or append (for action='write' or 'append')." },
+              limit: { type: "integer", description: "Max entries for 'list' (default 100) or max bytes for 'read' (default 100000)." },
+            },
+            required: ["action", "path"],
+          },
+        },
+        {
+          name: "window_manager",
+          description: "Advanced window management via tools/window_manager.py: 'list' all open visible windows with titles/PIDs/positions, 'focus' (bring a window to the front by app name or title), 'maximize' a window, 'snap' a window to a screen layout ('left', 'right', 'top', 'bottom', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center', 'fullscreen'), or 'topmost' (pin/unpin a window Always-On-Top).",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: list, focus, maximize, snap, topmost." },
+              target: { type: "string", description: "Window title substring, executable name (e.g. 'chrome', 'notepad'), or 'active' (default) for the currently focused window." },
+              position: { type: "string", description: "For action='snap': left, right, top, bottom, top-left, top-right, bottom-left, bottom-right, center, fullscreen." },
+              state: { type: "string", description: "For action='topmost': 'on' (pin always on top) or 'off' (unpin)." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "system_ops",
+          description: "Deep system, network, service, cleanup, and package manager operations via tools/system_ops.py: 'network' (IP addresses, interfaces, traffic stats), 'ports' (list listening TCP ports and owning processes), 'ping' (test connectivity to a host), 'services' (list/start/stop/restart Windows services), 'winget' (search/list/install/upgrade/uninstall apps via Windows Package Manager), 'clean_temp' (clean temporary files to free disk space), 'empty_recycle_bin' (empty Windows Recycle Bin), 'env_list' (inspect environment variables safely).",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: network, ports, ping, services, winget, clean_temp, empty_recycle_bin, env_list." },
+              sub_action: { type: "string", description: "For 'services': list, start, stop, restart. For 'winget': search, list, install, upgrade, uninstall." },
+              query: { type: "string", description: "Host to ping, service name/keyword, winget package name/ID, or env variable filter." },
+              port: { type: "integer", description: "Optional port number to filter when action='ports'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "browser_scroll",
+          description: "Scroll the currently open page in Iris's automated browser tab up, down, to the top, or to the bottom.",
+          parameters: {
+            type: "object",
+            properties: {
+              direction: { type: "string", description: "One of: 'down' (default), 'up', 'top', 'bottom'." },
+              amount: { type: "integer", description: "Pixels to scroll for up/down (default 600)." },
+            },
+          },
+        },
+        {
+          name: "browser_navigate",
+          description: "Navigate history in Iris's automated browser tab: go back, go forward, or reload the page.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "One of: 'back' (default), 'forward', 'reload'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "browser_press_key",
+          description: "Press a keyboard key or shortcut inside Iris's automated browser tab (e.g. 'Enter', 'Escape', 'Tab', 'PageDown', 'ArrowDown').",
+          parameters: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "Key name to press (e.g. 'Enter', 'Escape', 'Tab', 'Space')." },
+            },
+            required: ["key"],
+          },
+        },
+        {
+          name: "browser_get_links",
+          description: "Extract clickable links (text and URL) from the currently open page in Iris's automated browser tab, optionally filtered by keyword.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Optional keyword to filter links by text or URL." },
+              limit: { type: "integer", description: "Max links to return (default 25)." },
+            },
+          },
+        },
+        {
           name: "go_to_sleep",
           description:
             "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
           parameters: { type: "object", properties: {} },
         },
-      ],
-    },
-  
         {
           name: "power_manager",
           description: "Manages system power states via tools/power_manager.py. shutdown/restart start after a 5 s delay (cancelable with `shutdown /a`). sleep may become hibernate if Windows hibernation is enabled (the result says so).",
-          input_schema: {
+          parameters: {
             type: "object",
             properties: {
-              action: { type: "string", enum: ["sleep", "shutdown", "restart"], description: "The power action to perform." }
+              action: { type: "string", enum: ["sleep", "shutdown", "restart"], description: "The power action to perform." },
             },
-            required: ["action"]
-          }
+            required: ["action"],
+          },
         },
         {
           name: "media_control",
           description: "Controls media playback (play/pause, next, prev) via tools/media_control.py. Works universally for Spotify, YouTube, Apple Music, etc.",
-          input_schema: {
+          parameters: {
             type: "object",
             properties: {
-              action: { type: "string", enum: ["playpause", "next", "prev"], description: "The media action to perform." }
+              action: { type: "string", enum: ["playpause", "next", "prev"], description: "The media action to perform." },
             },
-            required: ["action"]
-          }
+            required: ["action"],
+          },
         },
         {
           name: "desktop_manager",
           description: "Manages virtual desktops and boss key via tools/desktop_manager.py. Use action='boss' when the user asks to hide screen / show desktop (in Vietnamese: 'ẩn màn hình', 'về desktop', 'hiện màn hình chính', 'boss key').",
-          input_schema: {
+          parameters: {
             type: "object",
             properties: {
-              action: { type: "string", enum: ["new", "close", "left", "right", "boss"], description: "The desktop action to perform. 'boss' minimizes all windows to reveal desktop ('ẩn màn hình')." }
+              action: { type: "string", enum: ["new", "close", "left", "right", "boss"], description: "The desktop action to perform. 'boss' minimizes all windows to reveal desktop ('ẩn màn hình')." },
             },
-            required: ["action"]
-          }
+            required: ["action"],
+          },
         },
-];
+      ],
+    },
+  ];
 }
-

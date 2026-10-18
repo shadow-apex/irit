@@ -9,8 +9,7 @@
  */
 import { saveToMemory, queryMemory } from "../memory-session.mjs";
 import { emitToRenderer, emitEvent } from "./events.mjs";
-import { mainWindow } from "./window-manager.mjs";
-import { enterHud } from "./window-manager.mjs";
+import { mainWindow, enterHud } from "./window-manager.mjs";
 import { checkClaudeStatus } from "./claude-cli.mjs";
 import { sleepDelayMs } from "./env-config.mjs";
 import { workspaceInfo } from "./session-store.mjs";
@@ -24,9 +23,8 @@ import {
   setAgentModelTool,
 } from "./claude-runner.mjs";
 import { getRobotsConfig, getSmartHomeCamerasConfig } from "./device-config.mjs";
-import { triggerRobotActionTimed } from "./robot-actions.mjs";
+import { triggerRobotActionTimed, triggerSmartHome } from "./robot-actions.mjs";
 import { createConfirmGate } from "./dangerous-tools.mjs";
-import { triggerSmartHome } from "./robot-actions.mjs";
 import {
   toggleScreenVision,
   toggleRobotVision,
@@ -55,6 +53,10 @@ import {
   browserExtractTextTool,
   browserScreenshotTool,
   browserCloseTool,
+  browserScrollTool,
+  browserNavigateTool,
+  browserPressKeyTool,
+  browserGetLinksTool,
   closeAppTool,
   hideAppTool,
   minimizeAppTool,
@@ -94,6 +96,13 @@ import {
   sysMonitorTool,
   fileExplorerTool,
   irisShowcaseTool,
+  universalAppLauncherTool,
+  runTerminalCommandTool,
+  filesystemOpsTool,
+  windowManagerTool,
+  systemOpsTool,
+  searchEverythingTool,
+  readNotificationsTool,
 } from "./local-tools.mjs";
 
 // S-11: xác nhận hai bước cho tool nguy hiểm (shutdown/kill/tắt wifi...). Hiện cảnh báo lên HUD/log.
@@ -171,7 +180,15 @@ export async function executeClaudeTool(name, args = {}) {
     case "browser_screenshot":
       return browserScreenshotTool(args);
     case "browser_close":
-      return browserCloseTool(args);
+      return browserCloseTool();
+    case "browser_scroll":
+      return browserScrollTool(args);
+    case "browser_navigate":
+      return browserNavigateTool(args);
+    case "browser_press_key":
+      return browserPressKeyTool(args);
+    case "browser_get_links":
+      return browserGetLinksTool(args);
     case "create_smarthome_rule":
       return createSmarthomeRuleTool(args);
     case "list_smarthome_rules":
@@ -225,73 +242,80 @@ export async function executeClaudeTool(name, args = {}) {
         instructions: `Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about ${Math.round(sleepDelayMs() / 1000)} seconds.`,
       };
     case "open_url_or_app":
-      return await openUrlOrApp(args);
+      return openUrlOrApp(args);
     case "close_app":
-      return await closeAppTool(args);
+      return closeAppTool(args);
     case "hide_app":
-      return await hideAppTool(args);
+      return hideAppTool(args);
     case "minimize_app":
-      return await minimizeAppTool(args);
+      return minimizeAppTool(args);
     case "restore_app":
-      return await restoreAppTool(args);
+      return restoreAppTool(args);
     case "write_note":
-      return await writeNoteTool(args);
+      return writeNoteTool(args);
     case "take_ai_screenshot":
-      return await takeAiScreenshotTool(args);
+      return takeAiScreenshotTool(args);
     case "read_clipboard":
-      return await readClipboardTool();
+      return readClipboardTool();
     case "write_clipboard":
-      return await writeClipboardTool(args);
+      return writeClipboardTool(args);
     case "move_window_magic":
-      return await moveWindowMagicTool(args);
+      return moveWindowMagicTool(args);
     case "send_desktop_notification":
-      return await sendDesktopNotificationTool(args);
+      return sendDesktopNotificationTool(args);
     case "system_control":
-      return await systemControlTool(args);
+      return systemControlTool(args);
     case "mouse_control":
-      return await mouseControlTool(args);
+      return mouseControlTool(args);
     case "active_window_info":
-      return await activeWindowInfoTool();
+      return activeWindowInfoTool();
     case "ocr_region":
-      return await ocrRegionTool(args);
+      return ocrRegionTool(args);
     case "color_picker":
-      return await colorPickerTool(args);
+      return colorPickerTool(args);
     case "idle_time":
-      return await idleTimeTool();
+      return idleTimeTool();
     case "clipboard_history":
-      return await clipboardHistoryTool(args);
+      return clipboardHistoryTool(args);
     case "quick_reminder":
-      return await quickReminderTool(args);
+      return quickReminderTool(args);
     case "wifi_manager":
-      return await wifiManagerTool(args);
+      return wifiManagerTool(args);
     case "multi_monitor_info":
-      return await multiMonitorInfoTool();
+      return multiMonitorInfoTool();
     case "process_manager":
-      return await processManagerTool(args);
+      return processManagerTool(args);
     case "focus_assist":
-      return await focusAssistTool();
+      return focusAssistTool();
     case "lock_screen":
-      return await lockScreenTool();
+      return lockScreenTool();
     case "view_image":
-      return await viewImageTool(args);
+      return viewImageTool(args);
     case "move_window_precise":
-      return await moveWindowPreciseTool(args);
-    
+      return moveWindowPreciseTool(args);
     case "get_system_stats":
       return sysMonitorTool();
     case "power_manager":
-      return powerManagerTool(args.action);
+      return powerManagerTool(args);
     case "media_control":
-      return mediaControlTool(args.action);
+      return mediaControlTool(args);
     case "desktop_manager":
-      return desktopManagerTool(args.action);
+      return desktopManagerTool(args);
     case "file_explorer":
-      return await fileExplorerTool(args);
+      return fileExplorerTool(args);
     case "iris_showcase":
-      return await irisShowcaseTool(args);
+      return irisShowcaseTool(args);
+    case "universal_app_launcher":
+      return universalAppLauncherTool(args);
+    case "run_terminal_command":
+      return runTerminalCommandTool(args);
+    case "filesystem_ops":
+      return filesystemOpsTool(args);
+    case "window_manager":
+      return windowManagerTool(args);
+    case "system_ops":
+      return systemOpsTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }
 }
-
-

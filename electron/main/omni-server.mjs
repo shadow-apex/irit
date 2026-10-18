@@ -9,13 +9,14 @@
  *
  * Module thuần node (không import electron).
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { unpackedRepoRoot, pythonBin } from "./paths.mjs";
 import { killTree } from "./process-utils.mjs";
 
-const generatedToken = crypto.randomBytes(24).toString("hex");
+let stableToken = null;
 let child = null;
 let startPromise = null;
 let logger = (level, msg) => console[level === "error" ? "error" : "log"](`[omni] ${msg}`);
@@ -25,7 +26,48 @@ export function setOmniLogger(fn) {
 }
 
 export function omniToken() {
-  return String(process.env.IRIS_OMNI_TOKEN || "").trim() || generatedToken;
+  const envTok = String(process.env.IRIS_OMNI_TOKEN || "").trim();
+  if (envTok.length >= 16) return envTok;
+  if (stableToken) return stableToken;
+
+  const tokenPath = path.join(unpackedRepoRoot(), ".omni_token");
+  try {
+    if (fs.existsSync(tokenPath)) {
+      const saved = fs.readFileSync(tokenPath, "utf8").trim();
+      if (saved.length >= 16) {
+        stableToken = saved;
+        return stableToken;
+      }
+    }
+  } catch {}
+
+  stableToken = crypto.randomBytes(24).toString("hex");
+  try {
+    fs.writeFileSync(tokenPath, stableToken, { encoding: "utf8", mode: 0o600 });
+  } catch {}
+  return stableToken;
+}
+
+export function killPortOccupant(port) {
+  const targetPort = String(port).trim();
+  if (process.platform === "win32") {
+    try {
+      const res = spawnSync("netstat", ["-ano", "-p", "tcp"], { windowsHide: true });
+      if (res.stdout) {
+        const text = res.stdout.toString();
+        for (const line of text.split(/\r?\n/)) {
+          if (line.includes(`:${targetPort}`) && line.includes("LISTENING")) {
+            const parts = line.trim().split(/\s+/);
+            const pid = parseInt(parts[parts.length - 1], 10);
+            if (pid && pid > 0 && pid !== process.pid) {
+              logger("info", `Dọn tiến trình cũ PID ${pid} đang chiếm cổng ${targetPort}`);
+              killTree(pid);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
 }
 
 /** Header xác thực cho mọi request tới OmniParser. */
@@ -110,6 +152,7 @@ export function ensureOmniServer({ timeoutMs = 90_000 } = {}) {
     try {
       const origin = url.origin;
       if (await healthy(origin)) return true;
+      killPortOccupant(url.port || "8000");
       if (!child) child = spawnServer(url);
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
@@ -127,8 +170,58 @@ export function ensureOmniServer({ timeoutMs = 90_000 } = {}) {
 }
 
 export function stopOmniServer() {
-  if (!child) return;
-  const c = child;
-  child = null;
-  killTree(c);
+  if (child) {
+    const c = child;
+    child = null;
+    killTree(c);
+  }
+  const url = baseUrl();
+  killPortOccupant(url.port || "8000");
+}
+
+export async function getOmniStatus() {
+  const enabled = String(process.env.OMNIPARSER_ENABLED ?? "true").toLowerCase() !== "false";
+  const url = baseUrl();
+  const origin = url.origin;
+  let running = false;
+  let mode = null;
+  try {
+    const res = await fetch(`${origin}/health`, {
+      headers: omniAuthHeaders(),
+      signal: AbortSignal.timeout(1800),
+    });
+    if (res.ok) {
+      running = true;
+      const body = await res.json().catch(() => ({}));
+      mode = body?.mode || (body?.yolo_ready ? "yolo_som" : "vlm_direct");
+    }
+  } catch {
+    running = false;
+  }
+  return {
+    enabled,
+    running,
+    starting: Boolean(startPromise && !running),
+    pid: child?.pid ?? null,
+    port: Number(url.port || 8000),
+    url: url.origin,
+    mode,
+  };
+}
+
+export async function toggleOmniServer(enable) {
+  const wantEnable = typeof enable === "boolean" ? enable : !(await getOmniStatus()).running;
+  if (!wantEnable) {
+    process.env.OMNIPARSER_ENABLED = "false";
+    stopOmniServer();
+    return { ...(await getOmniStatus()), ok: true };
+  }
+  process.env.OMNIPARSER_ENABLED = "true";
+  const ok = await ensureOmniServer({ timeoutMs: 25_000 });
+  const status = await getOmniStatus();
+  return {
+    ...status,
+    ok: ok && status.running,
+    ...(ok && status.running ? {} : { error: "Không khởi động được OmniParser server (kiểm tra Python / cổng 8000)." }),
+  };
 }

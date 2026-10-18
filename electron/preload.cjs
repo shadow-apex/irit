@@ -111,6 +111,8 @@ contextBridge.exposeInMainWorld("iris", {
   testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
   testClaude: () => ipcRenderer.invoke("config:test-claude"),
   previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
+  getOmniStatus: () => ipcRenderer.invoke("omni:status"),
+  toggleOmni: (enable) => ipcRenderer.invoke("omni:toggle", { enable }),
   // --- Ported from myiris ---
   getPromptStatus: () => ipcRenderer.invoke("prompt:status"),
   resolvePromptReview: (payload) => ipcRenderer.invoke("prompt:resolve-review", payload),

@@ -16,6 +16,13 @@ test("nhận diện lời gọi nguy hiểm / an toàn", () => {
   assert.equal(isDangerousCall("system_control", { wifi: "on" }), false);
   assert.equal(isDangerousCall("close_app", { target: "x.exe" }), false);
   assert.equal(isDangerousCall("media_control", { action: "next" }), false);
+  assert.equal(isDangerousCall("filesystem_ops", { action: "delete", path: "test.txt" }), true);
+  assert.equal(isDangerousCall("filesystem_ops", { action: "read", path: "test.txt" }), false);
+  assert.equal(isDangerousCall("system_ops", { action: "empty_recycle_bin" }), true);
+  assert.equal(isDangerousCall("system_ops", { action: "services", sub_action: "stop", query: "wuauserv" }), true);
+  assert.equal(isDangerousCall("system_ops", { action: "services", sub_action: "list" }), false);
+  assert.equal(isDangerousCall("system_ops", { action: "winget", sub_action: "uninstall", query: "git" }), true);
+  assert.equal(isDangerousCall("system_ops", { action: "network" }), false);
 });
 
 test("lần đầu: needs_confirmation (không thực thi); lần hai đúng token: cho phép, dùng một lần", () => {

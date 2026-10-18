@@ -1,6 +1,7 @@
 import { ChromaClient } from "chromadb";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,11 +20,35 @@ const CHROMA_HOST = "127.0.0.1";
 const CHROMA_PORT = 8000;
 const CHROMA_CLI = path.join(__dirname, "..", "node_modules", "chromadb", "dist", "cli.mjs");
 const CHROMA_DB_PATH = path.join(os.homedir(), ".iris", "chroma");
+const LOCAL_MEMORY_FILE = path.join(os.homedir(), ".iris", "memory.json");
+
+// `chromadb-js-bindings` trên npm hiện chỉ hỗ trợ win32-arm64, không hỗ trợ win32-x64.
+// Nếu gọi spawn(process.execPath, [CHROMA_CLI]) trên win32-x64 sẽ văng hộp thoại lỗi Electron.
+const CAN_SPAWN_NODE_CHROMA_CLI = !(process.platform === "win32" && process.arch === "x64");
 
 let client = null;
 let collection = null;
 let serverProc = null;
 let serverStartPromise = null;
+
+function readLocalMemories() {
+  try {
+    if (!fs.existsSync(LOCAL_MEMORY_FILE)) return [];
+    const data = JSON.parse(fs.readFileSync(LOCAL_MEMORY_FILE, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalMemories(items) {
+  try {
+    fs.mkdirSync(path.dirname(LOCAL_MEMORY_FILE), { recursive: true });
+    fs.writeFileSync(LOCAL_MEMORY_FILE, JSON.stringify(items, null, 2), "utf8");
+  } catch (e) {
+    console.error("[Memory] Failed to write local memory file:", e.message);
+  }
+}
 
 async function isServerUp() {
   try {
@@ -53,6 +78,9 @@ function waitForServerReady(timeoutMs = 15000) {
 // answering on 8000, reuse it instead of spawning a second one.
 async function ensureChromaServer() {
   if (await isServerUp()) return;
+  if (!CAN_SPAWN_NODE_CHROMA_CLI) {
+    throw new Error("Local JSON memory mode on Windows x64");
+  }
   if (serverStartPromise) return serverStartPromise;
 
   serverStartPromise = (async () => {
@@ -60,7 +88,11 @@ async function ensureChromaServer() {
     serverProc = spawn(
       process.execPath,
       [CHROMA_CLI, "run", "--path", CHROMA_DB_PATH, "--port", String(CHROMA_PORT)],
-      { stdio: ["ignore", "pipe", "pipe"] }
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        windowsHide: true,
+      }
     );
 
     serverProc.stdout?.on("data", (d) => console.log("[chroma]", d.toString().trim()));
@@ -103,13 +135,6 @@ async function initMemory() {
   return collection;
 }
 
-// BUGFIX-MEM-02: previously these threw straight out of initMemory(). That
-// exception is technically caught further up in handleToolCall (main.mjs),
-// so it didn't crash the whole app — but every single save/query attempt
-// came back as a raw stack-trace error to Gemini, over and over, with no
-// way to recover for the rest of the session. Now: on failure we drop the
-// half-initialized client/collection (so the NEXT call retries cleanly
-// instead of being stuck) and return a normal, friendly error response.
 export async function saveToMemory(text) {
   try {
     const col = await initMemory();
@@ -120,11 +145,14 @@ export async function saveToMemory(text) {
       metadatas: [{ timestamp: Date.now() }],
     });
     return { status: "success", id, message: "Saved to memory." };
-  } catch (e) {
-    console.error("[Memory] saveToMemory failed:", e.message);
+  } catch {
     client = null;
     collection = null;
-    return { status: "error", error: "Second Brain (ChromaDB) hiện không khả dụng, chưa lưu được." };
+    const id = crypto.randomUUID();
+    const items = readLocalMemories();
+    items.push({ id, text: String(text || ""), timestamp: Date.now() });
+    writeLocalMemories(items);
+    return { status: "success", id, message: "Saved to local memory." };
   }
 }
 
@@ -139,10 +167,22 @@ export async function queryMemory(query) {
       return { status: "success", memories: results.documents[0] };
     }
     return { status: "success", memories: [] };
-  } catch (e) {
-    console.error("[Memory] queryMemory failed:", e.message);
+  } catch {
     client = null;
     collection = null;
-    return { status: "error", error: "Second Brain (ChromaDB) hiện không khả dụng, chưa tra được trí nhớ." };
+    const items = readLocalMemories();
+    const q = String(query || "").toLowerCase().trim();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const scored = items
+      .map((item) => {
+        const doc = String(item.text || "");
+        const lower = doc.toLowerCase();
+        const score = tokens.reduce((acc, t) => acc + (lower.includes(t) ? 1 : 0), 0);
+        return { doc, score, ts: item.timestamp || 0 };
+      })
+      .sort((a, b) => b.score - a.score || b.ts - a.ts)
+      .slice(0, 3)
+      .map((x) => x.doc);
+    return { status: "success", memories: scored };
   }
 }

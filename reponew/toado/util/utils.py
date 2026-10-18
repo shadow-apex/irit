@@ -8,7 +8,10 @@ import json
 import requests
 # utility function
 import os
-from openai import AzureOpenAI
+try:
+    from openai import AzureOpenAI
+except Exception:
+    AzureOpenAI = None
 
 import json
 import sys

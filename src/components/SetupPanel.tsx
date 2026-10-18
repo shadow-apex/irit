@@ -28,6 +28,12 @@ type Draft = {
   IRIS_WAKE_WORD: string;
   IRIS_PROMPT_REVIEW_MODE: string;
   IRIS_CLAUDE_ENABLED: string;
+  IRIS_UNIVERSAL_APPS: string;
+  IRIS_TERMINAL_EXEC: string;
+  IRIS_FILESYSTEM_OPS: string;
+  IRIS_WINDOW_MANAGER: string;
+  IRIS_SYSTEM_OPS: string;
+  OMNIPARSER_ENABLED: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
@@ -54,6 +60,14 @@ const I18N = {
     visionKeyNote: "Separate key for image processing. Uses Live key if empty.",
     testGemini: "Test Gemini",
     keyWorks: "Key works",
+    omniStart: "Start OmniParser",
+    omniStop: "Stop OmniParser",
+    omniRunning: "Omni Running (Port 8000)",
+    omniStopped: "Omni Stopped",
+    omniStarting: "Starting Omni…",
+    omniTitle: "OmniParser Vision (Local AI)",
+    omniDesc: "Local screen UI parser (127.0.0.1:8000). Used for precise desktop icon and text clicking.",
+    omniEndpoint: "Local Endpoint:",
     claudeTitle: "Claude Brain",
     claudeHint: "Worker brain — PO/DEV pipeline runs on Claude Code CLI.",
     claudeBrain: "Claude Brain",
@@ -96,6 +110,18 @@ const I18N = {
     notesInstallMissing: "Install missing",
     notesMissing: "Missing: ",
     notesSkillsNote: "Installs wiki-* skills for note retrieval in ~/iris-second-brain.",
+    superPowersTitle: "Super Assistant Powers (Computer Authority)",
+    superPowersHint: "Toggle Iris's deep computer control capabilities. Destructive actions always require 2-step voice confirmation.",
+    universalApps: "Universal App Launcher",
+    universalAppsNote: "Find & launch any app on Windows (Start Menu, Registry, Store).",
+    terminalExec: "Direct Terminal / PowerShell / Python",
+    terminalExecNote: "Execute system commands & scripts directly.",
+    filesystemOps: "Full Filesystem & Zip Control",
+    filesystemOpsNote: "Read, write, copy, move, delete (with confirmation), and zip/unzip files.",
+    windowManager: "Advanced Window Manager",
+    windowManagerNote: "List open windows, snap layouts, focus, maximize, and pin Always-On-Top.",
+    systemOps: "System, Network, Services & Winget",
+    systemOpsNote: "Check ports/IP, manage services, install apps via winget, and clean temp/recycle bin.",
     advancedTitle: "Advanced & Testing",
     advancedHint: "Demo data lets you explore Iris without real Claude work.",
     hudTopNotch: "HUD Top Notch / Sci-Fi Border",
@@ -134,6 +160,14 @@ const I18N = {
     visionKeyNote: "Tách riêng quota xử lý ảnh. Nếu bỏ trống sẽ dùng chung khoá trên.",
     testGemini: "Kiểm tra Gemini",
     keyWorks: "Kết nối tốt",
+    omniStart: "Bật / Khởi động Omni",
+    omniStop: "Tắt Omni",
+    omniRunning: "Omni đang chạy (Cổng 8000)",
+    omniStopped: "Omni đang tắt",
+    omniStarting: "Đang khởi động Omni…",
+    omniTitle: "OmniParser Vision (AI Cục Bộ)",
+    omniDesc: "Bộ nhận diện giao diện màn hình local (127.0.0.1:8000). Dùng để click chính xác icon và văn bản trên PC.",
+    omniEndpoint: "Liên kết cục bộ:",
     claudeTitle: "Bộ Não Claude",
     claudeHint: "Não xử lý tác vụ — luồng PO/DEV chạy qua Claude Code CLI.",
     claudeBrain: "Chế Độ Claude Brain",
@@ -176,6 +210,18 @@ const I18N = {
     notesInstallMissing: "Cài đặt còn thiếu",
     notesMissing: "Thiếu: ",
     notesSkillsNote: "Cài kỹ năng wiki-* để lưu và tra cứu ghi chú (~/iris-second-brain).",
+    superPowersTitle: "Siêu Quyền Năng Máy Tính (Super Assistant Powers)",
+    superPowersHint: "Bật/tắt từng quyền điều khiển máy tính sâu của Iris. Các lệnh nguy hiểm (xoá file, tắt nguồn, dọn thùng rác) luôn có xác nhận giọng nói 2 bước.",
+    universalApps: "Mở Mọi Ứng Dụng (Universal App Launcher)",
+    universalAppsNote: "Tự động tìm và mở mọi phần mềm qua Start Menu, Registry, PATH & Store.",
+    terminalExec: "Thực Thi Lệnh Terminal / PowerShell / Python",
+    terminalExecNote: "Cho phép Iris chạy lệnh hệ thống và script trực tiếp.",
+    filesystemOps: "Quản Lý File, Thư Mục & Nén Zip Toàn Diện",
+    filesystemOpsNote: "Đọc, ghi, tạo, sao chép, di chuyển, đổi tên, nén/giải nén và xoá (có xác nhận).",
+    windowManager: "Điều Khiển & Sắp Xếp Cửa Sổ Nâng Cao",
+    windowManagerNote: "Liệt kê cửa sổ, chia màn hình (snap), chuyển cửa sổ, ghim nổi trên cùng.",
+    systemOps: "Quản Trị Hệ Thống, Mạng, Dịch Vụ & Winget",
+    systemOpsNote: "Kiểm tra IP/port, quản lý Services, cài phần mềm qua winget, dọn file tạm & thùng rác.",
     advancedTitle: "Dữ Liệu Thử Nghiệm",
     advancedHint: "Dữ liệu mẫu giúp khám phá Iris mà không tốn token thật.",
     hudTopNotch: "Viền Trên Màn Hình HUD (Top Notch)",
@@ -300,9 +346,16 @@ export default function SetupPanel({
     IRIS_WAKE_WORD: config.wakeWord ? "true" : "false",
     IRIS_PROMPT_REVIEW_MODE: config.promptReviewMode ? "true" : "false",
     IRIS_CLAUDE_ENABLED: config.claudeEnabled ? "true" : "false",
+    IRIS_UNIVERSAL_APPS: config.universalApps !== false ? "true" : "false",
+    IRIS_TERMINAL_EXEC: config.terminalExec !== false ? "true" : "false",
+    IRIS_FILESYSTEM_OPS: config.filesystemOps !== false ? "true" : "false",
+    IRIS_WINDOW_MANAGER: config.windowManager !== false ? "true" : "false",
+    IRIS_SYSTEM_OPS: config.systemOps !== false ? "true" : "false",
+    OMNIPARSER_ENABLED: config.omniParserEnabled !== false ? "true" : "false",
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
+  const [omni, setOmni] = useState<TestState & { running?: boolean }>({ status: "idle", running: false });
   const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
@@ -356,8 +409,46 @@ export default function SetupPanel({
 
   useEffect(() => {
     checkClaude();
+    refreshOmniStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function refreshOmniStatus() {
+    if (typeof window.iris?.getOmniStatus !== "function") return;
+    try {
+      const s = await window.iris.getOmniStatus();
+      if (s.running) {
+        setOmni({ status: "ok", running: true, message: t.omniRunning });
+      } else if (s.starting) {
+        setOmni({ status: "testing", running: false, message: t.omniStarting });
+      } else {
+        setOmni({ status: "idle", running: false, message: t.omniStopped });
+      }
+    } catch {}
+  }
+
+  async function handleToggleOmni() {
+    if (typeof window.iris?.toggleOmni !== "function") return;
+    const wantStart = !omni.running;
+    setOmni({ status: "testing", running: omni.running, message: t.omniStarting });
+    try {
+      if (draft.GEMINI_VISION_API_KEY.trim() || draft.GEMINI_API_KEY.trim()) {
+        const updated = await window.iris.saveConfig({ ...draft, OMNIPARSER_ENABLED: wantStart ? "true" : "false" });
+        onSaved(updated);
+      }
+      const res = await window.iris.toggleOmni(wantStart);
+      set("OMNIPARSER_ENABLED", res.enabled ? "true" : "false");
+      if (res.running) {
+        setOmni({ status: "ok", running: true, message: t.omniRunning });
+      } else if (!wantStart) {
+        setOmni({ status: "idle", running: false, message: t.omniStopped });
+      } else {
+        setOmni({ status: "error", running: false, message: res.error || t.omniStopped });
+      }
+    } catch (e: any) {
+      setOmni({ status: "error", running: false, message: e?.message || String(e) });
+    }
+  }
 
   async function testGemini() {
     setGemini({ status: "testing" });
@@ -461,12 +552,66 @@ export default function SetupPanel({
           <small className="setup-note">{t.visionKeyNote}</small>
         </label>
       </div>
-      <div className="setup-actions compact">
+      <div className="setup-actions compact" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <button className="setup-btn" onClick={testGemini} disabled={!keyReady || gemini.status === "testing"}>
           {gemini.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
           {t.testGemini}
         </button>
         <TestBadge state={gemini} okLabel={t.keyWorks} />
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--setup-border, rgba(148, 196, 255, 0.12))",
+          paddingTop: 12,
+          marginTop: 6,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-bright, #fff)" }}>
+              {t.omniTitle}
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text-muted, rgba(255,255,255,0.65))", marginTop: 2 }}>
+              {t.omniDesc}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="setup-btn"
+            onClick={handleToggleOmni}
+            disabled={omni.status === "testing"}
+          >
+            {omni.status === "testing" ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
+            {omni.running ? t.omniStop : t.omniStart}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.75rem", flexWrap: "wrap" }}>
+          <span style={{ color: "var(--text-dim, rgba(255,255,255,0.5))" }}>{t.omniEndpoint}</span>
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 4,
+              fontFamily: "monospace",
+              fontSize: "0.75rem",
+              background: omni.running ? "rgba(16, 185, 129, 0.15)" : "rgba(255, 255, 255, 0.06)",
+              color: omni.running ? "#34d399" : "var(--text-muted, rgba(255,255,255,0.6))",
+              border: `1px solid ${omni.running ? "rgba(16, 185, 129, 0.3)" : "rgba(255, 255, 255, 0.1)"}`,
+            }}
+          >
+            http://127.0.0.1:8000/parse
+          </span>
+          <TestBadge state={omni} okLabel={t.omniRunning} />
+          {!omni.running && omni.status !== "testing" && omni.status !== "error" && (
+            <span style={{ color: "var(--text-dim, rgba(255,255,255,0.5))", fontSize: "0.75rem" }}>
+              ({t.omniStopped})
+            </span>
+          )}
+        </div>
       </div>
     </Section>
   );
@@ -628,6 +773,82 @@ export default function SetupPanel({
     </Section>
   );
 
+  const superPowersSection = (
+    <Section title={t.superPowersTitle} hint={t.superPowersHint} compact>
+      <div className="setup-grid-2">
+        <label className="setup-field compact">
+          <span>{t.universalApps}</span>
+          <ThemedSelect
+            ariaLabel={t.universalApps}
+            value={draft.IRIS_UNIVERSAL_APPS}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_UNIVERSAL_APPS", value)}
+          />
+          <small className="setup-note">{t.universalAppsNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.terminalExec}</span>
+          <ThemedSelect
+            ariaLabel={t.terminalExec}
+            value={draft.IRIS_TERMINAL_EXEC}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_TERMINAL_EXEC", value)}
+          />
+          <small className="setup-note">{t.terminalExecNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
+        <label className="setup-field compact">
+          <span>{t.filesystemOps}</span>
+          <ThemedSelect
+            ariaLabel={t.filesystemOps}
+            value={draft.IRIS_FILESYSTEM_OPS}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_FILESYSTEM_OPS", value)}
+          />
+          <small className="setup-note">{t.filesystemOpsNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.windowManager}</span>
+          <ThemedSelect
+            ariaLabel={t.windowManager}
+            value={draft.IRIS_WINDOW_MANAGER}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_WINDOW_MANAGER", value)}
+          />
+          <small className="setup-note">{t.windowManagerNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
+        <label className="setup-field compact">
+          <span>{t.systemOps}</span>
+          <ThemedSelect
+            ariaLabel={t.systemOps}
+            value={draft.IRIS_SYSTEM_OPS}
+            options={[
+              { value: "true", label: t.on },
+              { value: "false", label: t.off },
+            ]}
+            onChange={(value) => set("IRIS_SYSTEM_OPS", value)}
+          />
+          <small className="setup-note">{t.systemOpsNote}</small>
+        </label>
+      </div>
+    </Section>
+  );
+
   const advancedSection = (
     <Section title={t.advancedTitle} hint={t.advancedHint} compact>
       <div className="setup-grid-2">
@@ -758,6 +979,7 @@ export default function SetupPanel({
             {activeTab === "voice" && youSection}
             {activeTab === "system" && (
               <>
+                {superPowersSection}
                 {permissionsSection}
                 {advancedSection}
               </>

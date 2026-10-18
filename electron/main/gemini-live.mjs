@@ -9,7 +9,7 @@
 import { buildVideoInput, stripDataUrl } from "./live-input.mjs";
 import { GoogleGenAI } from "@google/genai";
 import { emitToRenderer, emitEvent } from "./events.mjs";
-import { mainWindow } from "./window-manager.mjs";
+import { mainWindow, updateTrayMenu } from "./window-manager.mjs";
 import { buildClaudeTools } from "./claude-tools-catalog.mjs";
 import { executeClaudeTool } from "./tool-dispatcher.mjs";
 import { canvasCapability, secondBrainCapability } from "./capabilities.mjs";
@@ -17,13 +17,9 @@ import { startCompanionServer } from "../companion-server.mjs";
 import { pendingClaudeAnnouncements } from "./notify-iris.mjs";
 import { userDisplayName, workspaceContextLine } from "./session-store.mjs";
 import { MODEL_CHOICES } from "./agent-roster.mjs";
-import { checkClaudeStatus } from "./claude-cli.mjs";
-import { updateTrayMenu } from "./window-manager.mjs";
 import { submitClaudeTask, sendWebMessage } from "./claude-runner.mjs";
 import { getRobotsConfig } from "./device-config.mjs";
-import {
-  stopAllVisionLoops,
-} from "./vision.mjs";
+import { stopAllVisionLoops } from "./vision.mjs";
 
 export let liveSession = null;
 
@@ -52,20 +48,25 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+export function getLiveGeminiStatus() {
+  if (liveSession) return "connected";
+  if (reconnectTimer) return "connecting";
+  return liveStatus?.running ? "connecting" : "offline";
+}
+
 let hasGreetedStartup = false;
 
 export const GreetGate = {
   done: false,
   timer: null,
   arm() {
-    if (hasGreetedStartup) return;
     this.done = false;
     if (this.timer) clearTimeout(this.timer);
     // Chào một câu ngắn gọn, ấm áp sau 1.2s khi vừa kết nối phiên lúc khởi động
     this.timer = setTimeout(() => this.fire(), 1200);
   },
   fire() {
-    if (this.done || hasGreetedStartup) return;
+    if (this.done) return;
     this.done = true;
     hasGreetedStartup = true;
     if (this.timer) clearTimeout(this.timer);
@@ -74,7 +75,7 @@ export const GreetGate = {
   },
 };
 
-export function flushTranscripts() {
+function flushTranscripts() {
   if (userTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
   }
@@ -91,18 +92,17 @@ export function flushTranscripts() {
  * Ngắn gọn, súc tích, chỉ rõ mục đích để Gemini gọi trực tiếp không qua Claude.
  */
 const LOCAL_TOOL_RULES = [
-  "LOCAL OS/HARDWARE TOOLS (/tools): ALWAYS call these tools directly for any desktop, window, system, or hardware request — NEVER delegate to Claude via submit_claude_task.",
-  "1. APPS & WINDOWS: open_url_or_app{target, is_url}; close_app{target}; minimize_app{target} (hide app to taskbar); hide_app{target} (fully invisible); restore_app{target}; move_window_precise{name, x, y, width?, height?} (resize/shrink/move window); move_window_magic{mode, x, y}; desktop_manager{action: new|close|left|right|boss} ('boss' = Win+D hide all windows / show desktop); process_manager{action: list|kill, name?}; write_note{text, is_new?}.",
+  "LOCAL OS/HARDWARE TOOLS (/tools): ALWAYS call these tools directly for any desktop, window, system, terminal, filesystem, or hardware request — NEVER delegate to Claude via submit_claude_task.",
+  "1. APPS & WINDOWS: open_url_or_app{target, is_url} or universal_app_launcher{action: launch|search|list, query} (launches ANY installed Windows app, Start Menu shortcut, Registry App Path, or UWP/Store app); close_app{target}; minimize_app{target} (hide app to taskbar); hide_app{target} (fully invisible); restore_app{target}; window_manager{action: list|focus|maximize|minimize|restore|close|snap|pin, target?, position?, pinned?} (manage windows: list all open windows, bring to front/focus, maximize, snap left/right/top/bottom/top-left/top-right/bottom-left/bottom-right/center, or pin Always-On-Top); move_window_precise{name, x, y, width?, height?} (resize/shrink/move window); move_window_magic{mode, x, y}; desktop_manager{action: new|close|left|right|boss} ('boss' = Win+D hide all windows / show desktop); process_manager{action: list|kill, name?}; write_note{text, is_new?}.",
   "2. MOUSE, SCREEN & VISION: mouse_control{action: move|click|drag|scroll|position|release, x?, y?, button?}; take_ai_screenshot{save?} (inspect PC screen); take_camera_snapshot{target?, save?} (capture photo of a specific target: 'screen'/'desktop' for PC screen, 'companion'/'alt c'/'phone' for phone camera, 'robot 1'/'esp32_robot_1' for robot, or smart home camera name); toggle_screen_vision (continuous PC screen stream); toggle_camera_stream_vision (continuous phone camera stream); toggle_robot_vision{robot_id} (continuous robot stream); toggle_smarthome_vision{camera_id} (continuous smart home stream); open_companion_live_view (open large live video window for user to watch phone camera); ocr_region{left?, top?, width?, height?}; color_picker{x?, y?}; active_window_info; view_image{action: latest|prev|next|close}; multi_monitor_info.",
-  "3. SYSTEM & HARDWARE: system_control{volume: up|down|mute|unmute, volume_level: 0-100, brightness: 0-100, wifi: on|off, bluetooth: on|off, camera: on|off}; wifi_manager{action: list|profiles|status|connect|disconnect, ssid?}; power_manager{action: sleep|shutdown|restart}; media_control{action: playpause|next|prev}; get_system_stats (CPU/RAM/disk/battery); idle_time; focus_assist; lock_screen.",
-  "4. CLIPBOARD, FILES & ALERTS: file_explorer{path, action?, select?} (open folder or file in File Explorer); read_clipboard; write_clipboard{text} (ONLY when user explicitly asks to copy/sao chép); clipboard_history{action: list|use|clear|start|stop}; search_local_files{query, max?} (fast search via Everything); read_system_notifications{limit?, reveal_otp?}; send_desktop_notification{title, message}; quick_reminder{action: schedule|list|cancel, minutes?, title?, message?}.",
-  "5. VIETNAMESE COMMANDS & AMBIGUITY DISAMBIGUATION: Xem quy tắc chi tiết ở mục IMPORTANT VIETNAMESE UI MAPPING bên dưới cho 'thu nhỏ'/'ẩn'/'phóng to' (Iris vs app ngoài). 'đóng ứng dụng' / 'tắt app' -> close_app; mở thư mục/file/ổ đĩa/Downloads/Desktop trong File Explorer -> file_explorer; âm lượng/độ sáng -> system_control; nghe/dừng nhạc -> media_control; tình trạng pin/RAM/CPU -> get_system_stats; tìm file -> search_local_files; đọc clipboard -> read_clipboard; sao chép vào clipboard (khi có từ 'copy' / 'sao chép') -> write_clipboard; tắt máy/ngủ -> power_manager; gõ chữ / viết chữ / ghi chữ / nhập chữ / gõ phím / type (vd 'ghi hello world', 'gõ hello world', 'viết hello world') -> ALWAYS invoke computer_use_type{text: '...'} to type directly onto the screen (NEVER call write_clipboard); ghi chú / note / lưu ghi chú -> write_note{text, is_new?} (mở Notepad lưu lại); XÓA DÒNG / SỬA DÒNG / XÓA CHỮ: 'xóa dòng này' / 'xóa dòng hiện tại' -> computer_use_type{action: 'delete_line'}; 'xóa dòng trên' / 'lên 1 dòng xóa' -> computer_use_type{line_offset: -1, action: 'delete_line'}; 'xóa dòng dưới' -> computer_use_type{line_offset: 1, action: 'delete_line'}; 'xóa dòng N' / 'xóa dòng thứ N' -> computer_use_type{line_number: N, action: 'delete_line'}; 'sửa dòng N thành ...' / 'viết lại dòng N thành ...' -> computer_use_type{line_number: N, action: 'clear_line', text: '...'}; 'xóa N từ' -> computer_use_type{action: 'delete_word', repeat: N}; 'xóa N chữ' -> computer_use_type{key: 'backspace', repeat: N}; TUYỆT ĐỐI KHÔNG DÙNG ctrl+a xóa sạch tài liệu khi người dùng chỉ yêu cầu sửa hoặc xóa một dòng hay vài từ; DI CHUYỂN CỬA SỔ / DI CHUYỂN TAB: 'di chuyển cửa sổ' / 'di chuyển tab' (đến vị trí toạ độ x, y) -> move_window_precise{name: 'active', x, y} hoặc move_window_magic{mode: 'active', x, y}. Di chuyển TRỰC TIẾP VÀ NGAY LẬP TỨC cửa sổ đang mở trên cùng, TUYỆT ĐỐI KHÔNG bắt người dùng bấm chọn vào cửa sổ đó và không đếm ngược; CHUYỂN ĐỔI TAB TRÌNH DUYỆT: 'chuyển tab' / 'sang tab tiếp theo' / 'đổi tab' -> computer_use_type{key: 'ctrl+tab'}; 'lùi tab' -> computer_use_type{key: 'ctrl+shift+tab'}; 'đóng tab' -> computer_use_type{key: 'ctrl+w'}; 'mở tab mới' -> computer_use_type{key: 'ctrl+t'}; TRÌNH DIỄN / GIỚI THIỆU CHỨC NĂNG: 'giới thiệu những thứ bạn có thể làm' / 'demo tính năng' / 'trình diễn khả năng' / 'bạn làm được những gì' / 'showcase' -> ALWAYS invoke iris_showcase{}. QUY TẮC BẮT BUỘC: Khi gọi iris_showcase, Iris TUYỆT ĐỐI KHÔNG tự nói trước hoặc trong khi gọi tool (vì công cụ iris_showcase sẽ trực tiếp thuyết minh qua từng bước, nói trước sẽ gây đè giọng và lặp tiếng). TUYỆT ĐỐI KHÔNG gọi lại iris_showcase khi nó đang chạy. Sau khi tool hoàn tất, chỉ cần nói 1 câu ngắn: 'Tôi đã hoàn thành toàn bộ màn trình diễn cho bạn xem rồi nhé!'.",
-  "6. VISION ROUTING & ANTI-HALLUCINATION: NEVER hallucinate or guess visual contents before receiving an image frame. If asked 'Bạn có thấy không?' or 'Đang có gì?' without an active feed, immediately execute the vision tool: (a) 'xem/nhìn/chụp màn hình' -> take_ai_screenshot (or toggle_screen_vision); (b) 'xem/nhìn/chụp camera điện thoại/Alt+C/companion' -> take_camera_snapshot{target: 'companion'} (or toggle_camera_stream_vision, open_companion_live_view); (c) 'xem/nhìn/chụp camera robot (robot 1, robot 2...)' -> take_camera_snapshot{target: 'robot 1'} (or toggle_robot_vision{robot_id: '...'}); (d) 'xem/nhìn/chụp camera nhà/phòng khách' -> take_camera_snapshot{target: '...'} (or toggle_smarthome_vision{camera_id: '...'}). If a tool reports an error (e.g. camera offline), truthfully report the error — DO NOT invent visual details.",
-  "7. CONFIRMATION: Destructive actions (power_manager, process_manager kill, system_control for wifi off/bluetooth/camera, lock_screen) return needs_confirmation + confirm_token. close_app executes IMMEDIATELY without confirmation. Announce to user, and upon verbal consent ('yes'/'đồng ý'), re-call the tool with the same parameters + confirm_token.",
-  "8. RESPONSE: Execute immediately, speak 1 short, natural sentence after completion."
+  "3. SYSTEM, NETWORK, SERVICES & PACKAGES: system_control{volume: up|down|mute|unmute, volume_level: 0-100, brightness: 0-100, wifi: on|off, bluetooth: on|off, camera: on|off}; wifi_manager{action: list|profiles|status|connect|disconnect, ssid?}; power_manager{action: sleep|shutdown|restart}; media_control{action: playpause|next|prev}; get_system_stats (CPU/RAM/disk/battery); system_ops{action: network_info|ports|ping|services|winget|clean_temp|empty_recycle_bin|env, target?, sub_action?} (deep system diagnostics, active TCP ports, ping host, Windows services list/start/stop/restart, winget search/list/install/upgrade/uninstall, clean temp files, empty recycle bin); run_terminal_command{command, shell?: powershell|cmd|python, cwd?, timeout?} (execute any PowerShell, CMD, or Python one-liner directly on the PC); idle_time; focus_assist; lock_screen.",
+  "4. CLIPBOARD, FILESYSTEM & ALERTS: filesystem_ops{action: list|read|write|append|mkdir|copy|move|rename|delete|info|zip|unzip, path, dest?, content?, pattern?} (complete file & folder management: list directory, read/write/append text files, create folder, copy/move/rename/delete files or folders, zip/unzip archives); file_explorer{path, action?, select?} (open folder or file visually in Windows File Explorer); read_clipboard; write_clipboard{text} (ONLY when user explicitly asks to copy/sao chép); clipboard_history{action: list|use|clear|start|stop}; search_local_files{query, max?} (fast search via Everything); read_system_notifications{limit?, reveal_otp?}; send_desktop_notification{title, message}; quick_reminder{action: schedule|list|cancel, minutes?, title?, message?}.",
+  "5. VIETNAMESE COMMANDS & AMBIGUITY DISAMBIGUATION: Xem quy tắc chi tiết ở mục IMPORTANT VIETNAMESE UI MAPPING bên dưới cho 'thu nhỏ'/'ẩn'/'phóng to' (Iris vs app ngoài). 'mở ứng dụng bất kỳ' (Zalo, Photoshop, Premiere, Word, Excel, CapCut, OBS, Steam...) -> open_url_or_app hoặc universal_app_launcher; 'chia đôi màn hình / ghim cửa sổ lên trên cùng / đưa cửa sổ sang trái-phải / danh sách cửa sổ đang mở' -> window_manager; 'tạo file / đọc file / sửa file / tạo thư mục / sao chép file / di chuyển file / đổi tên file / xóa file / nén zip / giải nén' -> filesystem_ops; 'chạy lệnh PowerShell / CMD / kiểm tra git / chạy lệnh terminal' -> run_terminal_command; 'kiểm tra mạng / IP / cổng port đang mở / ping / dịch vụ Windows services / cài phần mềm bằng winget / dọn rác temp / dọn thùng rác' -> system_ops; 'đóng ứng dụng' / 'tắt app' -> close_app; mở thư mục/file/ổ đĩa/Downloads/Desktop trong File Explorer -> file_explorer; âm lượng/độ sáng -> system_control; nghe/dừng nhạc -> media_control; tình trạng pin/RAM/CPU -> get_system_stats; tìm file -> search_local_files; đọc clipboard -> read_clipboard; sao chép vào clipboard (khi có từ 'copy' / 'sao chép') -> write_clipboard; tắt máy/ngủ -> power_manager; gõ chữ / viết chữ / ghi chữ / nhập chữ / gõ phím / type (vd 'ghi hello world', 'gõ hello world', 'viết hello world') -> ALWAYS invoke computer_use_type{text: '...'} to type directly onto the screen (NEVER call write_clipboard); ghi chú / note / lưu ghi chú -> write_note{text, is_new?} (mở Notepad lưu lại); XÓA DÒNG / SỬA DÒNG / XÓA CHỮ: 'xóa dòng này' / 'xóa dòng hiện tại' -> computer_use_type{action: 'delete_line'}; 'xóa dòng trên' / 'lên 1 dòng xóa' -> computer_use_type{line_offset: -1, action: 'delete_line'}; 'xóa dòng dưới' -> computer_use_type{line_offset: 1, action: 'delete_line'}; 'xóa dòng N' / 'xóa dòng thứ N' -> computer_use_type{line_number: N, action: 'delete_line'}; 'sửa dòng N thành ...' / 'viết lại dòng N thành ...' -> computer_use_type{line_number: N, action: 'clear_line', text: '...'}; 'xóa N từ' -> computer_use_type{action: 'delete_word', repeat: N}; 'xóa N chữ' -> computer_use_type{key: 'backspace', repeat: N}; TUYỆT ĐỐI KHÔNG DÙNG ctrl+a xóa sạch tài liệu khi người dùng chỉ yêu cầu sửa hoặc xóa một dòng hay vài từ; DI CHUYỂN CỬA SỔ / DI CHUYỂN TAB: 'di chuyển cửa sổ' / 'di chuyển tab' (đến vị trí toạ độ x, y) -> move_window_precise{name: 'active', x, y} hoặc move_window_magic{mode: 'active', x, y}. Di chuyển TRỰC TIẾP VÀ NGAY LẬP TỨC cửa sổ đang mở trên cùng, TUYỆT ĐỐI KHÔNG bắt người dùng bấm chọn vào cửa sổ đó và không đếm ngược; CHUYỂN ĐỔI TAB TRÌNH DUYỆT: 'chuyển tab' / 'sang tab tiếp theo' / 'đổi tab' -> computer_use_type{key: 'ctrl+tab'}; 'lùi tab' -> computer_use_type{key: 'ctrl+shift+tab'}; 'đóng tab' -> computer_use_type{key: 'ctrl+w'}; 'mở tab mới' -> computer_use_type{key: 'ctrl+t'}; TRÌNH DIỄN / GIỚI THIỆU CHỨC NĂNG: 'giới thiệu những thứ bạn có thể làm' / 'demo tính năng' / 'trình diễn khả năng' / 'bạn làm được những gì' / 'showcase' -> ALWAYS invoke iris_showcase{}. QUY TẮC BẮT BUỘC: Khi gọi iris_showcase, Iris TUYỆT ĐỐI KHÔNG tự nói trước hoặc trong khi gọi tool (vì công cụ iris_showcase sẽ trực tiếp thuyết minh qua từng bước, nói trước sẽ gây đè giọng và lặp tiếng). TUYỆT ĐỐI KHÔNG gọi lại iris_showcase khi nó đang chạy. Sau khi tool hoàn tất, chỉ cần nói 1 câu ngắn: 'Tôi đã hoàn thành toàn bộ màn trình diễn cho bạn xem rồi nhé!'.",
+  "6. VISION ROUTING & ANTI-HALLUCINATION: NEVER hallucinate or guess visual contents before receiving an image frame. If asked 'Bạn có thấy không?', 'Nhìn vào màn hình', or 'Đang có gì?' without an active feed, immediately execute the vision tool: (a) 'xem/nhìn/chụp màn hình' -> take_ai_screenshot (or toggle_screen_vision if asked to turn on vision); (b) 'xem/nhìn/chụp camera điện thoại/Alt+C/companion' -> take_camera_snapshot{target: 'companion'} (or toggle_camera_stream_vision, open_companion_live_view); (c) 'xem/nhìn/chụp camera robot (robot 1, robot 2...)' -> take_camera_snapshot{target: 'robot 1'} (or toggle_robot_vision{robot_id: '...'}); (d) 'xem/nhìn/chụp camera nhà/phòng khách' -> take_camera_snapshot{target: '...'} (or toggle_smarthome_vision{camera_id: '...'}). CRITICAL VISION RESPONSE STYLE: When describing the screen or camera, answer CONCISELY and ACCURATELY in 1–2 short sentences focusing ONLY on the main window/activity actually visible in the frame just received. NEVER ramble, NEVER list every desktop shortcut icon, and NEVER repeat or guess from earlier conversation history or Notepad showcase text. If a tool reports an error (e.g. camera offline), truthfully report the error — DO NOT invent visual details.",
+  "8. TOOL EXECUTION INTEGRITY & ANTI-HALLUCINATION (TUYỆT ĐỐI CHỐNG NÓI TRƯỚC / BÁO HOÀN THÀNH KHỐNG): Khi người dùng yêu cầu chạy lệnh terminal, mở app, tạo/đọc file, kiểm tra mạng hay chỉnh cửa sổ, PHẢI gọi tool tương ứng TRƯỚC TIÊN. TUYỆT ĐỐI KHÔNG nói 'Đã xong', 'Đã hoàn thành', 'Đã mở', 'Đã chạy' trước hoặc trong khi phát toolCall. TUYỆT ĐỐI KHÔNG tự bịa ra kết quả khi chưa gọi tool. Chỉ nói kết quả SAU KHI nhận được toolResponse từ hệ thống: nếu thành công thì tóm tắt kết quả thực tế; nếu lỗi hoặc thiếu quyền thì báo rõ lỗi. Với submit_claude_task hoặc start_computer_use_task trả về status 'started', chỉ nói 'Tôi đang bắt đầu thực hiện trong nền...', TUYỆT ĐỐI KHÔNG nói 'Đã hoàn thành'."
 ].join("\n");
 
-export function buildLiveConfig(resumeHandle) {
+function buildLiveConfig(resumeHandle) {
   const isClaudeEnabled = process.env.IRIS_CLAUDE_ENABLED !== "false";
   return {
     responseModalities: ["AUDIO"],
@@ -138,10 +138,10 @@ export function buildLiveConfig(resumeHandle) {
             "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (QUY TẮC IM LẶNG & TRỢ LÝ CHUYÊN NGHIỆP):",
             "- DO NOT INTERRUPT THIRD-PARTY CONVERSATIONS: When the user is talking with friends, colleagues, family, in a meeting, or on a phone call in the room, STAY COMPLETELY SILENT. NEVER comment, interrupt, chime in, or reply to their conversation. ONLY respond when the user speaks DIRECTLY to you (e.g. addressing you by name 'Iris', 'này Iris', or issuing a clear instruction directed to the assistant). When in doubt whether the user is talking to someone else or to you: ALWAYS DEFAULT TO SILENCE.",
             "- RESPECT SILENCE & NEVER ASK UNSOLICITED QUESTIONS: When the user is silent, working, thinking, reading, typing, or when there is ambient background noise: REMAIN ABSOLUTELY SILENT. NEVER speak unprompted asking 'Are you there?', 'Do you need help?', 'Bạn có đó không?', 'Bạn đang nghĩ gì thế?'. You are an executive, discreet assistant: always 100% attentive and ready when called, but NEVER noisy or intrusive.",
-            "Claude is your worker brain for terminal, files, web, coding, research, deals and background automation. You also have built-in Google Search — use it directly for quick facts and simple lookups that don't need Claude.",
+            "Claude is your worker brain for multi-step coding, deep research, deals and background automation. You also have built-in Google Search — use it directly for quick facts and simple lookups that don't need Claude.",
             `CRITICAL: be decisive, never ask clarifying questions for actionable work. Any request to research, code, check, build, or find a deal -> immediately submit_claude_task. Only exception: a NEW project/feature goes through PO intake (see PRODUCT OWNER CONTROL below).`,
             "Routing: quick fact -> Google Search. Multi-step/background work -> Claude. Anything covered by a lane below -> call that lane directly, never through Claude, and never make the user wait behind a busy Claude session for it.",
-            "LANES (use directly instead of submit_claude_task when they fit): (1) BROWSER — browser_open/browser_click/browser_type/browser_extract_text/browser_screenshot for on-page actions; fall back to start_computer_use_task only for whole-screen or non-browser work. (2) COMPUTER USE — start_computer_use_task returns an action id immediately; get_action_status/get_iris_status for progress, stop_action to cancel. (3) SMART HOME — trigger_smart_home for a one-off command; create_smarthome_rule for a standing automation (build the trigger/condition/action fields yourself from what the user said); manage existing ones with list_smarthome_rules/delete_smarthome_rule/set_smarthome_rule_enabled. (4) STATUS — get_iris_status answers 'what are you doing / what's running'. (5) APPS, WINDOWS & EDITING — open_url_or_app, close_app, hide_app, minimize_app, restore_app, write_note, move_window_magic, move_window_precise, computer_use_type (see LOCAL OS/HARDWARE TOOLS below for exact editing and navigation syntax).",
+            "LANES (use directly instead of submit_claude_task when they fit): (1) BROWSER — browser_open/browser_click/browser_type/browser_scroll/browser_navigate/browser_press_key/browser_get_links/browser_extract_text/browser_screenshot for on-page actions; fall back to start_computer_use_task only for whole-screen or non-browser work. (2) COMPUTER USE — start_computer_use_task returns an action id immediately; get_action_status/get_iris_status for progress, stop_action to cancel. (3) SMART HOME — trigger_smart_home for a one-off command; create_smarthome_rule for a standing automation (build the trigger/condition/action fields yourself from what the user said); manage existing ones with list_smarthome_rules/delete_smarthome_rule/set_smarthome_rule_enabled. (4) STATUS — get_iris_status answers 'what are you doing / what's running'. (5) APPS, WINDOWS, FILESYSTEM, TERMINAL & SYSTEM — open_url_or_app, universal_app_launcher, window_manager, filesystem_ops, run_terminal_command, system_ops, close_app, hide_app, minimize_app, restore_app, write_note, move_window_magic, move_window_precise, computer_use_type (see LOCAL OS/HARDWARE TOOLS below for exact syntax).",
             LOCAL_TOOL_RULES,
             `ROBOT CAMERAS: user's robots are ${Object.values(getRobotsConfig()).map((r, i) => `${i + 1} (${r.name || "Robot " + (i + 1)})`).join(", ")}. To view or snapshot a robot camera, use take_camera_snapshot{target: 'robot <number>'} or toggle_robot_vision{robot_id: '<id>'}.`,
             "SILENT MODE: set_silent_mode(enabled: true) on 'quiet/whisper/mute' requests ('im lặng thôi', 'đừng nói to') — keep listening and replying as text, just not aloud. set_silent_mode(enabled: false) to resume speaking.",
@@ -158,20 +158,15 @@ export function buildLiveConfig(resumeHandle) {
             "UI control: toggle teleprompter/copilot/meeting-recorder/cameras via control_ui's matching toggle_* action. 'open it/that result', 'show history', 'close it', 'go back', 'open the current task' -> get_ui_context + control_ui, never submit_claude_task. 'show/hide the steps' -> show_task_steps/hide_task_steps, target named in query if given, else the viewed or running task.",
             "Task-by-description: 'open the failed one'/'open the deals task' -> control_ui action open_task_by_query with those words as query, no exact match needed. If Iris shows a chooser for multiple matches, user can click or say first/second/third — check pendingTaskMatches via get_ui_context first. Ambiguous UI command -> prefer expanded task, then focused task, then latest result. Keep acknowledgements short.",
             `SLEEP: on 'go to sleep'/'goodnight'/'that's all for now'/'ngủ đi'/'tạm nghỉ', a short goodbye then go_to_sleep — only when explicitly asked. A pending PO question always gets answered before an ambiguous new open-task request.`,
-            `After submit_claude_task: 'started' -> one short line ("On it, Claude's on it now"); 'queued' -> tell ${userDisplayName()} it's queued behind the current task. Keep what you SAY short even when what you SENT was detailed.`,
+            `After submit_claude_task: 'started' means the task has ONLY JUST BEGUN in background — NEVER say 'Completed' or 'Đã hoàn thành'! Say one short line ("Tôi đang bắt đầu chạy ngầm cho bạn" / "Claude's on it now"); 'queued' -> tell ${userDisplayName()} it's queued behind the current task. Keep what you SAY short even when what you SENT was detailed.`,
             `start_new_claude_session only on an explicit request (new/fresh session, start over); confirm briefly afterward.`,
             `On SYSTEM_EVENT_SESSION_START, greet ${userDisplayName()} in English once: "Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?", then listen quietly.`,
             `On SYSTEM_EVENT_CLAUDE_COMPLETE, proactively announce it (even mid-chat), briefly: Claude's back, summarize, ask if they want the details before continuing.`,
             "Answer directly only for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
             "IMPORTANT VIETNAMESE UI MAPPING: DO NOT confuse 'thu nhỏ' (making window size smaller / PiP, still visible on screen) with 'ẩn' (hiding/minimizing to taskbar or boss key). (1) 'Ẩn màn hình', 'về desktop', 'hiện desktop' = desktop_manager{action: 'boss'}. (2) 'Thu nhỏ' Iris ('thu nhỏ', 'thu nhỏ Iris', 'cho Iris nhỏ lại') = shrink Iris to Picture-in-Picture -> control_ui toggle_robot_pip; 'Thu nhỏ' an external app ('thu nhỏ cửa sổ Chrome/Notepad', 'cho nhỏ lại') = move_window_precise with smaller width/height (window stays visible on screen); NEVER call minimize_app, hide_app, or minimize_iris when the user asks to 'thu nhỏ'. (3) 'Ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ' = for Iris itself: control_ui minimize_iris (drops Iris to the taskbar); for another app: minimize_app with that app's exe (or hide_app if fully hidden). (4) 'Phóng to', 'mở rộng', 'mở lại', 'hiện lại' = control_ui restore_iris if Iris is on the taskbar, or toggle_robot_pip again if Iris is in Picture-in-Picture; for another app: restore_app with that app's exe. minimize_app/hide_app/close_app/restore_app cannot act on Iris's own window. NEVER confuse these.",
-            // Ported from myiris: each capability's own prose, spliced in
-            // rather than concatenated elsewhere since prose position here is
-            // meaningful. Empty string (capability not applicable right now,
-            // e.g. pipeline unavailable) drops out cleanly via filter(Boolean).
             canvasCapability.promptFragment(),
             secondBrainCapability.promptFragment(),
-            // Claude Brain toggle: inject a CRITICAL override when Claude is disabled.
             !isClaudeEnabled
               ? "CRITICAL: Claude is currently DISABLED in Settings. Do NOT use submit_claude_task. Try to complete the user's request using your other available tools directly (browser, system apps, smarthome, etc.). If a task is too complex or requires Claude, apologize and remind the user to enable Claude in Settings."
               : "",
@@ -182,17 +177,15 @@ export function buildLiveConfig(resumeHandle) {
   };
 }
 
-export function sendWelcomeGreeting() {
-  (async () => {
-    if (!liveSession) return;
+function sendWelcomeGreeting() {
+  if (!liveSession) return;
 
-    const greeting =
-      `SYSTEM_EVENT_SESSION_START: The app just started up. Greet ${userDisplayName()} in ENGLISH right now, saying: ` +
-      `"Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?" ` +
-      `CRITICAL: Speak this English greeting ONCE right now. After this greeting, stay quietly attentive and do NOT repeat it or ask unsolicited questions.`;
+  const greeting =
+    `SYSTEM_EVENT_SESSION_START: The app just started up. Greet ${userDisplayName()} in ENGLISH right now, saying: ` +
+    `"Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?" ` +
+    `CRITICAL: Speak this English greeting ONCE right now. After this greeting, stay quietly attentive and do NOT repeat it or ask unsolicited questions.`;
 
-    liveSession.sendRealtimeInput({ text: greeting });
-  })();
+  liveSession.sendRealtimeInput({ text: greeting });
 }
 
 export async function startLive() {
@@ -200,18 +193,25 @@ export async function startLive() {
   userStopped = false;
   resumptionHandle = null;
   reconnectAttempts = 0;
+  hasGreetedStartup = false;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  try { await connectLive({ isReconnect: false }); } catch(err) { console.error('[GEMINI_LIVE_ERROR]', err); emitEvent({ type: 'fatal', message: err.message || String(err) }); throw err; }
+  try {
+    await connectLive({ isReconnect: false });
+  } catch (err) {
+    console.error("[GEMINI_LIVE_ERROR]", err);
+    emitEvent({ type: "fatal", message: err.message || String(err) });
+    throw err;
+  }
   // BUG-COMP-04/COMP-02 FIX: Pass sendFrameToGemini so companion video frames
   // go directly to Gemini Live without an unnecessary renderer round-trip.
   startCompanionServer(emitEvent, sendAudioChunk, mainWindow, sendFrameToGemini);
-  return { running: true, pid: process.pid };
+  return { running: true, pid: process.pid, geminiStatus: "connected" };
 }
 
-export async function connectLive({ isReconnect }) {
+async function connectLive({ isReconnect }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
@@ -220,7 +220,8 @@ export async function connectLive({ isReconnect }) {
 
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
   ai = new GoogleGenAI({ apiKey });
-  emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec" } });
+  liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
+  emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec", geminiStatus: "connecting" } });
   emitEvent({ type: "gemini_status", status: "connecting", model });
 
   liveSession = await ai.live.connect({
@@ -229,8 +230,8 @@ export async function connectLive({ isReconnect }) {
     callbacks: {
       onopen() {
         reconnectAttempts = 0;
-        liveStatus = { running: true, pid: process.pid };
-        emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec" } });
+        liveStatus = { running: true, pid: process.pid, geminiStatus: "connected" };
+        emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec", geminiStatus: "connected" } });
         emitEvent({ type: "gemini_status", status: "connected", model });
         emitEvent({ type: "audio_state", state: "listening" });
         updateTrayMenu();
@@ -252,13 +253,14 @@ export async function connectLive({ isReconnect }) {
         flushTranscripts();
         liveSession = null;
         if (userStopped) {
-          liveStatus = { running: false, pid: null };
+          liveStatus = { running: false, pid: null, geminiStatus: "offline" };
           emitEvent({ type: "gemini_status", status: "offline" });
           emitEvent({ type: "audio_state", state: "idle" });
           emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
           updateTrayMenu();
           return;
         }
+        liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
         scheduleReconnect(event?.reason || "connection closed");
       },
     },
@@ -267,11 +269,11 @@ export async function connectLive({ isReconnect }) {
   flushPendingAnnouncements();
 }
 
-export function scheduleReconnect(reason) {
+function scheduleReconnect(reason) {
   if (reconnectTimer) return;
   reconnectAttempts += 1;
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-    liveStatus = { running: false, pid: null };
+    liveStatus = { running: false, pid: null, geminiStatus: "offline" };
     emitEvent({
       type: "fatal",
       message: `Gemini Live reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts.`,
@@ -297,41 +299,49 @@ export function scheduleReconnect(reason) {
   }, delay);
 }
 
-export async function handleToolCall(toolCall) {
+let pendingToolCalls = 0;
+
+async function handleToolCall(toolCall) {
+  const calls = toolCall.functionCalls || [];
+  pendingToolCalls += calls.length || 1;
   const functionResponses = [];
   const executedShowcase = new Set();
-  for (const call of toolCall.functionCalls || []) {
-    // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
-    if (call.name === "iris_showcase") {
-      if (executedShowcase.has("iris_showcase")) {
+  try {
+    for (const call of calls) {
+      // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
+      if (call.name === "iris_showcase") {
+        if (executedShowcase.has("iris_showcase")) {
+          functionResponses.push({
+            id: call.id,
+            name: call.name,
+            response: { result: { status: "busy", message: "Đang chạy màn trình diễn, bỏ qua lệnh trùng lặp." } },
+          });
+          continue;
+        }
+        executedShowcase.add("iris_showcase");
+      }
+
+      emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
+      try {
+        const result = await executeClaudeTool(call.name, call.args || {});
+        functionResponses.push({ id: call.id, name: call.name, response: { result } });
+      } catch (error) {
         functionResponses.push({
           id: call.id,
           name: call.name,
-          response: { result: { status: "busy", message: "Đang chạy màn trình diễn, bỏ qua lệnh trùng lặp." } },
+          response: { status: "error", error: error.message },
         });
-        continue;
       }
-      executedShowcase.add("iris_showcase");
     }
-
-    emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
-    try {
-      const result = await executeClaudeTool(call.name, call.args || {});
-      functionResponses.push({ id: call.id, name: call.name, response: { result } });
-    } catch (error) {
-      functionResponses.push({
-        id: call.id,
-        name: call.name,
-        response: { status: "error", error: error.message },
-      });
+    if (functionResponses.length && liveSession) {
+      liveSession.sendToolResponse({ functionResponses });
     }
-  }
-  if (functionResponses.length && liveSession) {
-    liveSession.sendToolResponse({ functionResponses });
+  } finally {
+    pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
   }
 }
 
-export function handleLiveMessage(message) {
+function handleLiveMessage(message) {
   if (message.sessionResumptionUpdate) {
     const { resumable, newHandle } = message.sessionResumptionUpdate;
     if (resumable && newHandle) resumptionHandle = newHandle;
@@ -374,13 +384,18 @@ export function handleLiveMessage(message) {
     if (!inlineData?.data) continue;
     const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
     if (!mimeType.startsWith("audio/")) continue;
+    // Chống báo hoàn thành ảo / nói trước khi tool thực thi:
+    // Nếu trong packet có toolCall hoặc đang có tool gọi dở dang chưa trả toolResponse (pendingToolCalls > 0),
+    // mọi audio chunk được sinh ra trong lượt này là lời thoại võ đoán trước khi tool chạy xong.
+    // Bỏ qua audio này để chờ lượt kế tiếp (sau sendToolResponse) khi Gemini đã có kết quả thực tế.
+    if (message.toolCall || pendingToolCalls > 0) continue;
     emitToRenderer("live:audio", { data: inlineData.data, mimeType });
     emitEvent({ type: "audio_state", state: "speaking" });
   }
 
   if (content.turnComplete) {
     flushTranscripts();
-    emitEvent({ type: "audio_state", state: "listening" });
+    emitEvent({ type: "audio_state", state: pendingToolCalls > 0 ? "thinking" : "listening" });
   }
 }
 
@@ -388,6 +403,7 @@ export async function stopLive() {
   userStopped = true;
   resumptionHandle = null;
   reconnectAttempts = 0;
+  pendingToolCalls = 0;
   hasGreetedStartup = false;
   setAudioChunkSuppressed(false);
   if (reconnectTimer) {
@@ -401,7 +417,7 @@ export async function stopLive() {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
   liveSession = null;
-  liveStatus = { running: false, pid: null };
+  liveStatus = { running: false, pid: null, geminiStatus: "offline" };
   emitToRenderer("live:interrupt", {});
   emitEvent({ type: "gemini_status", status: "offline" });
   emitEvent({ type: "audio_state", state: "idle" });
@@ -410,13 +426,12 @@ export async function stopLive() {
   return liveStatus;
 }
 
-export let _nutJs = null;
+
+let _nutJs = null;
 export async function getNutJs() {
   if (!_nutJs) _nutJs = await import("@nut-tree-fork/nut-js");
   return _nutJs;
 }
-// Pre-warm the cache in the background at startup so first gesture is fast.
-import("@nut-tree-fork/nut-js").then(m => { _nutJs = m; }).catch(() => { });
 
 // V-01: gửi 1 khung hình lên Gemini Live. Trả true CHỈ KHI đã thực sự đưa vào session
 // (để tool vision không báo "success" khi không có gì được gửi).
@@ -450,10 +465,6 @@ export function setAudioChunkSuppressed(suppressed) {
   console.log(`[IRIS] audioChunkSuppressed = ${audioChunkSuppressed}`);
 }
 
-export function isAudioChunkSuppressed() {
-  return audioChunkSuppressed;
-}
-
 export function sendAudioChunk(arrayBuffer) {
   if (audioChunkSuppressed) return;
   if (!liveSession || !arrayBuffer) return;
@@ -475,4 +486,3 @@ export function sendCommand(command) {
     });
   }
 }
-

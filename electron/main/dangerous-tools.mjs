@@ -20,6 +20,16 @@ export const DANGEROUS = {
   process_manager: (a) => String(a.action || "").toLowerCase() === "kill",
   // TL-08: để lộ mã OTP chưa che cho mô hình đám mây cần người dùng đồng ý rõ.
   read_system_notifications: (a) => a.reveal_otp === true,
+  // S-12: xoá vĩnh viễn file/thư mục hoặc dọn sạch thùng rác / dừng dịch vụ / gỡ cài đặt cần xác nhận giọng nói 2 bước.
+  filesystem_ops: (a) => String(a.action || "").toLowerCase() === "delete",
+  system_ops: (a) => {
+    const act = String(a.action || "").toLowerCase();
+    const sub = String(a.sub_action || "").toLowerCase();
+    if (act === "empty_recycle_bin") return true;
+    if (act === "services" && ["stop", "restart"].includes(sub)) return true;
+    if (act === "winget" && sub === "uninstall") return true;
+    return false;
+  },
 };
 
 export const CONFIRM_TTL_MS = 30_000;

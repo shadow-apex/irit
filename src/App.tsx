@@ -415,6 +415,9 @@ export default function App() {
     window.iris.getSidecarStatus().then((status) => {
       setSidecarRunning(status.running);
       setSidecarPid(status.pid);
+      if (status.geminiStatus) {
+        setGeminiStatus(status.geminiStatus);
+      }
     });
     window.iris.getSessions().then(applySessions).catch(() => {});
     return window.iris.onSidecarEvent((event) => handleSidecarEvent(event));
@@ -685,12 +688,15 @@ export default function App() {
   }, [sidecarRunning, geminiStatus]);
 
   useEffect(() => {
-    if (booting || !bootActive) return;
+    if (!bootActive) return;
     const MIN_VISIBLE_MS = 2400;
+    const MAX_WAIT_MS = 5500;
     const FADE_MS = 450;
     const elapsed = Date.now() - bootStartRef.current;
     let doneTimer: number | undefined;
-    const closeTimer = window.setTimeout(() => {
+    let maxTimer: number | undefined;
+
+    const finish = () => {
       setBootClosing(true);
       doneTimer = window.setTimeout(() => {
         setBootActive(false);
@@ -698,9 +704,21 @@ export default function App() {
         // Tell main the boot screen is gone so Iris can speak its welcome now.
         if (hasBridge) window.iris.notifyBootDone();
       }, FADE_MS);
-    }, Math.max(0, MIN_VISIBLE_MS - elapsed));
+    };
+
+    if (!booting) {
+      const remaining = Math.max(0, MIN_VISIBLE_MS - elapsed);
+      const closeTimer = window.setTimeout(finish, remaining);
+      return () => {
+        window.clearTimeout(closeTimer);
+        if (doneTimer) window.clearTimeout(doneTimer);
+      };
+    }
+
+    const safetyRemaining = Math.max(0, MAX_WAIT_MS - elapsed);
+    maxTimer = window.setTimeout(finish, safetyRemaining);
     return () => {
-      window.clearTimeout(closeTimer);
+      if (maxTimer) window.clearTimeout(maxTimer);
       if (doneTimer) window.clearTimeout(doneTimer);
     };
   }, [booting, bootActive, hasBridge]);
@@ -883,6 +901,9 @@ export default function App() {
       const status = readStatusObject(event.status);
       setSidecarRunning(Boolean(status.running));
       setSidecarPid(typeof status.pid === "number" ? status.pid : null);
+      if (typeof status.geminiStatus === "string") {
+        setGeminiStatus(status.geminiStatus);
+      }
       return;
     }
 
@@ -1629,12 +1650,22 @@ export default function App() {
   useEffect(() => {
     if (!hasBridge) return;
     return window.iris.onSnapDeskVision(() => {
-      if (deskVisionContinuous) return; // Nếu đang chạy liên tục thì bỏ qua
+      if (deskVisionContinuous) {
+        if (deskVisionVideoRef.current && deskVisionCanvasRef.current) {
+          const dataUrl = videoToJpegDataUrl(deskVisionVideoRef.current, deskVisionCanvasRef.current, 1024, 0.75);
+          window.iris.sendDeskVisionFrame(dataUrl || "");
+        } else {
+          window.iris.sendDeskVisionFrame("");
+        }
+        return;
+      }
       if (isSnappingRef.current) return; // Guard: chống concurrent snap
       isSnappingRef.current = true;
 
       const video = document.createElement("video");
       video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
       const canvas = document.createElement("canvas");
 
       const cleanup = (stream?: MediaStream) => {
@@ -1646,10 +1677,15 @@ export default function App() {
       // V-12: dùng camera người dùng đã chọn (nếu còn), có timeout cứng để isSnappingRef
       // KHÔNG bao giờ kẹt true, và frame được thu nhỏ trước khi gửi.
       let done = false;
+      let sent = false;
       const finish = (stream?: MediaStream) => {
         if (done) return;
         done = true;
         window.clearTimeout(hardTimeout);
+        if (!sent) {
+          sent = true;
+          window.iris.sendDeskVisionFrame("");
+        }
         cleanup(stream);
       };
       let streamForCleanup: MediaStream | undefined;
@@ -1666,17 +1702,20 @@ export default function App() {
           streamForCleanup = stream;
           if (done) { stream.getTracks().forEach(t => t.stop()); return; }
           video.srcObject = stream;
+          video.play().catch(() => {});
           video.onloadedmetadata = () => {
             setTimeout(() => {
-              const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.7);
-              if (dataUrl) window.iris.sendDeskVisionFrame(dataUrl);
+              if (done) return;
+              const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.75);
+              sent = true;
+              window.iris.sendDeskVisionFrame(dataUrl || "");
               finish(stream);
             }, 800); // Chờ camera focus và điều chỉnh ánh sáng
           };
         })
         .catch(err => {
           console.error("Snap error:", err);
-          finish(); // Cleanup kể cả khi lỗi — tránh stream leak
+          finish(); // Cleanup kể cả khi lỗi — tránh stream leak và báo lỗi ngay cho main
         });
     });
   }, [hasBridge, deskVisionContinuous, cameraDeviceId]);
@@ -1710,6 +1749,8 @@ export default function App() {
     if (!deskVisionVideoRef.current) {
       deskVisionVideoRef.current = document.createElement("video");
       deskVisionVideoRef.current.autoplay = true;
+      deskVisionVideoRef.current.muted = true;
+      deskVisionVideoRef.current.playsInline = true;
     }
     if (!deskVisionCanvasRef.current) {
       deskVisionCanvasRef.current = document.createElement("canvas");
@@ -1719,6 +1760,14 @@ export default function App() {
     // (race condition khi user bật rồi tắt ngay trước khi camera mở xong)
     let cancelled = false;
 
+    const sendCurrentDeskFrame = () => {
+      if (cancelled || !deskVisionVideoRef.current || !deskVisionCanvasRef.current) return;
+      const video = deskVisionVideoRef.current;
+      const canvas = deskVisionCanvasRef.current;
+      const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.75);
+      if (dataUrl) window.iris.sendDeskVisionFrame(dataUrl);
+    };
+
     navigator.mediaDevices.getUserMedia({ video: cameraDeviceId ? { deviceId: { ideal: cameraDeviceId } } : true }).then(stream => {
       if (cancelled) {
         // Cleanup đã chạy trước khi camera mở xong — dừng stream ngược lại
@@ -1726,16 +1775,16 @@ export default function App() {
         return;
       }
       deskVisionStreamRef.current = stream;
-      if (deskVisionVideoRef.current) deskVisionVideoRef.current.srcObject = stream;
+      if (deskVisionVideoRef.current) {
+        deskVisionVideoRef.current.srcObject = stream;
+        deskVisionVideoRef.current.play().catch(() => {});
+        deskVisionVideoRef.current.onloadedmetadata = () => {
+          setTimeout(sendCurrentDeskFrame, 600);
+        };
+      }
 
       // Lưu interval vào ref — cleanup function có thể clear dù có async hay không
-      deskVisionIntervalRef.current = setInterval(() => {
-        if (!deskVisionVideoRef.current || !deskVisionCanvasRef.current) return;
-        const video = deskVisionVideoRef.current;
-        const canvas = deskVisionCanvasRef.current;
-        const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.7);
-        if (dataUrl) window.iris.sendDeskVisionFrame(dataUrl);
-      }, 4000);
+      deskVisionIntervalRef.current = setInterval(sendCurrentDeskFrame, 4000);
     }).catch(err => {
       console.error("Failed to start continuous desk vision:", err);
       if (!cancelled) setDeskVisionContinuous(false);
@@ -1752,6 +1801,7 @@ export default function App() {
         deskVisionStreamRef.current = null;
       }
       if (deskVisionVideoRef.current) {
+        deskVisionVideoRef.current.onloadedmetadata = null;
         deskVisionVideoRef.current.srcObject = null;
       }
     };
@@ -1797,12 +1847,19 @@ export default function App() {
       camVisionVideoRef.current = document.createElement("video");
       camVisionVideoRef.current.autoplay = true;
       camVisionVideoRef.current.muted = true;
+      camVisionVideoRef.current.playsInline = true;
     }
     if (!camVisionCanvasRef.current) {
       camVisionCanvasRef.current = document.createElement("canvas");
     }
     const video = camVisionVideoRef.current;
     const canvas = camVisionCanvasRef.current;
+
+    const sendCurrentStreamFrame = () => {
+      if (!video.srcObject || video.videoWidth === 0) return;
+      const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.75);
+      if (dataUrl) window.iris.sendCameraStreamFrame(dataUrl);
+    };
 
     // Theo dõi companionStream liên tục — điện thoại có thể kết nối lại
     // (reconnect) sau khi chế độ này đã bật, nên gắn lại srcObject mỗi khi
@@ -1811,17 +1868,17 @@ export default function App() {
       if (stream === camVisionLastStreamRef.current) return;
       camVisionLastStreamRef.current = stream;
       video.srcObject = stream;
-      if (stream) video.play().catch(() => {});
+      if (stream) {
+        video.onloadeddata = () => sendCurrentStreamFrame();
+        video.play().then(() => sendCurrentStreamFrame()).catch(() => {});
+        setTimeout(sendCurrentStreamFrame, 200);
+      }
     });
 
     // Định kỳ mỗi 3.5s: drawImage từ <video> lên <canvas>, xuất JPEG/base64
     // và đẩy lên Main qua IPC — Main không tự chụp gì, chỉ chuyển tiếp
     // (kèm dedupe SHA-1 phía Main, xem vision:camera-stream-frame).
-    camVisionIntervalRef.current = setInterval(() => {
-      if (!video.srcObject || video.videoWidth === 0) return;
-      const dataUrl = videoToJpegDataUrl(video, canvas, 1024, 0.7);
-      if (dataUrl) window.iris.sendCameraStreamFrame(dataUrl);
-    }, 3500);
+    camVisionIntervalRef.current = setInterval(sendCurrentStreamFrame, 3500);
 
     return () => {
       unsubscribe();
@@ -1829,6 +1886,7 @@ export default function App() {
         clearInterval(camVisionIntervalRef.current);
         camVisionIntervalRef.current = null;
       }
+      video.onloadeddata = null;
       video.srcObject = null;
       camVisionLastStreamRef.current = null;
     };

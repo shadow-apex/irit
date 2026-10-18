@@ -157,10 +157,28 @@ type IrisConfig = {
   wakeWord: boolean;
   promptReviewMode: boolean;
   claudeEnabled?: boolean;
+  omniParserEnabled?: boolean;
+  universalApps?: boolean;
+  terminalExec?: boolean;
+  filesystemOps?: boolean;
+  windowManager?: boolean;
+  systemOps?: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
   configPath: string;
+};
+
+type OmniStatus = {
+  enabled: boolean;
+  running: boolean;
+  starting: boolean;
+  pid: number | null;
+  port: number;
+  url?: string;
+  mode: string | null;
+  ok?: boolean;
+  error?: string;
 };
 
 type ClaudeHealth = {
@@ -198,9 +216,9 @@ type UiContextSnapshot = {
 };
 
 type IrisApi = {
-  startSidecar: () => Promise<{ running: boolean; pid: number | null }>;
-  stopSidecar: () => Promise<{ running: boolean; pid: number | null }>;
-  getSidecarStatus: () => Promise<{ running: boolean; pid: number | null }>;
+  startSidecar: () => Promise<{ running: boolean; pid: number | null; geminiStatus?: string }>;
+  stopSidecar: () => Promise<{ running: boolean; pid: number | null; geminiStatus?: string }>;
+  getSidecarStatus: () => Promise<{ running: boolean; pid: number | null; geminiStatus?: string }>;
   sendCommand: (command: Record<string, unknown>) => Promise<void>;
   getSessions: () => Promise<SessionsSnapshot>;
   selectSession: (id: string) => Promise<SessionsSnapshot & { status?: string }>;
@@ -250,6 +268,8 @@ type IrisApi = {
   testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
   testClaude: () => Promise<ClaudeHealth>;
   previewVoice: (payload: { voice: string; key: string }) => Promise<{ ok: boolean; error?: string }>;
+  getOmniStatus: () => Promise<OmniStatus>;
+  toggleOmni: (enable?: boolean) => Promise<OmniStatus>;
   // --- Ported from myiris ---
   getPromptStatus: () => Promise<{ reviewMode: boolean }>;
   resolvePromptReview: (payload: {

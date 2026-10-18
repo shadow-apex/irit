@@ -9,7 +9,6 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "../run-queue.mjs";
 import { initTelegramBot } from "../telegram-bot.mjs";
 import { initWebServer } from "../web-server.mjs";

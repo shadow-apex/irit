@@ -351,18 +351,30 @@ function sniffImageMediaType(base64) {
 export async function captureScreenBase64() {
   const primaryDisplay = electronScreen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.size;
-  // Increase thumbnail size to get full resolution
-  const sources = await desktopCapturer.getSources({ 
-    types: ['screen'],
-    thumbnailSize: { width, height }
-  });
-  
-  // Use the primary screen (usually first)
-  const primarySource = sources[0];
-  
-  // We return base64 jpeg
-  const base64Image = primarySource.thumbnail.toJPEG(80).toString("base64");
-  return { base64: base64Image, width, height };
+  let buffer = null;
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width, height },
+    });
+    const primarySource =
+      sources?.find((s) => s.display_id === String(primaryDisplay.id)) ?? sources?.[0];
+    if (primarySource && !primarySource.thumbnail.isEmpty()) {
+      const b = primarySource.thumbnail.toJPEG(80);
+      if (b && b.length > 0) buffer = b;
+    }
+    if (sources) sources.length = 0;
+  } catch {
+    // Fallback below
+  }
+
+  if (!buffer || buffer.length === 0) {
+    const { grabPrimaryScreenJpeg } = await import("./main/vision.mjs");
+    const res = await grabPrimaryScreenJpeg(80);
+    buffer = res.buffer;
+  }
+
+  return { base64: buffer.toString("base64"), width, height };
 }
 
 let hasReportedMissingApiKey = false;

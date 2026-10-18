@@ -137,6 +137,64 @@ export async function browserScreenshot() {
   return { status: "success", base64: buffer.toString("base64"), url: p.url() };
 }
 
+export async function browserScroll({ direction = "down", amount = 600 } = {}) {
+  const p = await ensurePage();
+  const dir = String(direction || "down").toLowerCase();
+  const px = Math.max(50, Math.min(Number(amount) || 600, 5000));
+  if (dir === "top") {
+    await p.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  } else if (dir === "bottom") {
+    await p.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }));
+  } else {
+    const dy = dir === "up" ? -px : px;
+    await p.mouse.wheel(0, dy);
+  }
+  return { status: "success", direction: dir, amount: px, url: p.url(), message: `Đã cuộn trang (${dir}).` };
+}
+
+export async function browserNavigate({ action = "back" } = {}) {
+  const p = await ensurePage();
+  const act = String(action || "back").toLowerCase();
+  if (act === "back") await p.goBack({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+  else if (act === "forward") await p.goForward({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+  else if (act === "reload" || act === "refresh") await p.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
+  else throw new Error(`Action điều hướng không hợp lệ: ${action} (dùng back, forward, reload).`);
+  const title = await p.title().catch(() => "");
+  return { status: "success", action: act, url: p.url(), title, message: `Đã điều hướng trình duyệt: ${act}.` };
+}
+
+export async function browserPressKey({ key = "Enter" } = {}) {
+  if (!key) throw new Error("Thiếu 'key' để nhấn trong trình duyệt.");
+  const p = await ensurePage();
+  await p.keyboard.press(String(key));
+  return { status: "success", key: String(key), url: p.url(), message: `Đã nhấn phím ${key} trong trình duyệt.` };
+}
+
+export async function browserGetLinks({ query = "", limit = 25 } = {}) {
+  const p = await ensurePage();
+  const q = String(query || "").trim().toLowerCase();
+  const max = Math.max(1, Math.min(Number(limit) || 25, 100));
+  const links = await p.evaluate(
+    ({ qStr, maxCount }) => {
+      const anchors = Array.from(document.querySelectorAll("a[href]"));
+      const out = [];
+      const seen = new Set();
+      for (const a of anchors) {
+        const text = (a.innerText || a.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ");
+        const href = a.href;
+        if (!href || href.startsWith("javascript:") || seen.has(href)) continue;
+        if (qStr && !text.toLowerCase().includes(qStr) && !href.toLowerCase().includes(qStr)) continue;
+        seen.add(href);
+        out.push({ text: text.slice(0, 120) || "(no text)", url: href });
+        if (out.length >= maxCount) break;
+      }
+      return out;
+    },
+    { qStr: q, maxCount: max },
+  );
+  return { status: "success", count: links.length, links, url: p.url() };
+}
+
 export async function browserClose() {
   if (page && !page.isClosed()) await page.close().catch(() => {});
   if (browser && browser.isConnected()) await browser.close().catch(() => {});
@@ -145,3 +203,4 @@ export async function browserClose() {
   page = null;
   return { status: "success", message: "Đã đóng trình duyệt." };
 }
+

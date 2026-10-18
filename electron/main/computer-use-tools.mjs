@@ -7,7 +7,6 @@
  * the browser-automation tool set.
  */
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import electron from "electron";
 const { shell } = electron;
 import { runComputerSession, pressKeyCombo, typeTextNative, clickMouseNative } from "../computer-session.mjs";
@@ -21,12 +20,13 @@ import {
   isCancelled,
 } from "../action-lane.mjs";
 import { emitEvent, emitToRenderer } from "./events.mjs";
-import { systemActionTool, writeNoteScriptTool } from "./local-tools.mjs";
+import { systemActionTool, writeNoteScriptTool, mouseControlTool } from "./local-tools.mjs";
 import { ensureOmniServer, omniAuthHeaders } from "./omni-server.mjs";
 import { mainWindow } from "./window-manager.mjs";
-import { toggleScreenVision, toggleCameraStreamVision } from "./vision.mjs";
+import { toggleScreenVision, toggleCameraStreamVision, grabPrimaryScreenJpeg, visionFrameGeometry } from "./vision.mjs";
 import { toggleMeetingRecording } from "./meeting-recording.mjs";
 import { toggleCopilotMode, toggleLiveTranscriber } from "./teleprompter.mjs";
+import { GoogleGenAI } from "@google/genai";
 
 // Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
 // generates audio and its transcript still lands in Comms), but playback is
@@ -153,29 +153,50 @@ export async function startOmniParserTask(args) {
     // giữ nhiều bộ nhớ hơn trước khi GC kịp dọn — với 1366x768 thì nhẹ hơn.
     // YOLO vẫn resize ảnh về 640px nên độ chính xác detect không bị ảnh hưởng.
     // Đặt thumbnailSize=null sau khi lấy buffer để GC không cần giữ NativeImage.
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: 1366, height: 768 },
-    });
-    if (!sources || sources.length === 0) throw new Error("No screen source found");
+    let imgBuffer = null;
+    let imgMime = "image/png";
+    let imgFilename = "screenshot.png";
+    try {
+      const primary = electron.screen?.getPrimaryDisplay?.();
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 1366, height: 768 },
+      });
+      const primarySource =
+        (primary ? sources?.find((s) => s.display_id === String(primary.id)) : null) ?? sources?.[0];
+      if (primarySource && !primarySource.thumbnail.isEmpty()) {
+        const b = primarySource.thumbnail.toPNG();
+        if (b && b.length > 0) imgBuffer = b;
+      }
+      if (sources) sources.length = 0;
+    } catch {
+      // desktopCapturer failed — fall back to grabPrimaryScreenJpeg below
+    }
 
-    const primarySource = sources[0];
-    const imgBuffer = primarySource.thumbnail.toPNG();
-    // Xóa tham chiếu đến mảng sources và NativeImage để GC có thể thu hồi
-    // bộ nhớ ngay thay vì đợi closure scope thoát.
-    sources.length = 0;
+    if (!imgBuffer || imgBuffer.length === 0) {
+      const { buffer } = await grabPrimaryScreenJpeg(85);
+      imgBuffer = buffer;
+      imgMime = "image/jpeg";
+      imgFilename = "screenshot.jpg";
+    }
 
-    // 2. Gửi screenshot lên OmniParser Local API.
-    // fast_mode=true → gọi /parse_fast (nhận JPEG nhẹ hơn) nếu server hỗ trợ,
-    // fallback về /parse nếu không. Hiện tại vẫn dùng PNG để tương thích ngược.
+    // 2. Gửi screenshot lên OmniParser Local API (nếu sẵn sàng), hoặc fallback trực tiếp sang Gemini Vision + mouse_control.
     const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
+    const omniReady = await ensureOmniServer({ timeoutMs: 8000 }).catch(() => false);
+
+    if (!omniReady) {
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: `[VisionClick] OmniParser local không chạy — chuyển sang Gemini Vision API + mouse_control cho: ${task}`,
+      });
+      return await findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode);
+    }
+
     emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
 
-    // S-01: server do Electron main quản lý (127.0.0.1 + token); khởi động lười lần đầu.
-    if (!(await ensureOmniServer())) throw new Error("OmniParser chưa sẵn sàng (không khởi động được hoặc đã tắt)");
-
     const formData = new FormData();
-    formData.append("file", new Blob([imgBuffer], { type: "image/png" }), "screenshot.png");
+    formData.append("file", new Blob([imgBuffer], { type: imgMime }), imgFilename);
     formData.append("prompt", task);
 
     // AUDIT-VIS-01 FIX: timeout 90s — đủ cho YOLO+OCR chạy trên máy yếu.
@@ -201,8 +222,8 @@ export async function startOmniParserTask(args) {
     if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
 
     if (!result.target_center) {
-      emitEvent({ type: "log", level: "info", message: `OmniParser could not find the target for: ${task}` });
-      return { status: "failed", message: `Could not find target on screen for: ${task}` };
+      emitEvent({ type: "log", level: "info", message: `OmniParser could not find target, falling back to Gemini Vision for: ${task}` });
+      return await findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode);
     }
 
     // 3. Gọi /click endpoint trên Python server (persistent process, không spawn mới).
@@ -241,6 +262,88 @@ export async function startOmniParserTask(args) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
     return { status: "error", message: `Error performing computer task: ${err.message}` };
   }
+}
+
+async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = false) {
+  const apiKey = String(process.env.GEMINI_VISION_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) {
+    return { status: "error", message: "Chưa cấu hình GEMINI_VISION_API_KEY hoặc GEMINI_API_KEY." };
+  }
+  const client = new GoogleGenAI({ apiKey });
+  const prompt =
+    `Find the UI element, icon, button, link, or tab on this screenshot that matches: "${task}".\n` +
+    `Respond ONLY with valid JSON in this exact format:\n` +
+    `{"found": true, "box_2d": [ymin, xmin, ymax, xmax], "label": "short name"}\n` +
+    `where ymin, xmin, ymax, xmax are integers from 0 to 1000 representing the 2D bounding box on the image. ` +
+    `If not visible on the screen at all, return {"found": false}.`;
+
+  const res = await client.models.generateContent({
+    model: "gemini-flash-latest",
+    contents: [
+      { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
+      { text: prompt },
+    ],
+  });
+
+  const raw = String(res?.text || "").trim();
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return { status: "failed", message: `Không phân tích được toạ độ từ ảnh màn hình cho: ${task}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return { status: "failed", message: `Dữ liệu toạ độ trả về không hợp lệ cho: ${task}` };
+  }
+
+  if (!parsed.found) {
+    return { status: "failed", message: `Không tìm thấy "${task}" trên màn hình hiện tại.` };
+  }
+
+  let xRatio = null;
+  let yRatio = null;
+  if (Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
+    const [ymin, xmin, ymax, xmax] = parsed.box_2d.map(Number);
+    xRatio = (xmin + xmax) / 2 / 1000;
+    yRatio = (ymin + ymax) / 2 / 1000;
+  } else if (typeof parsed.x_ratio === "number" && typeof parsed.y_ratio === "number") {
+    xRatio = parsed.x_ratio > 1 ? parsed.x_ratio / 1000 : parsed.x_ratio;
+    yRatio = parsed.y_ratio > 1 ? parsed.y_ratio / 1000 : parsed.y_ratio;
+  }
+
+  if (xRatio === null || yRatio === null || !Number.isFinite(xRatio) || !Number.isFinite(yRatio)) {
+    return { status: "failed", message: `Không xác định được toạ độ hợp lệ cho: ${task}` };
+  }
+
+  const g = visionFrameGeometry();
+  const screenX = g.physX + Math.round(Math.max(0, Math.min(1, xRatio)) * g.physW);
+  const screenY = g.physY + Math.round(Math.max(0, Math.min(1, yRatio)) * g.physH);
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `[GeminiVisionClick] Đã tìm thấy "${parsed.label || task}" tại (${screenX}, ${screenY}) — đang click...`,
+  });
+
+  const clickRes = await mouseControlTool({
+    action: "click",
+    x: screenX,
+    y: screenY,
+    space: "screen",
+    human_like: !fast_mode,
+  });
+
+  if (clickRes?.status === "error") {
+    await clickMouseNative(screenX, screenY, "left");
+  }
+
+  return {
+    status: "success",
+    x: screenX,
+    y: screenY,
+    message: `Đã nhìn màn hình, tìm thấy "${parsed.label || task}" tại toạ độ (${screenX}, ${screenY}) và click thành công.`,
+  };
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -496,25 +599,28 @@ export async function submitLocalChat(args) {
 // file://, javascript:, or arbitrary custom protocol handlers.
 export const ALLOWED_URL_PROTOCOLS = new Set(["https:", "http:"]);
 
-// Executable whitelist: Gemini may only launch apps in this set.
-// Add entries here as needed. All matching is against the basename (lowercase),
-// so path traversal attempts like "../../evil.exe" are automatically rejected.
+// Executable whitelist fallback (used when IRIS_UNIVERSAL_APPS is disabled in Settings).
 export const ALLOWED_APP_EXECUTABLES = new Set([
   "calc.exe", "notepad.exe", "mspaint.exe", "explorer.exe", "taskmgr.exe",
   "control.exe", "winver.exe", "snippingtool.exe",
   "code.exe", "code - insiders.exe",
-  "chrome.exe", "msedge.exe", "firefox.exe",
+  "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
   "vlc.exe", "spotify.exe", "discord.exe", "slack.exe", "obsidian.exe",
+  "zalo.exe", "telegram.exe", "winword.exe", "excel.exe", "powerpnt.exe",
+  "cmd.exe", "powershell.exe", "wt.exe",
 ]);
 
 export async function openUrlOrApp(args) {
-  const { target, is_url } = args;
+  const { target, is_url } = args || {};
+  if (!target || typeof target !== "string") {
+    return { status: "error", error: "Thiếu 'target' để mở URL hoặc ứng dụng." };
+  }
 
   // --- URL branch ---
-  if (is_url) {
+  if (is_url || /^https?:\/\//i.test(target.trim())) {
     let parsed;
     try {
-      parsed = new URL(target);
+      parsed = new URL(/^https?:\/\//i.test(target.trim()) ? target.trim() : `https://${target.trim()}`);
     } catch {
       return { status: "error", error: "Invalid URL: could not parse the provided target as a URL." };
     }
@@ -534,27 +640,36 @@ export async function openUrlOrApp(args) {
   }
 
   // --- App branch ---
-  // Strip any directory prefix so path-traversal attacks like "../../evil.exe"
-  // collapse to just their basename before hitting the whitelist check.
+  const universalEnabled = !["0", "false", "no", "off"].includes(
+    String(process.env.IRIS_UNIVERSAL_APPS ?? "true").trim().toLowerCase(),
+  );
+  if (universalEnabled) {
+    const { universalAppLauncherTool } = await import("./local-tools.mjs");
+    const res = await universalAppLauncherTool({ command: "launch", query: target });
+    if (res.status === "success") return res;
+  }
+
+  // Fallback to whitelist if Universal App Launcher is disabled or didn't match
   const basename = (target.split(/[\\/]/).pop() ?? "").toLowerCase().trim();
-  if (!ALLOWED_APP_EXECUTABLES.has(basename)) {
+  const exeName = basename.endsWith(".exe") ? basename : `${basename}.exe`;
+  if (!ALLOWED_APP_EXECUTABLES.has(basename) && !ALLOWED_APP_EXECUTABLES.has(exeName)) {
     return {
       status: "error",
-      error: `App '${basename}' is not in the allowed list. Ask the user to add it to ALLOWED_APP_EXECUTABLES in main.mjs if needed.`,
+      error: universalEnabled
+        ? `Không tìm thấy ứng dụng '${target}' trên máy tính.`
+        : `Ứng dụng '${basename}' không nằm trong danh sách cho phép khi 'Universal App Launcher' đang tắt. Hãy bật 'Mở mọi ứng dụng' trong Settings.`,
     };
   }
+  const toRun = ALLOWED_APP_EXECUTABLES.has(basename) ? basename : exeName;
   try {
-    // Use spawn with shell:false so args are passed as an array, never concatenated
-    // into a shell string.  This eliminates the cmd-injection vector that exec()
-    // with template-literal interpolation created (see DEP0190 warning).
-    const child = spawn("cmd.exe", ["/c", "start", "", basename], {
+    const child = spawn("cmd.exe", ["/c", "start", "", toRun], {
       shell: false,   // CRITICAL — do NOT set to true
       detached: true, // App runs independently; Electron won't hold it alive
       stdio: "ignore",
       windowsHide: false,
     });
     child.unref();
-    return { status: "success", message: `Started application: ${basename}` };
+    return { status: "success", message: `Started application: ${toRun}` };
   } catch (err) {
     return { status: "error", error: `Failed to start app: ${err.message}` };
   }
@@ -627,6 +742,14 @@ export async function startComputerUseTaskLaned(args) {
   if (!task || !String(task).trim()) {
     return { status: "error", message: "Thiếu 'task' để điều khiển máy tính." };
   }
+  if (!String(process.env.ANTHROPIC_API_KEY || "").trim()) {
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `[ComputerUse] Chưa có ANTHROPIC_API_KEY — tự động dùng Gemini Vision / OmniParser cho: ${task}`,
+    });
+    return startOmniParserTask({ task });
+  }
   const submitted = submitAction({
     lane: "computer",
     label: `Computer use: ${task}`,
@@ -692,12 +815,24 @@ export async function browserScreenshotTool(args) {
   const r = await runBrowserScreenshot(args);
   if (r?.status !== "success" || !r.base64) return r;
   const { sendVideoFrame } = await import("./gemini-live.mjs"); // import trễ: tránh vòng tròn với dispatcher
-  const ok = sendVideoFrame(r.base64);
-  return ok
-    ? { status: "success", url: r.url, message: "Ảnh chụp trình duyệt vừa được gửi cho bạn dưới dạng khung hình — hãy mô tả những gì bạn thấy." }
-    : { status: "error", url: r.url, error: "Đã chụp trình duyệt nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live đang chạy)." };
+  const ok = sendVideoFrame(r.base64, "image/jpeg");
+  if (!ok) {
+    return { status: "error", url: r.url, error: "Đã chụp trình duyệt nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live đang chạy)." };
+  }
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  return {
+    status: "success",
+    url: r.url,
+    message: "Ảnh chụp trình duyệt vừa được gửi cho bạn dưới dạng khung hình — hãy mô tả những gì bạn thấy.",
+    instructions:
+      "Ảnh chụp trang web trong trình duyệt vừa được gửi trực tiếp cho bạn. Hãy nhìn vào ảnh vừa nhận và trả lời NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm câu hỏi của người dùng (không nói rông dài hay đoán mò).",
+  };
 }
 export const browserCloseTool = runBrowserAction(browserAgent.browserClose, "Đóng trình duyệt");
+export const browserScrollTool = runBrowserAction(browserAgent.browserScroll, "Cuộn trang trình duyệt");
+export const browserNavigateTool = runBrowserAction(browserAgent.browserNavigate, "Điều hướng trình duyệt");
+export const browserPressKeyTool = runBrowserAction(browserAgent.browserPressKey, "Nhấn phím trong trình duyệt");
+export const browserGetLinksTool = runBrowserAction(browserAgent.browserGetLinks, "Lấy danh sách liên kết trang");
 
 export function setSilentModeTool({ enabled } = {}) {
   silentMode = Boolean(enabled);

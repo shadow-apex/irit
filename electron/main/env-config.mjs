@@ -67,6 +67,13 @@ export const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_PROMPT_REVIEW_MODE",
   // Claude Brain toggle: when off, Gemini handles everything without Claude.
   "IRIS_CLAUDE_ENABLED",
+  // Super Assistant Power Permissions (bật/tắt từ Settings):
+  "IRIS_UNIVERSAL_APPS",
+  "IRIS_TERMINAL_EXEC",
+  "IRIS_FILESYSTEM_OPS",
+  "IRIS_WINDOW_MANAGER",
+  "IRIS_SYSTEM_OPS",
+  "OMNIPARSER_ENABLED",
 ]);
 
 // Repo .env in dev, ~/.iris/.env in a packaged build — the same location
@@ -99,6 +106,12 @@ export function getFullConfig() {
     wakeWord: envFlag("IRIS_WAKE_WORD", true),
     promptReviewMode: getPromptReviewMode(),
     claudeEnabled: envFlag("IRIS_CLAUDE_ENABLED", true),
+    omniParserEnabled: envFlag("OMNIPARSER_ENABLED", true),
+    universalApps: envFlag("IRIS_UNIVERSAL_APPS", true),
+    terminalExec: envFlag("IRIS_TERMINAL_EXEC", true),
+    filesystemOps: envFlag("IRIS_FILESYSTEM_OPS", true),
+    windowManager: envFlag("IRIS_WINDOW_MANAGER", true),
+    systemOps: envFlag("IRIS_SYSTEM_OPS", true),
     configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
@@ -125,6 +138,19 @@ export function writeUserConfig(rawUpdates) {
   const lines = mergeEnvLines(existing, updates);
   writeEnvFileSecure(file, lines);
   for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
+  const keysChanged = "GEMINI_API_KEY" in updates || "GEMINI_VISION_API_KEY" in updates || "ANTHROPIC_API_KEY" in updates;
+  if (keysChanged || "OMNIPARSER_ENABLED" in updates) {
+    import("./omni-server.mjs")
+      .then((m) => {
+        if (keysChanged) m.stopOmniServer?.();
+        if (envFlag("OMNIPARSER_ENABLED", true)) {
+          m.ensureOmniServer?.({ timeoutMs: 25_000 }).catch(() => {});
+        } else {
+          m.stopOmniServer?.();
+        }
+      })
+      .catch(() => {});
+  }
   return getFullConfig();
 }
 

@@ -34,6 +34,34 @@ const base64Of = (dataUrlOrB64) => {
   return dataUrlOrB64.startsWith("data:") && i >= 0 ? dataUrlOrB64.slice(i + 1) : dataUrlOrB64;
 };
 
+/**
+ * Nếu người dùng cấu hình "Khoá Vision API (Tuỳ chọn)" (GEMINI_VISION_API_KEY) trong Settings,
+ * gọi nhanh model gemini-flash-latest bằng khoá riêng đó (tối đa 3s) để trích xuất mô tả chính xác
+ * khung hình mà không tốn quota của GEMINI_API_KEY. Nếu bỏ trống, dùng trực tiếp luồng Live (0.35s).
+ */
+export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn hình/camera") {
+  const visionKey = String(process.env.GEMINI_VISION_API_KEY || "").trim();
+  if (!visionKey || !base64Jpeg) return null;
+  try {
+    const { GoogleGenAI } = await import("@google/genai");
+    const visionAi = new GoogleGenAI({ apiKey: visionKey });
+    const model = String(process.env.GEMINI_VISION_MODEL || "gemini-flash-latest").trim();
+    const res = await Promise.race([
+      visionAi.models.generateContent({
+        model,
+        contents: [
+          { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
+          `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
+        ],
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("vision timeout")), 3000)),
+    ]);
+    return (res?.text || "").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Loại trừ nguồn — một chỗ duy nhất (V-05)
 // ---------------------------------------------------------------------------
@@ -173,7 +201,7 @@ export async function grabPrimaryScreenJpeg(quality = 50) {
 }
 
 export async function captureScreenForVision() {
-  return (await grabPrimaryScreenJpeg(50)).buffer;
+  return (await grabPrimaryScreenJpeg(75)).buffer;
 }
 
 export function stopVisionLoop() {
@@ -184,7 +212,7 @@ export function stopVisionLoop() {
   if (wasOn) emitEvent({ type: "vision_state", enabled: false });
 }
 
-export function toggleScreenVision() {
+export async function toggleScreenVision() {
   if (isVisionEnabled) {
     stopVisionLoop();
     return { status: "disabled", message: "Live screen vision disabled." };
@@ -204,10 +232,24 @@ export function toggleScreenVision() {
     onStop: stopVisionLoop,
   });
   emitEvent({ type: "vision_state", enabled: true });
+
+  // Chụp và gửi NGAY LẬP TỨC khung hình đầu tiên trước khi trả toolResponse cho Gemini
+  // (nếu không gọi tick() ngay, setInterval sẽ đợi 4 giây mới chụp ảnh đầu tiên khiến Gemini trả lời mù/bịa).
+  try {
+    await visionInterval.tick();
+    await new Promise((r) => setTimeout(r, 350));
+  } catch {
+    // Nếu lần chụp đầu lỗi, vòng lặp vẫn tiếp tục thử lại
+  }
+
   return {
     status: "enabled",
-    message: "Live screen vision enabled. I can now see your screen.",
+    message: "Live screen vision enabled. First screen frame has been captured and sent.",
     frame_geometry: visionFrameGeometry(),
+    instructions:
+      "Khung hình màn hình đầu tiên vừa được chụp và gửi trực tiếp cho bạn. " +
+      "Nếu người dùng chỉ yêu cầu bật vision, hãy xác nhận ngắn gọn 1 câu. " +
+      "Nếu người dùng hỏi trên màn hình đang có gì, hãy nhìn trực tiếp vào ảnh chụp màn hình vừa nhận và mô tả NGẮN GỌN, ĐÚNG TRỌNG TÂM trong 1-2 câu về cửa sổ/ứng dụng đang mở (TUYỆT ĐỐI không nói rông dài, không liệt kê từng icon nhỏ trên Desktop, không đoán mò từ lịch sử hội thoại cũ).",
     coordinate_hint:
       "Ảnh bạn thấy đã được thu nhỏ. Khi gọi mouse_control với toạ độ đọc TỪ ẢNH, đặt space:\"frame\" để Iris đổi sang pixel thật; toạ độ chuột thật (từ multi_monitor_info/OCR) dùng space:\"screen\".",
   };
@@ -246,7 +288,7 @@ export function stopRobotVisionLoop() {
   }
 }
 
-export function toggleRobotVision(args = {}) {
+export async function toggleRobotVision(args = {}) {
   const robotId = args.robot_id;
   // Đang bật: cùng id (hoặc không truyền id) => tắt; id khác => CHUYỂN camera (V-05).
   if (isRobotVisionEnabled && (!robotId || robotId === activeRobotId)) {
@@ -282,7 +324,20 @@ export function toggleRobotVision(args = {}) {
     onStop: stopRobotVisionLoop,
   });
   emitEvent({ type: "robot_vision_state", enabled: true, robot_id: robotId });
-  return { status: "enabled", message: `Robot live vision enabled for ${robotId}. I am now streaming camera frames.` };
+
+  try {
+    await robotVisionInterval.tick();
+    await new Promise((r) => setTimeout(r, 350));
+  } catch {
+    // Vòng lặp vẫn tiếp tục thử lại nếu khung đầu lỗi
+  }
+
+  return {
+    status: "enabled",
+    message: `Robot live vision enabled for ${robotId}. First camera frame has been captured and sent.`,
+    instructions:
+      "Khung hình đầu tiên từ camera robot vừa được gửi cho bạn. Hãy trả lời NGẮN GỌN trong 1-2 câu dựa đúng trên hình ảnh thực tế vừa nhận (không nói rông dài hay đoán mò).",
+  };
 }
 
 export let isSmartHomeVisionEnabled = false;
@@ -301,7 +356,7 @@ export function stopSmartHomeVisionLoop() {
   }
 }
 
-export function toggleSmartHomeVision(args = {}) {
+export async function toggleSmartHomeVision(args = {}) {
   const cameraId = args.camera_id;
   if (isSmartHomeVisionEnabled && (!cameraId || cameraId === activeSmartHomeCameraId)) {
     stopSmartHomeVisionLoop();
@@ -336,7 +391,20 @@ export function toggleSmartHomeVision(args = {}) {
     onStop: stopSmartHomeVisionLoop,
   });
   emitEvent({ type: "smarthome_vision_state", enabled: true, camera_id: cameraId });
-  return { status: "enabled", message: `Smart Home camera vision enabled for ${cameraId}. I am now streaming camera frames.` };
+
+  try {
+    await smartHomeVisionInterval.tick();
+    await new Promise((r) => setTimeout(r, 350));
+  } catch {
+    // Vòng lặp vẫn tiếp tục thử lại nếu khung đầu lỗi
+  }
+
+  return {
+    status: "enabled",
+    message: `Smart Home camera vision enabled for ${cameraId}. First camera frame has been captured and sent.`,
+    instructions:
+      "Khung hình đầu tiên từ camera nhà thông minh vừa được gửi cho bạn. Hãy trả lời NGẮN GỌN trong 1-2 câu dựa đúng trên hình ảnh thực tế vừa nhận (không nói rông dài hay đoán mò).",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +433,7 @@ export function stopCameraStreamVisionLoop() {
   }
 }
 
-export function toggleCameraStreamVision() {
+export async function toggleCameraStreamVision() {
   if (isCameraStreamVisionEnabled) {
     stopCameraStreamVisionLoop();
     return { status: "disabled", message: "Direct Stream Vision disabled." };
@@ -381,9 +449,15 @@ export function toggleCameraStreamVision() {
   lastCameraStreamFrameHash = null;
   if (mainWindow) mainWindow.webContents.send("vision:toggle-camera-stream", true);
   emitEvent({ type: "camera_stream_vision_state", enabled: true });
+
+  // Chờ renderer chụp và gửi khung hình đầu tiên từ luồng camera điện thoại
+  await new Promise((r) => setTimeout(r, 450));
+
   return {
     status: "enabled",
     message: "Direct Stream Vision enabled — I'm now watching the camera feed (companion phone) directly instead of the desktop screen.",
+    instructions:
+      "Khung hình đầu tiên từ camera điện thoại (Companion) vừa được gửi cho bạn. Hãy trả lời NGẮN GỌN trong 1-2 câu dựa đúng trên hình ảnh thực tế vừa nhận (không nói rông dài hay đoán mò).",
   };
 }
 
@@ -425,7 +499,18 @@ export function stopDeskVisionLoop() {
 /** IPC `vision:desk-frame`. Trả true nếu đã gửi lên Gemini. */
 export function handleDeskFrame(base64DataUrl) {
   const base64 = base64Of(base64DataUrl);
-  if (!base64) return false;
+  if (!base64) {
+    if (pendingDeskSnap) {
+      clearTimeout(pendingDeskSnap.timer);
+      const { resolve } = pendingDeskSnap;
+      pendingDeskSnap = null;
+      resolve({
+        status: "error",
+        error: "Không thể mở hoặc chụp ảnh từ camera bàn (hãy kiểm tra kết nối webcam hoặc quyền truy cập camera).",
+      });
+    }
+    return false;
+  }
   const snapPending = !!pendingDeskSnap;
   if (!snapPending && !isDeskVisionEnabled) return false; // không có ai yêu cầu
   const hash = crypto.createHash("sha1").update(base64).digest("hex");
@@ -436,11 +521,24 @@ export function handleDeskFrame(base64DataUrl) {
     clearTimeout(pendingDeskSnap.timer);
     const { resolve } = pendingDeskSnap;
     pendingDeskSnap = null;
-    resolve(
-      ok
-        ? { status: "success", message: "Đã chụp và gửi ảnh từ camera bàn; hãy mô tả những gì bạn thấy." }
-        : { status: "error", error: "Chụp được ảnh nhưng không gửi được lên Gemini (chưa có phiên)." },
-    );
+    if (ok) {
+      Promise.all([
+        analyzeImageWithVisionApi(base64, "camera bàn (webcam)"),
+        new Promise((r) => setTimeout(r, 350)),
+      ]).then(([vision_summary]) => {
+        resolve({
+          status: "success",
+          ...(vision_summary ? { vision_summary } : {}),
+          message: "Đã chụp và gửi ảnh từ camera bàn; hãy mô tả những gì bạn thấy.",
+          instructions:
+            "Ảnh từ camera bàn (webcam) vừa được gửi trực tiếp cho bạn" +
+            (vision_summary ? ` (phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
+            ". Hãy nhìn vào ảnh vừa nhận và trả lời NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm câu hỏi của người dùng (không nói rông dài hay đoán mò).",
+        });
+      });
+    } else {
+      resolve({ status: "error", error: "Chụp được ảnh nhưng không gửi được lên Gemini (chưa có phiên)." });
+    }
   }
   return ok;
 }
@@ -502,7 +600,7 @@ export function handleCompanionVisionFrame(base64DataUrl) {
     }
   }
 
-  sendVideoFrame(base64, "image/jpeg");
+  const ok = sendVideoFrame(base64, "image/jpeg");
 
   emitEvent({
     type: "log",
@@ -510,16 +608,33 @@ export function handleCompanionVisionFrame(base64DataUrl) {
     message: `Đã chụp ảnh từ Companion Camera (Alt+C)${screenshot_path ? ` -> ${screenshot_path}` : ""}.`,
   });
 
-  resolve({
-    status: "success",
-    camera_id: "companion_phone",
-    camera_name: "Companion Camera (Alt+C)",
-    type: "companion",
-    ...(screenshot_path ? { screenshot_path } : {}),
-    message: `Đã chụp thành công ảnh từ camera điện thoại (Alt+C).${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
-    instructions: "Ảnh từ camera điện thoại (Alt+C) vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trong camera nếu được hỏi.",
+  if (!ok && !screenshot_path) {
+    resolve({
+      status: "error",
+      error: "Đã chụp ảnh từ camera điện thoại (Alt+C) nhưng không gửi được lên Gemini (chưa có phiên Live đang chạy).",
+    });
+    return false;
+  }
+
+  Promise.all([
+    analyzeImageWithVisionApi(base64, "camera điện thoại (Companion Alt+C)"),
+    new Promise((r) => setTimeout(r, 350)),
+  ]).then(([vision_summary]) => {
+    resolve({
+      status: "success",
+      camera_id: "companion_phone",
+      camera_name: "Companion Camera (Alt+C)",
+      type: "companion",
+      ...(screenshot_path ? { screenshot_path } : {}),
+      ...(vision_summary ? { vision_summary } : {}),
+      message: `Đã chụp thành công ảnh từ camera điện thoại (Alt+C).${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
+      instructions:
+        "Ảnh từ camera điện thoại (Alt+C) vừa được chụp và gửi trực tiếp cho bạn" +
+        (vision_summary ? ` (phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
+        ". Hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả NGẮN GỌN trong 1-2 câu những gì thấy trong camera nếu được hỏi (không nói rông dài hay đoán mò).",
+    });
   });
-  return true;
+  return ok;
 }
 
 export function requestCompanionSnapshot({ timeoutMs = 8000, save = true } = {}) {
@@ -567,7 +682,7 @@ export async function takeCameraSnapshot(args = {}) {
   const isScreen = /^(?:camera\s*)?(?:screen|desktop|pc|computer|man\s*hinh|man\s*hinh\s*may\s*tinh)(?:\s*camera)?$/i.test(targetNorm);
   if (isScreen) {
     try {
-      const { buffer, geometry } = await grabPrimaryScreenJpeg(70);
+      const { buffer, geometry } = await grabPrimaryScreenJpeg(75);
       let screenshot_path = null;
       if (save) {
         try {
@@ -576,7 +691,18 @@ export async function takeCameraSnapshot(args = {}) {
           console.warn("[takeCameraSnapshot] Lỗi khi lưu ảnh màn hình:", saveErr);
         }
       }
-      sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+      const b64 = buffer.toString("base64");
+      const ok = sendVideoFrame(b64, "image/jpeg");
+      if (!ok && !screenshot_path) {
+        return {
+          status: "error",
+          error: "Đã chụp màn hình nhưng không gửi được ảnh lên Gemini (chưa có phiên Live đang chạy).",
+        };
+      }
+      const [vision_summary] = await Promise.all([
+        analyzeImageWithVisionApi(b64, "màn hình máy tính"),
+        new Promise((r) => setTimeout(r, 350)),
+      ]);
       emitEvent({
         type: "log",
         level: "info",
@@ -589,8 +715,12 @@ export async function takeCameraSnapshot(args = {}) {
         type: "screen",
         frame_geometry: geometry,
         ...(screenshot_path ? { screenshot_path } : {}),
+        ...(vision_summary ? { vision_summary } : {}),
         message: `Đã chụp thành công ảnh màn hình máy tính.${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
-        instructions: "Ảnh chụp màn hình máy tính vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trên màn hình nếu được hỏi.",
+        instructions:
+          "Ảnh chụp màn hình máy tính vừa được gửi cho bạn" +
+          (vision_summary ? ` (phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
+          ". Hãy nhìn trực tiếp vào ảnh vừa nhận và trả lời NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm câu hỏi của người dùng (TUYỆT ĐỐI không nói rông dài, không liệt kê từng icon nhỏ, không đoán mò từ lịch sử hội thoại cũ).",
       };
     } catch (err) {
       return {
@@ -709,7 +839,18 @@ export async function takeCameraSnapshot(args = {}) {
     }
   }
 
-  sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+  const b64 = buffer.toString("base64");
+  const ok = sendVideoFrame(b64, "image/jpeg");
+  if (!ok && !screenshot_path) {
+    return {
+      status: "error",
+      error: `Đã chụp ảnh từ camera "${matched.name}" nhưng không gửi được lên Gemini (chưa có phiên Live đang chạy).`,
+    };
+  }
+  const [vision_summary] = await Promise.all([
+    analyzeImageWithVisionApi(b64, `camera ${matched.name}`),
+    new Promise((r) => setTimeout(r, 350)),
+  ]);
 
   emitEvent({
     type: "log",
@@ -723,8 +864,12 @@ export async function takeCameraSnapshot(args = {}) {
     camera_name: matched.name,
     type: matched.type,
     ...(screenshot_path ? { screenshot_path } : {}),
+    ...(vision_summary ? { vision_summary } : {}),
     message: `Đã chụp thành công ảnh từ camera "${matched.name}".${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
-    instructions: "Ảnh từ camera vừa được chụp và lưu thành công. Khung hình đã được gửi cho bạn; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả những gì thấy trong camera nếu được hỏi.",
+    instructions:
+      "Ảnh từ camera vừa được chụp và gửi trực tiếp cho bạn" +
+      (vision_summary ? ` (phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
+      "; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả NGẮN GỌN trong 1-2 câu những gì thấy trong camera nếu được hỏi (không nói rông dài hay đoán mò).",
   };
 }
 

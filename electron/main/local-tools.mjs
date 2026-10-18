@@ -28,6 +28,7 @@ export const WINDOWS_ONLY_TOOLS = new Set([
   "search_everything.py", "sys_control.py", "system_actions.py", "wifi_manager.py", "mouse_control.py",
   "media_control.py", "image_viewer.py", "clipboard_history.py", "process_manager.py", "ocr_region.py",
   "color_picker.py", "file_explorer.py", "iris_showcase.py",
+  "universal_app_launcher.py", "terminal_executor.py", "filesystem_ops.py", "window_manager.py", "system_ops.py",
 ]);
 
 export const MAX_STDOUT_BYTES = 1_000_000; // TL: giới hạn stdout ≤ 1 MB
@@ -49,10 +50,10 @@ export function pythonEnv(extra = {}) {
  * Chạy `python tools/<script> ...args`. Không bao giờ reject.
  * @param {string} script
  * @param {string[]} args
- * @param {{timeoutMs?:number, detach?:boolean, stdin?:string, onTimeout?:()=>Promise<void>|void}} [opts]
- * @returns {Promise<{ok:boolean,code?:number,stdout:string,stderr:string,error?:string,timedOut?:boolean,detached?:boolean}>}
+ * @param {{timeoutMs?:number, stdin?:string, onTimeout?:()=>Promise<void>|void, onLine?:(line:string)=>void}} [opts]
+ * @returns {Promise<{ok:boolean,code?:number,stdout:string,stderr:string,error?:string,timedOut?:boolean}>}
  */
-export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = false, stdin = undefined, onTimeout, onLine = undefined } = {}) {
+export function runPythonTool(script, args = [], { timeoutMs = 20000, stdin = undefined, onTimeout, onLine = undefined } = {}) {
   if (process.platform !== "win32" && WINDOWS_ONLY_TOOLS.has(script)) {
     return Promise.resolve({
       ok: false, stdout: "", stderr: "",
@@ -60,19 +61,6 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, detach = f
     });
   }
   const pyPath = join(toolsDir(), script);
-
-  if (detach) {
-    try {
-      const child = spawn(pythonBin(), [pyPath, ...args], {
-        shell: false, detached: true, stdio: "ignore", windowsHide: true, env: pythonEnv(),
-      });
-      child.on("error", () => {});
-      child.unref();
-      return Promise.resolve({ ok: true, detached: true, stdout: "", stderr: "" });
-    } catch (err) {
-      return Promise.resolve({ ok: false, detached: true, error: err.message, stdout: "", stderr: "" });
-    }
-  }
 
   return new Promise((resolve) => {
     let stdout = "";
@@ -176,10 +164,11 @@ async function runJsonTool(script, args, opts, failMsg) {
 export async function takeAiScreenshotTool(args = {}) {
   const save = args?.save === true;
   try {
-    const { grabPrimaryScreenJpeg } = await import("./vision.mjs");
+    const { grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
     const { sendVideoFrame } = await import("./gemini-live.mjs"); // import trễ: tránh vòng tròn với dispatcher
-    const { buffer, geometry } = await grabPrimaryScreenJpeg(70);
-    const sent = sendVideoFrame(buffer.toString("base64"), "image/jpeg");
+    const { buffer, geometry } = await grabPrimaryScreenJpeg(75);
+    const b64 = buffer.toString("base64");
+    const sent = sendVideoFrame(b64, "image/jpeg");
     let screenshot_path;
     if (save) screenshot_path = saveScreenshot(join(userDataDir(), "screenshots"), buffer);
     if (!sent) {
@@ -188,12 +177,19 @@ export async function takeAiScreenshotTool(args = {}) {
         error: "Đã chụp màn hình nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live hoặc ảnh không hợp lệ).",
       };
     }
+    const [vision_summary] = await Promise.all([
+      analyzeImageWithVisionApi(b64, "màn hình máy tính"),
+      new Promise((r) => setTimeout(r, 350)),
+    ]);
     return {
       status: "success",
       ...(screenshot_path ? { screenshot_path } : {}),
+      ...(vision_summary ? { vision_summary } : {}),
       frame_geometry: geometry,
       instructions:
-        "Ảnh chụp màn hình vừa được gửi cho bạn dưới dạng một khung hình — hãy mô tả những gì bạn thấy ngay bây giờ. " +
+        "Ảnh chụp màn hình vừa được gửi cho bạn dưới dạng một khung hình — hãy nhìn trực tiếp vào ảnh vừa nhận" +
+        (vision_summary ? ` (kết quả phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
+        " và mô tả NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm những gì đang mở trên màn hình (TUYỆT ĐỐI không nói rông dài, không liệt kê từng icon nhỏ, không đoán mò từ lịch sử hội thoại cũ). " +
         "Nếu cần click vào một điểm trong ảnh, gọi mouse_control với space:\"frame\".",
     };
   } catch (err) {
@@ -372,19 +368,18 @@ export async function sysMonitorTool() {
 // -----------------------------------------------------------------------
 // clipboard_history (TL-08: mặc định TẮT, có chỉ báo)
 // -----------------------------------------------------------------------
-export const clipboardHistoryEnabled = () => process.env.IRIS_CLIPBOARD_HISTORY === "1";
+const clipboardHistoryEnabled = () => process.env.IRIS_CLIPBOARD_HISTORY === "1";
 
 export async function clipboardHistoryTool(args = {}) {
   const { action, limit = 10, index } = args;
   if (!action) return { status: "error", error: "Thiếu 'action' (start, stop, list, use, clear)." };
-  const act = action === "watch" ? "start" : action; // tương thích tên cũ
-  if (act !== "stop" && act !== "clear" && !clipboardHistoryEnabled()) {
+  if (action !== "stop" && action !== "clear" && !clipboardHistoryEnabled()) {
     return {
       status: "error",
       error: "Lịch sử clipboard đang TẮT để bảo vệ quyền riêng tư (clipboard có thể chứa mật khẩu/OTP). Người dùng cần tự bật bằng IRIS_CLIPBOARD_HISTORY=1 trong .env rồi khởi động lại Iris.",
     };
   }
-  if (act === "start") {
+  if (action === "start") {
     const r = await runJsonTool("clipboard_history.py", ["start"], { timeoutMs: 12000 }, "clipboard_history.py start thất bại.");
     if (r.status === "success") {
       try {
@@ -394,14 +389,14 @@ export async function clipboardHistoryTool(args = {}) {
     }
     return r;
   }
-  if (act === "stop") return runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 8000 }, "clipboard_history.py stop thất bại.");
-  if (act === "list") return runJsonTool("clipboard_history.py", ["list", optArg("limit", toIntArg(limit) ?? 10)], { timeoutMs: 8000 }, "clipboard_history.py list thất bại.");
-  if (act === "use") {
+  if (action === "stop") return runJsonTool("clipboard_history.py", ["stop"], { timeoutMs: 8000 }, "clipboard_history.py stop thất bại.");
+  if (action === "list") return runJsonTool("clipboard_history.py", ["list", optArg("limit", toIntArg(limit) ?? 10)], { timeoutMs: 8000 }, "clipboard_history.py list thất bại.");
+  if (action === "use") {
     const i = toIntArg(index);
     if (i === null) return { status: "error", error: "'index' (số) là bắt buộc cho action 'use'." };
     return runJsonTool("clipboard_history.py", ["use", String(i)], { timeoutMs: 8000 }, "clipboard_history.py use thất bại.");
   }
-  if (act === "clear") return runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 8000 }, "clipboard_history.py clear thất bại.");
+  if (action === "clear") return runJsonTool("clipboard_history.py", ["clear"], { timeoutMs: 8000 }, "clipboard_history.py clear thất bại.");
   return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: start, stop, list, use, clear.` };
 }
 
@@ -414,7 +409,7 @@ export async function stopClipboardWatcher() {
 // quick_reminder — Electron quản lý (TL-09)
 // -----------------------------------------------------------------------
 let reminderService = null;
-export function getReminderService() {
+function getReminderService() {
   if (!reminderService) {
     reminderService = createReminderService({
       file: join(userDataDir(), "reminders.json"),
@@ -510,7 +505,7 @@ export async function lockScreenTool() {
 // view_image — chỉ hiển thị cho NGƯỜI DÙNG (TL-11)
 // -----------------------------------------------------------------------
 export async function viewImageTool(args = {}) {
-  const act = typeof args === "string" ? args : args?.action;
+  const act = args?.action;
   if (!act) return { status: "error", error: "Thiếu tham số 'action' (latest, prev, next, close)." };
   if (!["latest", "prev", "next", "close"].includes(act)) {
     return { status: "error", error: `Action '${act}' không hợp lệ. Dùng: latest, prev, next, close.` };
@@ -536,20 +531,20 @@ export async function moveWindowPreciseTool(args = {}) {
 // -----------------------------------------------------------------------
 // power / media / desktop
 // -----------------------------------------------------------------------
-export async function powerManagerTool(action) {
-  const act = typeof action === "object" && action !== null ? action.action : action;
+export async function powerManagerTool(args = {}) {
+  const act = args?.action;
   if (!["sleep", "shutdown", "restart"].includes(act)) return { status: "error", error: "action phải là sleep, shutdown hoặc restart." };
   return runJsonTool("power_manager.py", [act], { timeoutMs: 12000 }, "power_manager.py thất bại.");
 }
 
-export async function mediaControlTool(action) {
-  const act = typeof action === "object" && action !== null ? action.action : action;
+export async function mediaControlTool(args = {}) {
+  const act = args?.action;
   if (!["playpause", "next", "prev"].includes(act)) return { status: "error", error: "action phải là playpause, next hoặc prev." };
   return runJsonTool("media_control.py", [act], { timeoutMs: 8000 }, "media_control.py thất bại.");
 }
 
-export async function desktopManagerTool(action) {
-  const act = typeof action === "object" && action !== null ? action.action : action;
+export async function desktopManagerTool(args = {}) {
+  const act = args?.action;
   if (!["new", "close", "left", "right", "boss"].includes(act)) return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
   return runJsonTool("desktop_manager.py", [act], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
 }
@@ -576,7 +571,7 @@ export async function readNotificationsTool(args = {}) {
 // -----------------------------------------------------------------------
 // system_actions.py: close/hide/minimize/restore/note (dùng bởi computer-use-tools.mjs)
 // -----------------------------------------------------------------------
-export function appTarget(raw) {
+function appTarget(raw) {
   return String(raw ?? "").split(/[\\/]/).pop().trim();
 }
 
@@ -669,3 +664,117 @@ export async function irisShowcaseTool(_args = {}) {
     isShowcaseRunning = false;
   }
 }
+
+// -----------------------------------------------------------------------
+// Super Assistant Power Tools — có thể bật/tắt từng quyền trong Settings (.env)
+// Mặc định BẬT ("true" / "1") trừ khi người dùng chủ động tắt ("false" / "0").
+// -----------------------------------------------------------------------
+function isSuperFeatureEnabled(envName) {
+  const val = String(process.env[envName] ?? "true").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(val);
+}
+
+export async function universalAppLauncherTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_UNIVERSAL_APPS")) {
+    return {
+      status: "error",
+      error: "Quyền 'Mở mọi ứng dụng (Universal App Launcher)' đang TẮT trong Cài đặt. Vui lòng bật trong Settings -> Hệ thống & Điều khiển.",
+    };
+  }
+  const command = String(args.command || "launch").trim().toLowerCase();
+  const query = String(args.query || args.target || "").trim();
+  const limit = toIntArg(args.limit) ?? 20;
+  if (command === "list") {
+    return runJsonTool("universal_app_launcher.py", ["list", optArg("limit", limit)], { timeoutMs: 15000 }, "universal_app_launcher.py list thất bại.");
+  }
+  if (!query) return { status: "error", error: "Thiếu 'query' (tên ứng dụng cần tìm hoặc mở)." };
+  if (command === "search") {
+    return runJsonTool("universal_app_launcher.py", ["search", query, optArg("limit", limit)], { timeoutMs: 15000 }, "universal_app_launcher.py search thất bại.");
+  }
+  const cli = ["launch", query];
+  if (args.args) cli.push(optArg("args", String(args.args)));
+  return runJsonTool("universal_app_launcher.py", cli, { timeoutMs: 15000 }, "universal_app_launcher.py launch thất bại.");
+}
+
+export async function runTerminalCommandTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_TERMINAL_EXEC")) {
+    return {
+      status: "error",
+      error: "Quyền 'Thực thi lệnh Terminal / PowerShell / Python' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển nếu muốn dùng.",
+    };
+  }
+  const shell = String(args.shell || "powershell").trim().toLowerCase();
+  const command = String(args.command || "").trim();
+  if (!command) return { status: "error", error: "Thiếu 'command' (câu lệnh cần chạy)." };
+  const timeoutSec = Math.max(5, Math.min(toIntArg(args.timeout) ?? 30, 300));
+  const cli = [optArg("shell", shell), optArg("timeout", timeoutSec), "--stdin"];
+  if (args.cwd) cli.push(optArg("cwd", String(args.cwd)));
+  return runJsonTool(
+    "terminal_executor.py",
+    cli,
+    { timeoutMs: (timeoutSec + 5) * 1000, stdin: command },
+    "terminal_executor.py thất bại.",
+  );
+}
+
+export async function filesystemOpsTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_FILESYSTEM_OPS")) {
+    return {
+      status: "error",
+      error: "Quyền 'Quản lý File & Thư mục toàn diện' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
+    };
+  }
+  const action = String(args.action || "").trim().toLowerCase();
+  const path = String(args.path || "").trim();
+  if (!action) return { status: "error", error: "Thiếu 'action' (list, read, write, append, mkdir, copy, move, rename, delete, info, zip, unzip)." };
+  if (!path) return { status: "error", error: "Thiếu 'path' (đường dẫn file/thư mục)." };
+
+  const cli = [action, path];
+  if (args.dest) cli.push(optArg("dest", String(args.dest)));
+  if (args.limit !== undefined) {
+    const lim = toIntArg(args.limit);
+    if (lim !== null) cli.push(optArg("limit", lim));
+  }
+  const isWrite = action === "write" || action === "append";
+  if (isWrite) cli.push("--stdin");
+  return runJsonTool(
+    "filesystem_ops.py",
+    cli,
+    { timeoutMs: 30000, stdin: isWrite ? String(args.content ?? "") : undefined },
+    `filesystem_ops.py ${action} thất bại.`,
+  );
+}
+
+export async function windowManagerTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_WINDOW_MANAGER")) {
+    return {
+      status: "error",
+      error: "Quyền 'Quản lý Cửa sổ nâng cao' đang TẮT trong Cài đặt.",
+    };
+  }
+  const action = String(args.action || "list").trim().toLowerCase();
+  const cli = [action];
+  if (args.target) cli.push(optArg("target", String(args.target)));
+  if (args.position) cli.push(optArg("position", String(args.position)));
+  if (args.state !== undefined) cli.push(optArg("state", String(args.state)));
+  return runJsonTool("window_manager.py", cli, { timeoutMs: 10000 }, `window_manager.py ${action} thất bại.`);
+}
+
+export async function systemOpsTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_SYSTEM_OPS")) {
+    return {
+      status: "error",
+      error: "Quyền 'Quản trị Hệ thống, Mạng & Winget' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
+    };
+  }
+  const action = String(args.action || "").trim().toLowerCase();
+  if (!action) return { status: "error", error: "Thiếu 'action' (network, ports, ping, services, winget, clean_temp, empty_recycle_bin, env_list)." };
+  const cli = [action];
+  if (args.sub_action) cli.push(optArg("sub-action", String(args.sub_action)));
+  if (args.query) cli.push(optArg("query", String(args.query)));
+  const port = toIntArg(args.port);
+  if (port !== null && port > 0) cli.push(optArg("port", port));
+  const timeoutMs = action === "winget" ? 190000 : 30000;
+  return runJsonTool("system_ops.py", cli, { timeoutMs }, `system_ops.py ${action} thất bại.`);
+}
+

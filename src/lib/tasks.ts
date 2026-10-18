@@ -109,9 +109,16 @@ export function readStatusObject(value: unknown): {
   pid?: number | null;
   model?: string;
   mode?: string;
+  geminiStatus?: string;
 } {
   if (!value || typeof value !== "object") return {};
-  return value as { running?: boolean; pid?: number | null; model?: string; mode?: string };
+  return value as {
+    running?: boolean;
+    pid?: number | null;
+    model?: string;
+    mode?: string;
+    geminiStatus?: string;
+  };
 }
 
 // ===== Fuzzy voice-query task matching =====
