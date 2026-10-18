@@ -42,6 +42,7 @@ const base64Of = (dataUrlOrB64) => {
 export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn hình/camera") {
   const visionKey = String(process.env.GEMINI_VISION_API_KEY || "").trim();
   if (!visionKey || !base64Jpeg) return null;
+  let timer = null;
   try {
     const { GoogleGenAI } = await import("@google/genai");
     const visionAi = new GoogleGenAI({ apiKey: visionKey });
@@ -54,11 +55,36 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
           `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
         ],
       }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("vision timeout")), 3000)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("vision timeout")), 3000);
+      }),
     ]);
     return (res?.text || "").trim() || null;
   } catch {
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Giới hạn kích thước khung hình trước khi đẩy lên Gemini Live (WebSocket).
+ * Ảnh từ ESP32-CAM/IP camera có thể tới vài MB; ảnh quá nặng làm nghẽn kênh realtime (kéo theo
+ * trễ/ngắt tiếng). Ảnh ≤ maxBytes giữ nguyên; lớn hơn thì thu nhỏ cạnh dài ≤ maxSide và nén lại.
+ * Mọi lỗi giải mã đều trả về buffer gốc — không bao giờ làm mất khung hình.
+ */
+export function shrinkJpegForLive(buffer, { maxBytes = 400_000, maxSide = 1280, quality = 72 } = {}) {
+  try {
+    if (!Buffer.isBuffer(buffer) || buffer.length <= maxBytes) return buffer;
+    const img = electron.nativeImage.createFromBuffer(buffer);
+    if (img.isEmpty()) return buffer;
+    const { width, height } = img.getSize();
+    const s = Math.min(1, maxSide / Math.max(width, height));
+    const resized = s < 1 ? img.resize({ width: Math.round(width * s), height: Math.round(height * s), quality: "good" }) : img;
+    const out = resized.toJPEG(quality);
+    return out && out.length > 0 && out.length < buffer.length ? out : buffer;
+  } catch {
+    return buffer;
   }
 }
 
@@ -315,7 +341,7 @@ export async function toggleRobotVision(args = {}) {
     capture: () => {
       const url = pickUrl(getRobotsConfig()[robotId]);
       if (!url) throw new Error(`camera_url của robot ${robotId} đã bị xoá khỏi cấu hình`);
-      return grabJpeg(url);
+      return grabJpeg(url).then((b) => shrinkJpegForLive(b));
     },
     isActive: () => isRobotVisionEnabled && activeRobotId === robotId,
     hasSession,
@@ -382,7 +408,7 @@ export async function toggleSmartHomeVision(args = {}) {
     capture: () => {
       const url = pickUrl(getSmartHomeCamerasConfig()[cameraId]);
       if (!url) throw new Error(`camera_url của camera ${cameraId} đã bị xoá khỏi cấu hình`);
-      return grabJpeg(url);
+      return grabJpeg(url).then((b) => shrinkJpegForLive(b));
     },
     isActive: () => isSmartHomeVisionEnabled && activeSmartHomeCameraId === cameraId,
     hasSession,
@@ -822,7 +848,7 @@ export async function takeCameraSnapshot(args = {}) {
 
   let buffer;
   try {
-    buffer = await grabJpeg(matched.url, { timeoutMs: 7000 });
+    buffer = shrinkJpegForLive(await grabJpeg(matched.url, { timeoutMs: 7000 }));
   } catch (err) {
     return {
       status: "error",

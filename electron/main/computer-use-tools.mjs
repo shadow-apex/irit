@@ -193,70 +193,83 @@ export async function startOmniParserTask(args) {
       return await findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode);
     }
 
-    emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
-
-    const formData = new FormData();
-    formData.append("file", new Blob([imgBuffer], { type: imgMime }), imgFilename);
-    formData.append("prompt", task);
-
-    // AUDIT-VIS-01 FIX: timeout 90s — đủ cho YOLO+OCR chạy trên máy yếu.
-    const PARSE_TIMEOUT_MS = 90000;
-    const parseController = new AbortController();
-    const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
-    let response;
+    // Mọi lỗi từ OmniParser (timeout, HTTP lỗi, không thấy mục tiêu, click lỗi) đều rơi xuống
+    // fallback Gemini Vision bên dưới — thay vì báo lỗi cứng khi server vừa chết/treo giữa chừng.
+    let omniFailReason = "";
     try {
-      response = await fetch(omniUrl, { method: "POST", headers: omniAuthHeaders(), body: formData, signal: parseController.signal });
-    } catch (fetchErr) {
-      if (fetchErr.name === "AbortError") throw new Error(`OmniParser API timed out after ${PARSE_TIMEOUT_MS / 1000}s`);
-      throw fetchErr;
-    } finally {
-      clearTimeout(parseTimeout);
+      emitEvent({ type: "log", level: "info", message: `Calling OmniParser API at ${omniUrl}...` });
+
+      const formData = new FormData();
+      formData.append("file", new Blob([imgBuffer], { type: imgMime }), imgFilename);
+      formData.append("prompt", task);
+
+      // AUDIT-VIS-01 FIX: timeout 90s — đủ cho YOLO+OCR chạy trên máy yếu.
+      const PARSE_TIMEOUT_MS = 90000;
+      const parseController = new AbortController();
+      const parseTimeout = setTimeout(() => parseController.abort(), PARSE_TIMEOUT_MS);
+      let response;
+      try {
+        response = await fetch(omniUrl, { method: "POST", headers: omniAuthHeaders(), body: formData, signal: parseController.signal });
+      } catch (fetchErr) {
+        if (fetchErr.name === "AbortError") throw new Error(`OmniParser API timed out after ${PARSE_TIMEOUT_MS / 1000}s`);
+        throw fetchErr;
+      } finally {
+        clearTimeout(parseTimeout);
+      }
+
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => "");
+        throw new Error(`OmniParser API error: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ""}`);
+      }
+
+      const result = await response.json();
+      if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
+
+      if (!result.target_center) {
+        throw new Error("OmniParser could not find target");
+      }
+
+      // 3. Gọi /click endpoint trên Python server (persistent process, không spawn mới).
+      // fast_mode=true: server bỏ qua Bezier delay → click trong ~0.07s thay vì 0.5-0.8s.
+      const [x, y] = result.target_center;
+      emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}${fast_mode ? " (fast)" : ""}` });
+
+      const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
+      const clickController = new AbortController();
+      // Fast mode click hoàn thành trong ~0.1s; normal mode ~1s. Timeout 10s vẫn OK.
+      const clickTimeout = setTimeout(() => clickController.abort(), 10000);
+      let clickResponse;
+      try {
+        clickResponse = await fetch(clickUrl, {
+          method: "POST",
+          headers: omniAuthHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ x_ratio: x, y_ratio: y, fast_mode }),
+          signal: clickController.signal,
+        });
+      } catch (fetchErr) {
+        if (fetchErr.name === "AbortError") throw new Error("Mouse click request timed out after 10s");
+        throw fetchErr;
+      } finally {
+        clearTimeout(clickTimeout);
+      }
+
+      const clickResult = await clickResponse.json().catch(() => ({}));
+      if (!clickResponse.ok || !clickResult.success) {
+        throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
+      }
+
+      emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
+      return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+    } catch (omniErr) {
+      omniFailReason = omniErr?.message || String(omniErr);
     }
 
-    if (!response.ok) {
-      const bodyText = await response.text().catch(() => "");
-      throw new Error(`OmniParser API error: ${response.status} ${response.statusText}${bodyText ? ` — ${bodyText.slice(0, 300)}` : ""}`);
-    }
-
-    const result = await response.json();
-    if (result.error) throw new Error(`OmniParser returned error: ${result.error}`);
-
-    if (!result.target_center) {
-      emitEvent({ type: "log", level: "info", message: `OmniParser could not find target, falling back to Gemini Vision for: ${task}` });
-      return await findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode);
-    }
-
-    // 3. Gọi /click endpoint trên Python server (persistent process, không spawn mới).
-    // fast_mode=true: server bỏ qua Bezier delay → click trong ~0.07s thay vì 0.5-0.8s.
-    const [x, y] = result.target_center;
-    emitEvent({ type: "log", level: "info", message: `Clicking target at ratio x:${x}, y:${y}${fast_mode ? " (fast)" : ""}` });
-
-    const clickUrl = process.env.OMNIPARSER_CLICK_URL || "http://127.0.0.1:8000/click";
-    const clickController = new AbortController();
-    // Fast mode click hoàn thành trong ~0.1s; normal mode ~1s. Timeout 10s vẫn OK.
-    const clickTimeout = setTimeout(() => clickController.abort(), 10000);
-    let clickResponse;
-    try {
-      clickResponse = await fetch(clickUrl, {
-        method: "POST",
-        headers: omniAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ x_ratio: x, y_ratio: y, fast_mode }),
-        signal: clickController.signal,
-      });
-    } catch (fetchErr) {
-      if (fetchErr.name === "AbortError") throw new Error("Mouse click request timed out after 10s");
-      throw fetchErr;
-    } finally {
-      clearTimeout(clickTimeout);
-    }
-
-    const clickResult = await clickResponse.json().catch(() => ({}));
-    if (!clickResponse.ok || !clickResult.success) {
-      throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
-    }
-
-    emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
-    return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+    emitEvent({
+      type: "log",
+      level: "warn",
+      message: `[VisionClick] OmniParser không xử lý được (${omniFailReason}) — chuyển sang Gemini Vision API + mouse_control cho: ${task}`,
+    });
+    return await findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode);
 
   } catch (err) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
@@ -277,13 +290,28 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     `where ymin, xmin, ymax, xmax are integers from 0 to 1000 representing the 2D bounding box on the image. ` +
     `If not visible on the screen at all, return {"found": false}.`;
 
-  const res = await client.models.generateContent({
-    model: "gemini-flash-latest",
-    contents: [
-      { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
-      { text: prompt },
-    ],
-  });
+  // Timeout cứng 30s: fallback không được treo vô hạn khi mạng/Gemini chậm.
+  const FALLBACK_TIMEOUT_MS = 30000;
+  let fallbackTimer = null;
+  let res;
+  try {
+    res = await Promise.race([
+      client.models.generateContent({
+        model: "gemini-flash-latest",
+        contents: [
+          { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
+          { text: prompt },
+        ],
+        // JSON thuần + temperature 0: toạ độ ổn định, không kèm lời dẫn/markdown.
+        config: { responseMimeType: "application/json", temperature: 0 },
+      }),
+      new Promise((_, reject) => {
+        fallbackTimer = setTimeout(() => reject(new Error(`Gemini Vision timed out after ${FALLBACK_TIMEOUT_MS / 1000}s`)), FALLBACK_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+  }
 
   const raw = String(res?.text || "").trim();
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -316,9 +344,10 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     return { status: "failed", message: `Không xác định được toạ độ hợp lệ cho: ${task}` };
   }
 
+  // visionFrameGeometry() trả pixel VẬT LÝ của màn hình chính: origin_x/origin_y (gốc) và screen_w/screen_h (kích thước).
   const g = visionFrameGeometry();
-  const screenX = g.physX + Math.round(Math.max(0, Math.min(1, xRatio)) * g.physW);
-  const screenY = g.physY + Math.round(Math.max(0, Math.min(1, yRatio)) * g.physH);
+  const screenX = g.origin_x + Math.round(Math.max(0, Math.min(1, xRatio)) * g.screen_w);
+  const screenY = g.origin_y + Math.round(Math.max(0, Math.min(1, yRatio)) * g.screen_h);
 
   emitEvent({
     type: "log",

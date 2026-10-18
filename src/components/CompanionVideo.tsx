@@ -21,7 +21,12 @@ export default function CompanionVideo({ onClose }: { onClose: () => void }) {
         }
       }
     });
-    return unsubscribe;
+    const video = videoRef.current;
+    return () => {
+      unsubscribe();
+      // Chỉ tháo tham chiếu — MediaStream là singleton dùng chung nên TUYỆT ĐỐI không stop() track ở đây.
+      if (video) video.srcObject = null;
+    };
   }, []);
 
   useEffect(() => {

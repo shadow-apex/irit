@@ -811,11 +811,17 @@
 .setup-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 15px;
-  border-radius: 999px;
+  justify-content: center;
+  gap: 7px;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
   font-size: 12.5px;
   font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
   color: var(--text);
   background: rgba(255, 255, 255, 0.04);
   box-shadow: inset 0 0 0 1px var(--hairline-strong);
@@ -827,9 +833,25 @@
   box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.35);
 }
 
+.setup-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.setup-btn:focus-visible {
+  outline: 2px solid rgba(var(--cyan-rgb), 0.6);
+  outline-offset: 2px;
+}
+
 .setup-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Nút vừa kiểm tra thành công (vd. Test Gemini): viền xanh ngọc, nền nhạt. */
+.setup-btn.is-ok {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--mint-rgb), 0.4);
 }
 
 .setup-btn.ghost {
@@ -861,18 +883,266 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
   font-size: 11.5px;
   font-weight: 550;
+  line-height: 1;
 }
 
-.setup-result.ok { color: var(--mint); }
+.setup-result.ok {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.1);
+  border-color: rgba(var(--mint-rgb), 0.28);
+}
 
 .setup-result.err {
   color: var(--coral);
+  background: rgba(var(--coral-rgb), 0.09);
+  border-color: rgba(var(--coral-rgb), 0.28);
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ===== Card khối (Gemini API / OmniParser) — viền vi tế + nền kính mờ ===== */
+.setup-section {
+  flex-shrink: 0;
+}
+
+.setup-block {
+  --blk-rgb: var(--cyan-rgb);
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-radius: var(--r-card);
+  border: 1px solid var(--hairline);
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(var(--blk-rgb), 0.08), transparent 60%),
+    linear-gradient(180deg, rgba(20, 34, 56, 0.65), rgba(10, 18, 32, 0.48));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.setup-block.accent-mint { --blk-rgb: var(--mint-rgb); }
+
+.setup-block::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(var(--blk-rgb), 0.55), transparent);
+  pointer-events: none;
+}
+
+.setup-block-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.setup-block-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: rgb(var(--blk-rgb));
+  background: rgba(var(--blk-rgb), 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--blk-rgb), 0.25);
+}
+
+.setup-block-titles {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setup-block-titles h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.setup-block-titles .setup-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.setup-block-aside {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.setup-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setup-block-actions {
+  margin: 2px 0 0;
+}
+
+/* --- OmniParser: hàng liên kết cục bộ + nút bật/tắt --- */
+.omni-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(3, 8, 16, 0.45);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.omni-endpoint {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.omni-endpoint-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.omni-tag {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.omni-tag.running {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.12);
+  border-color: rgba(var(--mint-rgb), 0.32);
+}
+
+.omni-tag.error {
+  border-color: rgba(var(--coral-rgb), 0.3);
+}
+
+.omni-tag.mode {
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.1);
+  border-color: rgba(var(--cyan-rgb), 0.28);
+}
+
+/* Nút bật/tắt: xanh ngọc khi đang chạy (Square = bấm để tắt), xám khi đang tắt (Play = bấm để bật). */
+.setup-btn.omni-toggle {
+  min-width: 124px;
+}
+
+.setup-btn.omni-toggle.on {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.14);
+  box-shadow: inset 0 0 0 1px rgba(var(--mint-rgb), 0.45);
+}
+
+.setup-btn.omni-toggle.on:hover:not(:disabled) {
+  background: rgba(var(--mint-rgb), 0.22);
+  box-shadow: inset 0 0 0 1px rgba(var(--mint-rgb), 0.7);
+}
+
+.setup-btn.omni-toggle.off {
+  color: var(--text-soft);
+  background: rgba(148, 163, 184, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.28);
+}
+
+.setup-btn.omni-toggle.off:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+/* --- Badge trạng thái: xanh (chạy) / xám (tắt) / vàng (khởi động, dừng) / đỏ (lỗi) --- */
+.omni-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-soft);
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.omni-badge.running {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.12);
+  border-color: rgba(var(--mint-rgb), 0.35);
+}
+
+.omni-badge.starting,
+.omni-badge.stopping {
+  color: var(--amber);
+  background: rgba(var(--amber-rgb), 0.12);
+  border-color: rgba(var(--amber-rgb), 0.35);
+}
+
+.omni-badge.error {
+  color: var(--coral);
+  background: rgba(var(--coral-rgb), 0.1);
+  border-color: rgba(var(--coral-rgb), 0.32);
+}
+
+.omni-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+}
+
+.setup-error.omni-error {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 580px) {
+  .setup-block { padding: 12px; }
+  .setup-block-aside { margin-left: 0; }
+  .setup-btn.omni-toggle { width: 100%; }
 }
 
 .setup-error {

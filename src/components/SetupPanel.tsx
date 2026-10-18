@@ -5,15 +5,21 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  KeyRound,
   Loader2,
   Mic,
   Play,
+  ScanEye,
+  Square,
   Wand2,
   X,
 } from "lucide-react";
 
 type Mode = "onboarding" | "settings";
 type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
+// Trạng thái OmniParser lưu dạng dữ liệu thô (không lưu chuỗi đã dịch) để badge luôn đúng ngôn ngữ đang chọn.
+type OmniPhase = "stopped" | "starting" | "stopping" | "running" | "error";
+type OmniUi = { phase: OmniPhase; port: number; url: string; mode: string | null; error?: string };
 type PermState = "idle" | "granted" | "denied";
 type Lang = "en" | "vi";
 
@@ -60,14 +66,17 @@ const I18N = {
     visionKeyNote: "Separate key for image processing. Uses Live key if empty.",
     testGemini: "Test Gemini",
     keyWorks: "Key works",
-    omniStart: "Start OmniParser",
-    omniStop: "Stop OmniParser",
-    omniRunning: "Omni Running (Port 8000)",
-    omniStopped: "Omni Stopped",
-    omniStarting: "Starting Omni…",
+    omniStart: "Start Omni",
+    omniStop: "Stop Omni",
+    omniRunning: "Running (Port {port})",
+    omniStopped: "Stopped",
+    omniStarting: "Starting…",
+    omniStopping: "Stopping…",
+    omniError: "Failed to start",
     omniTitle: "OmniParser Vision (Local AI)",
-    omniDesc: "Local screen UI parser (127.0.0.1:8000). Used for precise desktop icon and text clicking.",
-    omniEndpoint: "Local Endpoint:",
+    omniDesc: "Local screen UI parser for precise icon and text clicking. When stopped, Iris falls back to Gemini Vision automatically.",
+    omniEndpoint: "Local Endpoint",
+    omniMode: "Mode",
     claudeTitle: "Claude Brain",
     claudeHint: "Worker brain — PO/DEV pipeline runs on Claude Code CLI.",
     claudeBrain: "Claude Brain",
@@ -160,14 +169,17 @@ const I18N = {
     visionKeyNote: "Tách riêng quota xử lý ảnh. Nếu bỏ trống sẽ dùng chung khoá trên.",
     testGemini: "Kiểm tra Gemini",
     keyWorks: "Kết nối tốt",
-    omniStart: "Bật / Khởi động Omni",
+    omniStart: "Bật Omni",
     omniStop: "Tắt Omni",
-    omniRunning: "Omni đang chạy (Cổng 8000)",
-    omniStopped: "Omni đang tắt",
-    omniStarting: "Đang khởi động Omni…",
+    omniRunning: "Đang chạy (Cổng {port})",
+    omniStopped: "Đang tắt",
+    omniStarting: "Đang khởi động…",
+    omniStopping: "Đang dừng…",
+    omniError: "Khởi động thất bại",
     omniTitle: "OmniParser Vision (AI Cục Bộ)",
-    omniDesc: "Bộ nhận diện giao diện màn hình local (127.0.0.1:8000). Dùng để click chính xác icon và văn bản trên PC.",
-    omniEndpoint: "Liên kết cục bộ:",
+    omniDesc: "Bộ nhận diện giao diện màn hình cục bộ để click chính xác icon và văn bản. Khi tắt, Iris tự chuyển sang Gemini Vision.",
+    omniEndpoint: "Liên kết cục bộ",
+    omniMode: "Chế độ",
     claudeTitle: "Bộ Não Claude",
     claudeHint: "Não xử lý tác vụ — luồng PO/DEV chạy qua Claude Code CLI.",
     claudeBrain: "Chế Độ Claude Brain",
@@ -355,7 +367,9 @@ export default function SetupPanel({
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
-  const [omni, setOmni] = useState<TestState & { running?: boolean }>({ status: "idle", running: false });
+  const [omni, setOmni] = useState<OmniUi>({ phase: "stopped", port: 8000, url: "http://127.0.0.1:8000", mode: null });
+  // true khi đang chờ toggleOmni() — vòng poll trạng thái không được ghi đè phase starting/stopping.
+  const omniBusyRef = useRef(false);
   const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
@@ -410,27 +424,35 @@ export default function SetupPanel({
   useEffect(() => {
     checkClaude();
     refreshOmniStatus();
+    // Poll nhẹ (IPC nội bộ) để badge phản ánh đúng thực tế: server tự thoát, được bật từ Computer Use, v.v.
+    const poll = window.setInterval(refreshOmniStatus, 3000);
+    return () => window.clearInterval(poll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshOmniStatus() {
     if (typeof window.iris?.getOmniStatus !== "function") return;
+    if (omniBusyRef.current) return; // đang toggle: để handleToggleOmni tự quyết định phase
     try {
       const s = await window.iris.getOmniStatus();
-      if (s.running) {
-        setOmni({ status: "ok", running: true, message: t.omniRunning });
-      } else if (s.starting) {
-        setOmni({ status: "testing", running: false, message: t.omniStarting });
-      } else {
-        setOmni({ status: "idle", running: false, message: t.omniStopped });
-      }
+      if (omniBusyRef.current) return;
+      const base = { port: s.port || 8000, url: s.url || `http://127.0.0.1:${s.port || 8000}`, mode: s.mode ?? null };
+      setOmni((prev) => {
+        if (s.running) return { ...base, phase: "running" };
+        if (s.starting) return { ...base, phase: "starting" };
+        // Giữ thông báo lỗi lần bật trước cho tới khi người dùng thao tác lại.
+        if (prev.phase === "error") return { ...prev, ...base, mode: null };
+        return { ...base, phase: "stopped" };
+      });
     } catch {}
   }
 
   async function handleToggleOmni() {
     if (typeof window.iris?.toggleOmni !== "function") return;
-    const wantStart = !omni.running;
-    setOmni({ status: "testing", running: omni.running, message: t.omniStarting });
+    if (omniBusyRef.current || omni.phase === "starting" || omni.phase === "stopping") return;
+    const wantStart = omni.phase !== "running";
+    omniBusyRef.current = true;
+    setOmni((prev) => ({ ...prev, phase: wantStart ? "starting" : "stopping", error: undefined }));
     try {
       if (draft.GEMINI_VISION_API_KEY.trim() || draft.GEMINI_API_KEY.trim()) {
         const updated = await window.iris.saveConfig({ ...draft, OMNIPARSER_ENABLED: wantStart ? "true" : "false" });
@@ -438,15 +460,18 @@ export default function SetupPanel({
       }
       const res = await window.iris.toggleOmni(wantStart);
       set("OMNIPARSER_ENABLED", res.enabled ? "true" : "false");
+      const base = { port: res.port || omni.port, url: res.url || omni.url, mode: res.mode ?? null };
       if (res.running) {
-        setOmni({ status: "ok", running: true, message: t.omniRunning });
+        setOmni({ ...base, phase: "running" });
       } else if (!wantStart) {
-        setOmni({ status: "idle", running: false, message: t.omniStopped });
+        setOmni({ ...base, phase: "stopped" });
       } else {
-        setOmni({ status: "error", running: false, message: res.error || t.omniStopped });
+        setOmni({ ...base, phase: "error", error: res.error || t.omniError });
       }
     } catch (e: any) {
-      setOmni({ status: "error", running: false, message: e?.message || String(e) });
+      setOmni((prev) => ({ ...prev, phase: "error", error: e?.message || String(e) }));
+    } finally {
+      omniBusyRef.current = false;
     }
   }
 
@@ -516,8 +541,23 @@ export default function SetupPanel({
   const keyReady = draft.GEMINI_API_KEY.trim().length > 0 || config.geminiApiKeySet;
 
   // ---- Section renderers ----
+  // ---- OmniParser: nhãn/trạng thái dẫn xuất từ dữ liệu thô (đổi ngôn ngữ vẫn đúng) ----
+  const omniBusy = omni.phase === "starting" || omni.phase === "stopping";
+  const omniRunning = omni.phase === "running";
+  const omniBadgeLabel =
+    omni.phase === "running"
+      ? t.omniRunning.replace("{port}", String(omni.port))
+      : omni.phase === "starting"
+        ? t.omniStarting
+        : omni.phase === "stopping"
+          ? t.omniStopping
+          : omni.phase === "error"
+            ? t.omniError
+            : t.omniStopped;
+  const omniEndpointUrl = `${omni.url.replace(/\/+$/, "")}/parse`;
+
   const geminiSection = (
-    <Section title={t.geminiTitle} hint={t.geminiHint} compact>
+    <SetupBlock icon={<KeyRound size={15} />} title={t.geminiTitle} hint={t.geminiHint}>
       <div className="setup-grid-2">
         <label className="setup-field compact">
           <span>{t.apiKey}</span>
@@ -552,68 +592,58 @@ export default function SetupPanel({
           <small className="setup-note">{t.visionKeyNote}</small>
         </label>
       </div>
-      <div className="setup-actions compact" style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-        <button className="setup-btn" onClick={testGemini} disabled={!keyReady || gemini.status === "testing"}>
+      <div className="setup-actions compact setup-block-actions">
+        <button
+          type="button"
+          className={`setup-btn${gemini.status === "ok" ? " is-ok" : ""}`}
+          onClick={testGemini}
+          disabled={!keyReady || gemini.status === "testing"}
+        >
           {gemini.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
           {t.testGemini}
         </button>
         <TestBadge state={gemini} okLabel={t.keyWorks} />
       </div>
+    </SetupBlock>
+  );
 
-      <div
-        style={{
-          borderTop: "1px solid var(--setup-border, rgba(148, 196, 255, 0.12))",
-          paddingTop: 12,
-          marginTop: 6,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-bright, #fff)" }}>
-              {t.omniTitle}
-            </div>
-            <div style={{ fontSize: "0.75rem", color: "var(--text-muted, rgba(255,255,255,0.65))", marginTop: 2 }}>
-              {t.omniDesc}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="setup-btn"
-            onClick={handleToggleOmni}
-            disabled={omni.status === "testing"}
-          >
-            {omni.status === "testing" ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
-            {omni.running ? t.omniStop : t.omniStart}
-          </button>
+  const omniSection = (
+    <SetupBlock
+      icon={<ScanEye size={15} />}
+      title={t.omniTitle}
+      hint={t.omniDesc}
+      accent="mint"
+      aside={<OmniStatusBadge phase={omni.phase} label={omniBadgeLabel} />}
+    >
+      <div className="omni-row">
+        <div className="omni-endpoint">
+          <span className="omni-endpoint-label">{t.omniEndpoint}</span>
+          <code className={`omni-tag ${omni.phase}`} title={omniEndpointUrl}>
+            {omniEndpointUrl}
+          </code>
+          {omniRunning && omni.mode ? (
+            <code className="omni-tag mode" title={t.omniMode}>
+              {omni.mode}
+            </code>
+          ) : null}
         </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.75rem", flexWrap: "wrap" }}>
-          <span style={{ color: "var(--text-dim, rgba(255,255,255,0.5))" }}>{t.omniEndpoint}</span>
-          <span
-            style={{
-              padding: "2px 8px",
-              borderRadius: 4,
-              fontFamily: "monospace",
-              fontSize: "0.75rem",
-              background: omni.running ? "rgba(16, 185, 129, 0.15)" : "rgba(255, 255, 255, 0.06)",
-              color: omni.running ? "#34d399" : "var(--text-muted, rgba(255,255,255,0.6))",
-              border: `1px solid ${omni.running ? "rgba(16, 185, 129, 0.3)" : "rgba(255, 255, 255, 0.1)"}`,
-            }}
-          >
-            http://127.0.0.1:8000/parse
-          </span>
-          <TestBadge state={omni} okLabel={t.omniRunning} />
-          {!omni.running && omni.status !== "testing" && omni.status !== "error" && (
-            <span style={{ color: "var(--text-dim, rgba(255,255,255,0.5))", fontSize: "0.75rem" }}>
-              ({t.omniStopped})
-            </span>
-          )}
-        </div>
+        <button
+          type="button"
+          className={`setup-btn omni-toggle ${omniRunning ? "on" : "off"}`}
+          onClick={handleToggleOmni}
+          disabled={omniBusy}
+          aria-pressed={omniRunning}
+        >
+          {omniBusy ? <Loader2 size={13} className="spin" /> : omniRunning ? <Square size={12} /> : <Play size={13} />}
+          {omni.phase === "starting" ? t.omniStarting : omni.phase === "stopping" ? t.omniStopping : omniRunning ? t.omniStop : t.omniStart}
+        </button>
       </div>
-    </Section>
+      {omni.phase === "error" && omni.error ? (
+        <p className="setup-error omni-error" role="alert">
+          {omni.error}
+        </p>
+      ) : null}
+    </SetupBlock>
   );
 
   const claudeSection = (
@@ -973,6 +1003,7 @@ export default function SetupPanel({
             {activeTab === "ai" && (
               <>
                 {geminiSection}
+                {omniSection}
                 {claudeSection}
               </>
             )}
@@ -1029,7 +1060,12 @@ export default function SetupPanel({
       </div>
     );
   } else if (current === "gemini") {
-    body = geminiSection;
+    body = (
+      <>
+        {geminiSection}
+        {omniSection}
+      </>
+    );
   } else if (current === "claude") {
     body = claudeSection;
   } else if (current === "you") {
@@ -1226,6 +1262,60 @@ function Section({
       {hint ? <p className="setup-hint">{hint}</p> : null}
       {children}
     </section>
+  );
+}
+
+/**
+ * Card độc lập (viền vi tế + nền kính mờ). Chỉ dùng cho các khối KHÔNG chứa ThemedSelect:
+ * backdrop-filter biến phần tử thành containing block của `position: fixed`, sẽ làm lệch .ts-menu.
+ */
+function SetupBlock({
+  icon,
+  title,
+  hint,
+  aside,
+  accent = "cyan",
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  hint?: string;
+  aside?: ReactNode;
+  accent?: "cyan" | "mint";
+  children: ReactNode;
+}) {
+  return (
+    <section className={`setup-block accent-${accent}`}>
+      <header className="setup-block-head">
+        <span className="setup-block-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <div className="setup-block-titles">
+          <h3>{title}</h3>
+          {hint ? <p className="setup-hint">{hint}</p> : null}
+        </div>
+        {aside ? <div className="setup-block-aside">{aside}</div> : null}
+      </header>
+      <div className="setup-block-body">{children}</div>
+    </section>
+  );
+}
+
+/** Badge trạng thái OmniParser: xanh = đang chạy, xám = đang tắt, vàng = đang khởi động/dừng, đỏ = lỗi. */
+function OmniStatusBadge({ phase, label }: { phase: OmniPhase; label: string }) {
+  return (
+    <span className={`omni-badge ${phase}`} role="status" aria-live="polite">
+      {phase === "starting" || phase === "stopping" ? (
+        <Loader2 size={12} className="spin" />
+      ) : phase === "running" ? (
+        <Check size={12} />
+      ) : phase === "error" ? (
+        <X size={12} />
+      ) : (
+        <span className="omni-dot" />
+      )}
+      <span>{label}</span>
+    </span>
   );
 }
 

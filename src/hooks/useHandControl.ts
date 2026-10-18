@@ -228,6 +228,12 @@ export function useHandControl(
         setState({ ...EMPTY_STATE, active: true });
         loop();
       } catch (err) {
+        // Lỗi giữa chừng (vd. video.play() bị chặn): nhả ngay camera + recognizer, không chờ cleanup của effect.
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = null;
+        video.srcObject = null;
+        recognizer?.close();
+        recognizer = null;
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
     }
