@@ -575,7 +575,7 @@ export async function askTeleprompter(question) {
     const usePoolFailover = typeof withGeminiFailover === "function" && typeof getAllGeminiKeys === "function";
     const geminiClient = usePoolFailover ? null : await getGeminiVisionClient();
     const hasVisionKey = usePoolFailover
-      ? getAllGeminiKeys({ preferVision: true }).length > 0
+      ? getAllGeminiKeys({ purpose: "vision", preferVision: true }).length > 0
       : Boolean(geminiClient);
     if (!hasVisionKey) {
       copilotStatus = "";
