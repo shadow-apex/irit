@@ -26,7 +26,7 @@ import { mainWindow } from "./window-manager.mjs";
 import { toggleScreenVision, toggleCameraStreamVision, grabPrimaryScreenJpeg, visionFrameGeometry } from "./vision.mjs";
 import { toggleMeetingRecording } from "./meeting-recording.mjs";
 import { toggleCopilotMode, toggleLiveTranscriber } from "./teleprompter.mjs";
-import { GoogleGenAI } from "@google/genai";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
 
 // Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
 // generates audio and its transcript still lands in Comms), but playback is
@@ -278,11 +278,9 @@ export async function startOmniParserTask(args) {
 }
 
 async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = false) {
-  const apiKey = String(process.env.GEMINI_VISION_API_KEY || process.env.GEMINI_API_KEY || "").trim();
-  if (!apiKey) {
+  if (getAllGeminiKeys({ purpose: "vision", preferVision: true }).length === 0) {
     return { status: "error", message: "Chưa cấu hình GEMINI_VISION_API_KEY hoặc GEMINI_API_KEY." };
   }
-  const client = new GoogleGenAI({ apiKey });
   const prompt =
     `Find the UI element, icon, button, link, or tab on this screenshot that matches: "${task}".\n` +
     `Respond ONLY with valid JSON in this exact format:\n` +
@@ -296,15 +294,21 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
   let res;
   try {
     res = await Promise.race([
-      client.models.generateContent({
-        model: "gemini-flash-latest",
-        contents: [
-          { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
-          { text: prompt },
-        ],
-        // JSON thuần + temperature 0: toạ độ ổn định, không kèm lời dẫn/markdown.
-        config: { responseMimeType: "application/json", temperature: 0 },
-      }),
+      withGeminiFailover(
+        async (apiKey) => {
+          const client = getGenAiClient(apiKey);
+          return client.models.generateContent({
+            model: "gemini-flash-latest",
+            contents: [
+              { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
+              { text: prompt },
+            ],
+            // JSON thuần + temperature 0: toạ độ ổn định, không kèm lời dẫn/markdown.
+            config: { responseMimeType: "application/json", temperature: 0 },
+          });
+        },
+        { purpose: "vision", preferVision: true }
+      ),
       new Promise((_, reject) => {
         fallbackTimer = setTimeout(() => reject(new Error(`Gemini Vision timed out after ${FALLBACK_TIMEOUT_MS / 1000}s`)), FALLBACK_TIMEOUT_MS);
       }),

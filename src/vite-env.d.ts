@@ -162,6 +162,8 @@ type PoQuestionAnswer = {
 type IrisConfig = {
   geminiApiKeySet: boolean;
   geminiApiKeyHint: string;
+  geminiKeyCount?: number;
+  geminiPartition?: { live: number; meeting: number; vision: number; total: number };
   geminiVisionApiKeySet: boolean;
   geminiVisionApiKeyHint: string;
   anthropicApiKeySet: boolean;
@@ -283,7 +285,7 @@ type IrisApi = {
   onWakeRequest: (callback: () => void) => () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
-  testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
+  testGemini: (key: string) => Promise<{ ok: boolean; error?: string; message?: string; validKeys?: string[]; validCount?: number; totalCount?: number; failedCount?: number }>;
   testClaude: () => Promise<ClaudeHealth>;
   previewVoice: (payload: { voice: string; key: string }) => Promise<{ ok: boolean; error?: string }>;
   getOmniStatus: () => Promise<OmniStatus>;

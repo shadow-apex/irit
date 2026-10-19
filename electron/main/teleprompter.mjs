@@ -14,6 +14,7 @@ import { enterHud } from "./window-manager.mjs";
 import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { grabPrimaryScreenJpeg } from "./vision.mjs";
+import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover } from "./gemini-keys.mjs";
 
 export let liveTranscriber = null; // handle { proc, state, exitCode }
 export let liveTranscripts = [];
@@ -42,23 +43,23 @@ export let translateTargetLang = "";
 export let liveTranslations = []; // song song với liveTranscripts, tối đa 3 dòng gần nhất
 export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
 
-let localGenAi = null;
-async function getGenAi() {
+async function getGenAi(apiKey) {
+  const client = getGenAiClient(apiKey);
+  if (client) return client;
   if (ai) return ai;
-  const key = (process.env.GEMINI_API_KEY || process.env.GEMINI_VISION_API_KEY || "").trim();
-  if (!key) return null;
-  if (!localGenAi) {
-    const { GoogleGenAI } = await import("@google/genai");
-    localGenAi = new GoogleGenAI({ apiKey: key });
-  }
-  return localGenAi;
+  return null;
 }
 
-export async function getGeminiVisionClient() {
-  const key = (process.env.GEMINI_VISION_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+export async function getGeminiVisionClient(apiKey) {
+  const key = (
+    apiKey ||
+    getNextGeminiKey({ purpose: "vision", preferVision: true }) ||
+    process.env.GEMINI_VISION_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    ""
+  ).trim();
   if (!key) return null;
-  const { GoogleGenAI } = await import("@google/genai");
-  return new GoogleGenAI({ apiKey: key });
+  return getGenAiClient(key);
 }
 
 export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 600 } = {}) {
@@ -295,24 +296,44 @@ export async function toggleLiveTranscriber() {
                    const sysPrompt = `Bạn là công cụ dịch song song thời gian thực. Dịch CÂU MỚI (đánh dấu rõ trong tin nhắn, nếu có) sang ngôn ngữ "${translateTargetLang}", dựa vào ngữ cảnh phía trên (nếu có) để dịch đúng đại từ/ý được nhắc ở câu trước. ` +
                        `CHỈ trả về bản dịch của CÂU MỚI — không dịch lại phần ngữ cảnh, không giải thích, không thêm gì khác. Giữ nguyên các tiền tố [Bạn]/[Đối tác]/[Chung] ở đầu câu MỚI nếu có, chỉ dịch phần nội dung sau tiền tố.`;
 
-                   const genAi = await getGenAi();
-                   if (genAi) {
+                   const hasGeminiKeys = getAllGeminiKeys({ purpose: "teleprompter" }).length > 0 || Boolean(ai);
+                   if (hasGeminiKeys) {
                      currentStreamingTranslation = "⏳...";
                      updateLiveHud();
-                     const responseStream = await genAi.models.generateContentStream({
-                       model: "gemini-flash-latest",
-                       contents: sysPrompt + "\n\n" + userText,
-                     });
-                     
                      let fullText = "";
-                     for await (const chunk of responseStream) {
-                        if (chunk.text) {
-                          fullText += chunk.text;
-                          currentStreamingTranslation = fullText.trim();
-                          updateLiveHud();
-                        }
+                     if (getAllGeminiKeys({ purpose: "teleprompter" }).length > 0) {
+                       await withGeminiFailover(
+                         async (apiKey) => {
+                           fullText = "";
+                           const client = getGenAiClient(apiKey);
+                           const responseStream = await client.models.generateContentStream({
+                             model: "gemini-flash-latest",
+                             contents: sysPrompt + "\n\n" + userText,
+                           });
+                           for await (const chunk of responseStream) {
+                             if (chunk.text) {
+                               fullText += chunk.text;
+                               currentStreamingTranslation = fullText.trim();
+                               updateLiveHud();
+                             }
+                           }
+                         },
+                         { purpose: "teleprompter" }
+                       );
+                     } else if (ai) {
+                       const responseStream = await ai.models.generateContentStream({
+                         model: "gemini-flash-latest",
+                         contents: sysPrompt + "\n\n" + userText,
+                       });
+                       for await (const chunk of responseStream) {
+                         if (chunk.text) {
+                           fullText += chunk.text;
+                           currentStreamingTranslation = fullText.trim();
+                           updateLiveHud();
+                         }
+                       }
                      }
-                     
+
                      currentStreamingTranslation = "";
                      if (fullText.trim()) {
                        liveTranslations.push(fullText.trim());
@@ -324,7 +345,7 @@ export async function toggleLiveTranscriber() {
                      }
                      updateLiveHud();
                    }
-                   if (liveTranslations.length === 0 || !genAi) {
+                   if (liveTranslations.length === 0 || !hasGeminiKeys) {
                      const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
                      if (claudeKey) {
                        currentStreamingTranslation = "⏳...";
@@ -396,14 +417,24 @@ export async function toggleLiveTranscriber() {
                  // fallback tạm sang Gemini (đã có sẵn) để tính năng không bị câm,
                  // đồng thời báo rõ lý do trong log để người dùng biết cần cấu hình.
                  emitEvent({ type: "log", level: "warn", message: `Nhắc bài: gọi Claude thất bại (${claudeErr.message}), fallback sang Gemini.` });
-                 const genAi = await getGenAi();
-                 if (!genAi) { copilotStatus = ""; updateLiveHud(); return; }
+                 if (getAllGeminiKeys({ purpose: "teleprompter" }).length === 0 && !ai) { copilotStatus = ""; updateLiveHud(); return; }
                  try {
-                   const response = await genAi.models.generateContent({
-                     model: "gemini-flash-latest",
-                     contents: systemPrompt + "\n\n" + contextText,
-                   });
-                   suggestion = (response.text || "").trim();
+                   const response = getAllGeminiKeys({ purpose: "teleprompter" }).length > 0
+                     ? await withGeminiFailover(
+                         async (apiKey) => {
+                           const client = getGenAiClient(apiKey);
+                           return client.models.generateContent({
+                             model: "gemini-flash-latest",
+                             contents: systemPrompt + "\n\n" + contextText,
+                           });
+                         },
+                         { purpose: "teleprompter" }
+                       )
+                     : await ai.models.generateContent({
+                         model: "gemini-flash-latest",
+                         contents: systemPrompt + "\n\n" + contextText,
+                       });
+                   suggestion = (response?.text || "").trim();
                    engineUsed = "Gemini (fallback)";
                  } catch (geminiErr) {
                    copilotStatus = "";
@@ -541,8 +572,12 @@ export async function askTeleprompter(question) {
     copilotStatus = "📸 Đang chụp màn hình & chuyển sang Gemini Vision...";
     updateTeleprompterHud();
 
-    const geminiClient = await getGeminiVisionClient();
-    if (!geminiClient) {
+    const usePoolFailover = typeof withGeminiFailover === "function" && typeof getAllGeminiKeys === "function";
+    const geminiClient = usePoolFailover ? null : await getGeminiVisionClient();
+    const hasVisionKey = usePoolFailover
+      ? getAllGeminiKeys({ preferVision: true }).length > 0
+      : Boolean(geminiClient);
+    if (!hasVisionKey) {
       copilotStatus = "";
       updateTeleprompterHud();
       const prefix = claudeError ? `Claude: ${claudeError.message}. ` : "";
@@ -581,18 +616,31 @@ export async function askTeleprompter(question) {
       }
       contents.push({ text: prompt });
 
-      let geminiTimer = null;
-      const res = await Promise.race([
-        geminiClient.models.generateContent({
-          model: visionModel,
-          contents,
-        }),
-        new Promise((_, reject) => {
-          geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
-        }),
-      ]).finally(() => {
-        if (geminiTimer) clearTimeout(geminiTimer);
-      });
+      const invokeVision = async (client) => {
+        let geminiTimer = null;
+        return Promise.race([
+          client.models.generateContent({
+            model: visionModel,
+            contents,
+          }),
+          new Promise((_, reject) => {
+            geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
+          }),
+        ]).finally(() => {
+          if (geminiTimer) clearTimeout(geminiTimer);
+        });
+      };
+
+      const res = usePoolFailover
+        ? await withGeminiFailover(
+            async (apiKey) => {
+              const client = await getGeminiVisionClient(apiKey);
+              if (!client) throw new Error("Không có Gemini Vision client khả dụng.");
+              return invokeVision(client);
+            },
+            { purpose: "vision", preferVision: true }
+          )
+        : await invokeVision(geminiClient);
 
       answer = (res?.text || "").trim();
       engineUsed = screenBase64 ? "Gemini Vision" : "Gemini";

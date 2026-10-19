@@ -24,6 +24,7 @@ import { resolvePythonCommand } from "./sidecar-process.mjs";
 import { unpackedRepoRoot, userDataDir } from "./paths.mjs";
 import { saveScreenshot } from "./screenshot-store.mjs";
 import { grabJpeg, createFrameLoop } from "./vision-capture.mjs";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
 
 const MAX_IPC_FRAME_CHARS = 5_600_000; // ≈ 4 MB nhị phân sau base64
 
@@ -35,26 +36,32 @@ const base64Of = (dataUrlOrB64) => {
 };
 
 /**
- * Nếu người dùng cấu hình "Khoá Vision API (Tuỳ chọn)" (GEMINI_VISION_API_KEY) trong Settings,
- * gọi nhanh model gemini-flash-latest bằng khoá riêng đó (tối đa 3s) để trích xuất mô tả chính xác
- * khung hình mà không tốn quota của GEMINI_API_KEY. Nếu bỏ trống, dùng trực tiếp luồng Live (0.35s).
+ * Nếu người dùng cấu hình "Khoá Vision API (Tuỳ chọn)" (GEMINI_VISION_API_KEY) hoặc Key Pool trong Settings,
+ * gọi nhanh model gemini-flash-latest (tối đa 3s) kèm xoay vòng & tự động chuyển đổi khi chạm 429
+ * để trích xuất mô tả chính xác khung hình.
  */
 export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn hình/camera") {
-  const visionKey = String(process.env.GEMINI_VISION_API_KEY || "").trim();
-  if (!visionKey || !base64Jpeg) return null;
+  const hasVisionPool =
+    Boolean(String(process.env.GEMINI_VISION_API_KEY || "").trim()) ||
+    getAllGeminiKeys({ purpose: "vision", preferVision: true }).length > 0;
+  if (!hasVisionPool || !base64Jpeg) return null;
   let timer = null;
   try {
-    const { GoogleGenAI } = await import("@google/genai");
-    const visionAi = new GoogleGenAI({ apiKey: visionKey });
     const model = String(process.env.GEMINI_VISION_MODEL || "gemini-flash-latest").trim();
     const res = await Promise.race([
-      visionAi.models.generateContent({
-        model,
-        contents: [
-          { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
-          `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
-        ],
-      }),
+      withGeminiFailover(
+        async (apiKey) => {
+          const visionAi = getGenAiClient(apiKey);
+          return visionAi.models.generateContent({
+            model,
+            contents: [
+              { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
+              `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
+            ],
+          });
+        },
+        { purpose: "vision", preferVision: true }
+      ),
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error("vision timeout")), 3000);
       }),

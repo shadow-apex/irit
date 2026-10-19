@@ -539,6 +539,12 @@
   border-bottom: 2px solid var(--cyan);
 }
 
+.setup-grid-1 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
 .setup-grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -558,9 +564,15 @@
 }
 
 .setup-field.compact input,
+.setup-field.compact textarea,
 .setup-field.compact .ts-trigger {
   padding: 8px 11px;
   font-size: 12.5px;
+}
+
+.setup-field.compact textarea {
+  min-height: 68px;
+  resize: vertical;
 }
 
 .setup-field.compact .setup-note {
@@ -659,7 +671,8 @@
   color: var(--muted);
 }
 
-.setup-field input {
+.setup-field input,
+.setup-field textarea {
   width: 100%;
   padding: 10px 12px;
   border-radius: var(--r-sm);
@@ -672,11 +685,13 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.setup-field input::placeholder {
+.setup-field input::placeholder,
+.setup-field textarea::placeholder {
   color: rgba(100, 116, 142, 0.6);
 }
 
-.setup-field input:focus {
+.setup-field input:focus,
+.setup-field textarea:focus {
   border-color: rgba(var(--cyan-rgb), 0.5);
   box-shadow: 0 0 0 3px rgba(var(--cyan-rgb), 0.12);
 }
@@ -1458,3 +1473,256 @@
   justify-content: flex-end;
   gap: 10px;
 }
+
+/* ===== Gemini Key Pool UI (3 Primary + 7 Standby) ===== */
+.pool-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.pool-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.pool-status-tag.tag-full {
+  background: rgba(34, 197, 94, 0.16);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+.pool-status-tag.tag-ready {
+  background: rgba(var(--cyan-rgb), 0.14);
+  color: var(--cyan-bright);
+  border: 1px solid rgba(var(--cyan-rgb), 0.3);
+}
+
+.pool-status-tag.tag-warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.pool-status-tag.tag-empty {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+}
+
+.pool-roles-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .pool-roles-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.pool-role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(148, 196, 255, 0.03);
+  border: 1px solid rgba(148, 196, 255, 0.08);
+  transition: all 0.2s ease;
+  opacity: 0.55;
+}
+
+.pool-role-card.active {
+  opacity: 1;
+  background: rgba(var(--cyan-rgb), 0.07);
+  border-color: rgba(var(--cyan-rgb), 0.3);
+  box-shadow: 0 0 12px rgba(var(--cyan-rgb), 0.08);
+}
+
+.pool-role-card.standby.active {
+  background: rgba(56, 189, 248, 0.09);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.pool-role-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.pool-role-card.active .pool-role-head {
+  color: var(--cyan-bright);
+}
+
+.pool-role-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+.pool-role-card.active .pool-role-indicator {
+  background: #4ade80;
+  opacity: 1;
+  box-shadow: 0 0 6px #4ade80;
+}
+
+.pool-role-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pool-role-desc {
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.pool-textarea-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pool-textarea-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pool-textarea-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.pool-clean-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(var(--cyan-rgb), 0.1);
+  border: 1px solid rgba(var(--cyan-rgb), 0.25);
+  border-radius: 6px;
+  color: var(--cyan-bright);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pool-clean-btn:hover {
+  background: rgba(var(--cyan-rgb), 0.2);
+  border-color: var(--cyan);
+  color: #fff;
+}
+
+.pool-textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  min-height: 145px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(6, 11, 20, 0.85);
+  border: 1px solid rgba(var(--cyan-rgb), 0.22);
+  color: var(--text);
+  resize: vertical;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pool-textarea:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 10px rgba(var(--cyan-rgb), 0.25);
+}
+
+.pool-textarea::placeholder {
+  color: rgba(148, 196, 255, 0.35);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pool-textarea-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pool-link {
+  color: var(--cyan-bright);
+  text-decoration: none;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.pool-link:hover {
+  text-decoration: underline;
+}
+
+.pool-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.pool-vision-extra {
+  margin-top: 4px;
+  border-top: 1px dashed rgba(148, 196, 255, 0.12);
+  padding-top: 8px;
+}
+
+.pool-vision-details summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  user-select: none;
+  padding: 4px 0;
+  transition: color 0.15s ease;
+}
+
+.pool-vision-details summary:hover {
+  color: var(--text);
+}
+
+.pool-vision-body {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--hairline);
+}
+

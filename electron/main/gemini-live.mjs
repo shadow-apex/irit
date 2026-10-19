@@ -7,7 +7,6 @@
  * streaming transcripts + audio back down to the renderer.
  */
 import { buildVideoInput, stripDataUrl } from "./live-input.mjs";
-import { GoogleGenAI } from "@google/genai";
 import { emitToRenderer, emitEvent } from "./events.mjs";
 import { mainWindow, updateTrayMenu } from "./window-manager.mjs";
 import { buildClaudeTools } from "./claude-tools-catalog.mjs";
@@ -20,6 +19,7 @@ import { MODEL_CHOICES } from "./agent-roster.mjs";
 import { submitClaudeTask, sendWebMessage } from "./claude-runner.mjs";
 import { getRobotsConfig } from "./device-config.mjs";
 import { stopAllVisionLoops } from "./vision.mjs";
+import { getNextGeminiKey, getGenAiClient, markKeyRateLimited, isRateLimitError } from "./gemini-keys.mjs";
 
 export let liveSession = null;
 
@@ -212,64 +212,86 @@ export async function startLive() {
 }
 
 async function connectLive({ isReconnect }) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getNextGeminiKey({ purpose: "live" });
   if (!apiKey) {
     emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
     throw new Error("GEMINI_API_KEY is not set");
   }
 
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
-  ai = new GoogleGenAI({ apiKey });
+  ai = getGenAiClient(apiKey);
   liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
   emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec", geminiStatus: "connecting" } });
   emitEvent({ type: "gemini_status", status: "connecting", model });
 
-  liveSession = await ai.live.connect({
-    model,
-    config: buildLiveConfig(resumptionHandle),
-    callbacks: {
-      onopen() {
-        reconnectAttempts = 0;
-        liveStatus = { running: true, pid: process.pid, geminiStatus: "connected" };
-        emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec", geminiStatus: "connected" } });
-        emitEvent({ type: "gemini_status", status: "connected", model });
-        emitEvent({ type: "audio_state", state: "listening" });
-        updateTrayMenu();
-        // G-02: onopen có thể chạy TRƯỚC khi `liveSession` được gán (gán sau `await connect`), khi đó
-        // hàng đợi không xả được — nên xả cả ở đây lẫn ngay sau khi connect() trả về.
-        flushPendingAnnouncements();
-        // The resumed session keeps its context; greeting again mid-conversation
-        // every ~10 minutes would be jarring.
-        if (!isReconnect) GreetGate.arm();
-      },
-      onmessage(message) {
-        handleLiveMessage(message);
-      },
-      onerror(error) {
-        emitEvent({ type: "fatal", message: "Gemini Live error", error: error?.message || String(error) });
-      },
-      onclose(event) {
-        console.error("[IRIS][close] code=", event?.code, "reason=", event?.reason || "(none)");
-        flushTranscripts();
-        liveSession = null;
-        if (userStopped) {
-          liveStatus = { running: false, pid: null, geminiStatus: "offline" };
-          emitEvent({ type: "gemini_status", status: "offline" });
-          emitEvent({ type: "audio_state", state: "idle" });
-          emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
+  try {
+    liveSession = await ai.live.connect({
+      model,
+      config: buildLiveConfig(resumptionHandle),
+      callbacks: {
+        onopen() {
+          reconnectAttempts = 0;
+          liveStatus = { running: true, pid: process.pid, geminiStatus: "connected" };
+          emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec", geminiStatus: "connected" } });
+          emitEvent({ type: "gemini_status", status: "connected", model });
+          emitEvent({ type: "audio_state", state: "listening" });
           updateTrayMenu();
-          return;
-        }
-        liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
-        scheduleReconnect(event?.reason || "connection closed");
+          // G-02: onopen có thể chạy TRƯỚC khi `liveSession` được gán (gán sau `await connect`), khi đó
+          // hàng đợi không xả được — nên xả cả ở đây lẫn ngay sau khi connect() trả về.
+          flushPendingAnnouncements();
+          // The resumed session keeps its context; greeting again mid-conversation
+          // every ~10 minutes would be jarring.
+          if (!isReconnect) GreetGate.arm();
+        },
+        onmessage(message) {
+          handleLiveMessage(message);
+        },
+        onerror(error) {
+          if (isRateLimitError(error)) {
+            markKeyRateLimited(apiKey);
+            resumptionHandle = null;
+          }
+          emitEvent({ type: "fatal", message: "Gemini Live error", error: error?.message || String(error) });
+        },
+        onclose(event) {
+          console.error("[IRIS][close] code=", event?.code, "reason=", event?.reason || "(none)");
+          const isRateLimit = isRateLimitError(event?.reason) || event?.code === 1011;
+          if (isRateLimit) {
+            markKeyRateLimited(apiKey);
+            resumptionHandle = null;
+          }
+          flushTranscripts();
+          liveSession = null;
+          if (userStopped) {
+            liveStatus = { running: false, pid: null, geminiStatus: "offline" };
+            emitEvent({ type: "gemini_status", status: "offline" });
+            emitEvent({ type: "audio_state", state: "idle" });
+            emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
+            updateTrayMenu();
+            return;
+          }
+          liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
+          scheduleReconnect(event?.reason || "connection closed", { isRateLimit });
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    if (isRateLimitError(err)) {
+      markKeyRateLimited(apiKey);
+      resumptionHandle = null;
+      const nextKey = getNextGeminiKey({ purpose: "live" });
+      if (nextKey && nextKey !== apiKey) {
+        console.warn(`[IRIS] Live connect chạm giới hạn quota, tự động chuyển sang key tiếp theo...`);
+        return connectLive({ isReconnect });
+      }
+    }
+    throw err;
+  }
   // G-02: phiên đã được gán — xả các thông báo đã xếp hàng lúc offline/reconnect.
   flushPendingAnnouncements();
 }
 
-function scheduleReconnect(reason) {
+function scheduleReconnect(reason, { isRateLimit = false } = {}) {
   if (reconnectTimer) return;
   reconnectAttempts += 1;
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
@@ -287,14 +309,16 @@ function scheduleReconnect(reason) {
   // Repeated failures suggest a stale resumption handle — drop it and let the
   // remaining attempts open a fresh session (context lost, but Iris stays up).
   if (reconnectAttempts >= 3) resumptionHandle = null;
-  const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 8000);
+  // Khi chạm 429/1011 và chuyển sang Standby Key: tái kết nối cực nhanh (<0.3s)
+  const delay = isRateLimit ? 150 : Math.min(500 * 2 ** (reconnectAttempts - 1), 8000);
   console.log(`[IRIS][reconnect] attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms (${reason})`);
   emitEvent({ type: "gemini_status", status: "connecting" });
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectLive({ isReconnect: true }).catch((error) => {
       liveSession = null;
-      scheduleReconnect(error?.message || String(error));
+      const isNextRateLimit = isRateLimitError(error);
+      scheduleReconnect(error?.message || String(error), { isRateLimit: isNextRateLimit });
     });
   }, delay);
 }

@@ -10,6 +10,7 @@ import { spawnSidecar, stopSidecar, resolvePythonCommand } from "./sidecar-proce
 import { mainWindow, enterHud } from "./window-manager.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { emitEvent } from "./events.mjs";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
 
 // Thời lượng tối đa mỗi phân đoạn WAV gửi lên Gemini (25 phút ~ 48,000 audio tokens,
 // dưới xa trần 250k TPM của Gemini Free Tier và vừa khít giới hạn 8192 output tokens/lần gọi).
@@ -233,50 +234,57 @@ async function waitForFileActive(ai, fileName, timeoutMs = 90_000) {
   }
 }
 
-async function transcribeSingleWavChunk(ai, chunk, chunkIdx, totalChunks) {
-  let uploadResult = null;
+async function transcribeSingleWavChunk(fallbackAi, chunk, chunkIdx, totalChunks) {
   const rangeLabel = `${formatMMSS(chunk.startSec)} - ${formatMMSS(chunk.endSec)}`;
   const partLabel = totalChunks > 1 ? `phần ${chunkIdx + 1}/${totalChunks} (${rangeLabel})` : `(${rangeLabel})`;
 
   try {
-    sendHudStatus(
-      "Meeting Summarizer",
-      `Đang tải âm thanh ${partLabel} lên Gemini Cloud...`
-    );
-
-    uploadResult = await withRetry(
-      () => ai.files.upload({ file: chunk.path, config: { mimeType: "audio/wav" } }),
-      {
-        maxAttempts: 3,
-        onRetry: ({ attempt, waitMs }) =>
-          sendHudStatus(
-            "Meeting Summarizer",
-            `Mạng chập chờn khi tải ${partLabel}, đang thử lại lần ${attempt} sau ${Math.round(waitMs / 1000)}s...`
-          ),
-      }
-    );
-
-    await waitForFileActive(ai, uploadResult?.name);
-
-    sendHudStatus(
-      "Meeting Summarizer",
-      `Đang gỡ băng lời thoại ${partLabel} bằng Gemini...`
-    );
-
-    const timeOffsetHint =
-      chunk.startSec > 0
-        ? `\n- LƯU Ý: Đoạn âm thanh này bắt đầu từ mốc thời gian [${formatMMSS(chunk.startSec)}] của cuộc họp.`
-        : "";
-
-    const transResponse = await withRetry(
+    return await withRetry(
       () =>
-        ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: [
-            { fileData: { fileUri: uploadResult.uri, mimeType: uploadResult.mimeType || "audio/wav" } },
-            `Bạn là chuyên gia gỡ băng ghi âm cuộc họp. Hãy nghe thật kỹ file âm thanh này và xuất ra toàn bộ bản ghi lời thoại (transcript) chi tiết bằng tiếng Việt.\n- Giữ nguyên toàn bộ nội dung thảo luận, không tóm tắt hay cắt xén lời thoại ở bước này.\n- Phân đoạn rõ ràng theo mốc thời gian hoặc người nói nếu nhận diện được (ví dụ: [00:05] Người nói 1: ...).\n- Ghi lại trung thực các ý kiến, tranh luận và số liệu được nêu trong cuộc họp.${timeOffsetHint}`,
-          ],
-        }),
+        withGeminiFailover(
+          async (apiKey) => {
+            const ai = getGenAiClient(apiKey) || fallbackAi;
+            let uploadResult = null;
+            try {
+              sendHudStatus(
+                "Meeting Summarizer",
+                `Đang tải âm thanh ${partLabel} lên Gemini Cloud...`
+              );
+
+              uploadResult = await ai.files.upload({ file: chunk.path, config: { mimeType: "audio/wav" } });
+              await waitForFileActive(ai, uploadResult?.name);
+
+              sendHudStatus(
+                "Meeting Summarizer",
+                `Đang gỡ băng lời thoại ${partLabel} bằng Gemini...`
+              );
+
+              const timeOffsetHint =
+                chunk.startSec > 0
+                  ? `\n- LƯU Ý: Đoạn âm thanh này bắt đầu từ mốc thời gian [${formatMMSS(chunk.startSec)}] của cuộc họp.`
+                  : "";
+
+              const transResponse = await ai.models.generateContent({
+                model: "gemini-flash-latest",
+                contents: [
+                  { fileData: { fileUri: uploadResult.uri, mimeType: uploadResult.mimeType || "audio/wav" } },
+                  `Bạn là chuyên gia gỡ băng ghi âm cuộc họp. Hãy nghe thật kỹ file âm thanh này và xuất ra toàn bộ bản ghi lời thoại (transcript) chi tiết bằng tiếng Việt.\n- Giữ nguyên toàn bộ nội dung thảo luận, không tóm tắt hay cắt xén lời thoại ở bước này.\n- Phân đoạn rõ ràng theo mốc thời gian hoặc người nói nếu nhận diện được (ví dụ: [00:05] Người nói 1: ...).\n- Ghi lại trung thực các ý kiến, tranh luận và số liệu được nêu trong cuộc họp.${timeOffsetHint}`,
+                ],
+              });
+
+              return (transResponse.text || "").trim();
+            } finally {
+              if (uploadResult?.name) {
+                try {
+                  await ai.files.delete({ name: uploadResult.name });
+                } catch {
+                  // Bỏ qua nếu xoá không thành công
+                }
+              }
+            }
+          },
+          { maxRetries: Math.max(3, getAllGeminiKeys({ purpose: "meeting" }).length), purpose: "meeting" }
+        ),
       {
         maxAttempts: 4,
         onRetry: ({ attempt, waitMs, error }) =>
@@ -286,16 +294,7 @@ async function transcribeSingleWavChunk(ai, chunk, chunkIdx, totalChunks) {
           ),
       }
     );
-
-    return (transResponse.text || "").trim();
   } finally {
-    if (uploadResult?.name) {
-      try {
-        await ai.files.delete({ name: uploadResult.name });
-      } catch {
-        // Bỏ qua nếu xoá không thành công
-      }
-    }
     if (chunk.isTemp && fs.existsSync(chunk.path)) {
       try {
         fs.unlinkSync(chunk.path);
@@ -317,7 +316,7 @@ export async function toggleMeetingRecording() {
 
   // --- BẮT ĐẦU GHI ÂM ---
   if (!meetingRecorder || meetingRecorder.state === "dead") {
-    if (!process.env.GEMINI_API_KEY) {
+    if (getAllGeminiKeys({ purpose: "meeting" }).length === 0) {
       return { status: "error", error: "Thiếu GEMINI_API_KEY, vui lòng cấu hình trước khi ghi âm." };
     }
 
@@ -451,15 +450,14 @@ export async function processMeetingSummarization(wavPath) {
     if (stat.size <= WAV_HEADER_BYTES) {
       throw new Error("File ghi âm quá ngắn hoặc không có dữ liệu âm thanh (kích thước ≤ 44 bytes).");
     }
-    if (!process.env.GEMINI_API_KEY) {
+    if (getAllGeminiKeys({ purpose: "meeting" }).length === 0) {
       throw new Error("Thiếu GEMINI_API_KEY. Vui lòng cấu hình API key trước khi tóm tắt.");
     }
 
     // Tự động kiểm tra & vá WAV header nếu tiến trình bị tắt cưỡng bức
     repairWavHeaderIfNeeded(wavPath);
 
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const ai = getGenAiClient({ purpose: "meeting" });
 
     // --- BƯỚC 1: Lấy bản gỡ băng (nếu file _transcript.txt đã có sẵn thì dùng lại) ---
     const transcriptPath = wavPath.replace(/\.wav$/i, "_transcript.txt");
@@ -723,8 +721,9 @@ async function summarizeWithClaude(transcript, apiKey) {
   throw lastErr || new Error("Không nhận được phản hồi hợp lệ từ Claude API.");
 }
 
-async function summarizeWithGemini(transcript, ai) {
+async function summarizeWithGemini(transcript, fallbackAi) {
   let effectiveTranscript = transcript;
+  const maxRetries = Math.max(3, getAllGeminiKeys({ purpose: "meeting" }).length);
   if (transcript.length > MAX_DIRECT_TRANSCRIPT_CHARS) {
     const segments = splitTextByParagraphs(transcript, 80_000);
     const partialNotes = [];
@@ -734,12 +733,18 @@ async function summarizeWithGemini(transcript, ai) {
         `Transcript rất dài — Gemini đang tổng hợp phân đoạn ${i + 1}/${segments.length}...`
       );
       const segRes = await withRetry(() =>
-        ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: [
-            `Hãy trích xuất chi tiết mọi chủ đề thảo luận, số liệu, quyết định và công việc cần làm (Action Items) trong phân đoạn ${i + 1}/${segments.length} của cuộc họp sau:\n\n---\n${segments[i]}\n---`,
-          ],
-        })
+        withGeminiFailover(
+          async (apiKey) => {
+            const client = getGenAiClient(apiKey) || fallbackAi;
+            return client.models.generateContent({
+              model: "gemini-flash-latest",
+              contents: [
+                `Hãy trích xuất chi tiết mọi chủ đề thảo luận, số liệu, quyết định và công việc cần làm (Action Items) trong phân đoạn ${i + 1}/${segments.length} của cuộc họp sau:\n\n---\n${segments[i]}\n---`,
+              ],
+            });
+          },
+          { maxRetries, purpose: "meeting" }
+        )
       );
       if (segRes.text) partialNotes.push(`### Tổng hợp phân đoạn ${i + 1}/${segments.length}\n${segRes.text}`);
     }
@@ -748,10 +753,16 @@ async function summarizeWithGemini(transcript, ai) {
 
   const prompt = SUMMARY_PROMPT_TEMPLATE(effectiveTranscript);
   const response = await withRetry(() =>
-    ai.models.generateContent({
-      model: "gemini-flash-latest",
-      contents: [prompt],
-    })
+    withGeminiFailover(
+      async (apiKey) => {
+        const client = getGenAiClient(apiKey) || fallbackAi;
+        return client.models.generateContent({
+          model: "gemini-flash-latest",
+          contents: [prompt],
+        });
+      },
+      { maxRetries, purpose: "meeting" }
+    )
   );
   return response.text || "";
 }

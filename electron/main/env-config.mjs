@@ -14,6 +14,7 @@ import { repoRoot } from "./paths.mjs";
 import { liveSession } from "./gemini-live.mjs";
 import { emitToRenderer } from "./events.mjs";
 import { parseEnvContent, serializeConfigValue, mergeEnvLines, writeEnvFileSecure } from "./env-file.mjs";
+import { getAllGeminiKeys, getNextGeminiKey, parseGeminiKeys, getGeminiPartitions, resetGeminiKeyPoolState } from "./gemini-keys.mjs";
 
 export { serializeConfigValue };
 
@@ -54,7 +55,15 @@ export const GEMINI_VOICES = [
 export const GEMINI_LIVE_MODELS = ["models/gemini-3.1-flash-live-preview"];
 export const ALLOWED_CONFIG_KEYS = new Set([
   "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
   "GEMINI_VISION_API_KEY",
+  "GEMINI_VISION_API_KEYS",
+  "GEMINI_LIVE_API_KEY",
+  "GEMINI_LIVE_API_KEYS",
+  "GEMINI_MEETING_API_KEY",
+  "GEMINI_MEETING_API_KEYS",
+  "GEMINI_TELEPROMPTER_API_KEY",
+  "GEMINI_TELEPROMPTER_API_KEYS",
   "ANTHROPIC_API_KEY",
   "GEMINI_LIVE_MODEL",
   "GEMINI_LIVE_VOICE",
@@ -87,16 +96,32 @@ export function ensureIncludes(list, value) {
   return list;
 }
 
+function formatKeyPoolHint(keys) {
+  if (!keys || keys.length === 0) return "";
+  if (keys.length === 1) return keys[0].slice(-4);
+  return `${keys.length} keys configured`;
+}
+
 // Full settings snapshot for the SetupPanel. Values come from process.env
 // (populated from .env at boot and updated live on save).
 export function getFullConfig() {
+  const partitions = getGeminiPartitions();
+  const geminiKeys = partitions.all;
+  const visionKeys = partitions.vision;
   return {
-    // S-10: KHÔNG trả khoá thô cho renderer (lộ qua DevTools/log/ảnh chụp). Chỉ trạng thái + 4 ký tự cuối.
+    // S-10: KHÔNG trả khoá thô cho renderer (lộ qua DevTools/log/ảnh chụp). Chỉ trạng thái + 4 ký tự cuối hoặc số lượng key.
     autoStart: String(process.env.IRIS_AUTOSTART ?? "1").trim() !== "0",
-    geminiApiKeySet: Boolean((process.env.GEMINI_API_KEY || "").trim()),
-    geminiApiKeyHint: (process.env.GEMINI_API_KEY || "").trim().slice(-4),
-    geminiVisionApiKeySet: Boolean((process.env.GEMINI_VISION_API_KEY || "").trim()),
-    geminiVisionApiKeyHint: (process.env.GEMINI_VISION_API_KEY || "").trim().slice(-4),
+    geminiApiKeySet: geminiKeys.length > 0,
+    geminiApiKeyHint: formatKeyPoolHint(geminiKeys),
+    geminiKeyCount: geminiKeys.length,
+    geminiPartition: {
+      live: partitions.live.length,
+      meeting: partitions.meeting.length,
+      vision: partitions.vision.length,
+      total: partitions.all.length,
+    },
+    geminiVisionApiKeySet: visionKeys.length > 0,
+    geminiVisionApiKeyHint: formatKeyPoolHint(visionKeys),
     anthropicApiKeySet: Boolean((process.env.ANTHROPIC_API_KEY || "").trim()),
     anthropicApiKeyHint: (process.env.ANTHROPIC_API_KEY || "").trim().slice(-4),
     geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
@@ -112,7 +137,7 @@ export function getFullConfig() {
     filesystemOps: envFlag("IRIS_FILESYSTEM_OPS", true),
     windowManager: envFlag("IRIS_WINDOW_MANAGER", true),
     systemOps: envFlag("IRIS_SYSTEM_OPS", true),
-    configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
+    configured: geminiKeys.length > 0,
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
     configPath: userConfigPath(),
@@ -126,8 +151,14 @@ export function writeUserConfig(rawUpdates) {
   const updates = {};
   for (const [key, value] of Object.entries(rawUpdates || {})) {
     if (!ALLOWED_CONFIG_KEYS.has(key)) continue;
-    // S-10: SetupPanel không còn nhận khoá thô; ô trống = "giữ khoá hiện tại", không xoá.
-    if (["GEMINI_API_KEY", "GEMINI_VISION_API_KEY", "ANTHROPIC_API_KEY"].includes(key) && String(value ?? "").trim() === "") continue;
+    if ((key.startsWith("GEMINI_") || key === "ANTHROPIC_API_KEY") && String(value ?? "").trim() === "") continue;
+    if (key.startsWith("GEMINI_") && (key.includes("KEY") || key.includes("KEYS"))) {
+      const parsed = parseGeminiKeys(value);
+      if (parsed.length > 0) {
+        updates[key] = parsed.join(",");
+      }
+      continue;
+    }
     updates[key] = value;
   }
   if (!Object.keys(updates).length) return getFullConfig();
@@ -138,7 +169,12 @@ export function writeUserConfig(rawUpdates) {
   const lines = mergeEnvLines(existing, updates);
   writeEnvFileSecure(file, lines);
   for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
-  const keysChanged = "GEMINI_API_KEY" in updates || "GEMINI_VISION_API_KEY" in updates || "ANTHROPIC_API_KEY" in updates;
+  const keysChanged = Object.keys(updates).some(
+    (k) => k.startsWith("GEMINI_") || k === "ANTHROPIC_API_KEY"
+  );
+  if (keysChanged) {
+    resetGeminiKeyPoolState();
+  }
   if (keysChanged || "OMNIPARSER_ENABLED" in updates) {
     import("./omni-server.mjs")
       .then((m) => {
@@ -154,21 +190,8 @@ export function writeUserConfig(rawUpdates) {
   return getFullConfig();
 }
 
-// M-04: kiểm khoá bằng 2 bước. `models.list()` chỉ chứng minh khoá hợp lệ — KHÔNG chứng minh dùng được Live
-// (hết quota free, project bị chặn, model preview không có quyền => list vẫn OK nhưng phiên Live đóng 1011/1008).
-// Bước 2 mở MỘT kết nối Live thật tới model đã chọn, đợi onopen rồi đóng; trả lỗi gốc cho SetupPanel.
-export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {}) {
-  const key = (candidateKey || process.env.GEMINI_API_KEY || "").trim();
-  if (!key) return { ok: false, error: "No API key provided." };
-  const testAi = new GoogleGenAI({ apiKey: key });
-  try {
-    const pager = await testAi.models.list();
-    for await (const _ of pager) break;
-  } catch (error) {
-    return { ok: false, stage: "list", error: error?.message || String(error) };
-  }
-
-  const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
+async function testSingleLiveConnection(apiKey, model, liveTimeoutMs) {
+  const testAi = new GoogleGenAI({ apiKey });
   let session = null;
   let settled = false;
   try {
@@ -196,10 +219,92 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
   }
 }
 
+// M-04: kiểm khoá bằng 2 bước. `models.list()` chỉ chứng minh khoá hợp lệ — KHÔNG chứng minh dùng được Live
+// (hết quota free, project bị chặn, model preview không có quyền => list vẫn OK nhưng phiên Live đóng 1011/1008).
+// Bước 2 mở MỘT kết nối Live thật tới model đã chọn, đợi onopen rồi đóng; trả lỗi gốc cho SetupPanel.
+// Hỗ trợ kiểm tra toàn bộ danh sách key trong pool khi cấu hình nhiều key.
+export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {}) {
+  const candidatePool = candidateKey ? parseGeminiKeys(candidateKey) : getAllGeminiKeys({ includeVision: false });
+  if (candidatePool.length === 0) return { ok: false, error: "No API key provided." };
+
+  const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
+
+  if (candidatePool.length === 1) {
+    const key = candidatePool[0];
+    const testAi = new GoogleGenAI({ apiKey: key });
+    try {
+      const pager = await testAi.models.list();
+      for await (const _ of pager) break;
+    } catch (error) {
+      return { ok: false, stage: "list", error: error?.message || String(error), validKeys: [], failedCount: 1 };
+    }
+    const liveRes = await testSingleLiveConnection(key, model, liveTimeoutMs);
+    if (!liveRes.ok) {
+      return { ...liveRes, validKeys: [], failedCount: 1 };
+    }
+    return { ok: true, validKeys: [key], validCount: 1, totalCount: 1, failedCount: 0, message: "Key hoạt động tốt (Live API sẵn sàng)" };
+  }
+
+  // Khi có nhiều key trong pool: kiểm tra tính hợp lệ của từng key song song
+  const checks = await Promise.allSettled(
+    candidatePool.map(async (key) => {
+      const testAi = new GoogleGenAI({ apiKey: key });
+      const pager = await testAi.models.list();
+      for await (const _ of pager) break;
+      return key;
+    })
+  );
+
+  const validKeys = [];
+  const failedKeys = [];
+  checks.forEach((res, idx) => {
+    if (res.status === "fulfilled") {
+      validKeys.push(candidatePool[idx]);
+    } else {
+      failedKeys.push({ key: candidatePool[idx], error: res.reason?.message || String(res.reason) });
+    }
+  });
+
+  if (validKeys.length === 0) {
+    return {
+      ok: false,
+      stage: "list",
+      error: `Tất cả ${candidatePool.length} keys đều không hợp lệ. Lỗi mẫu: ${failedKeys[0]?.error}`,
+      validKeys: [],
+      failedCount: failedKeys.length,
+    };
+  }
+
+  // Thử kết nối Live với các key khả dụng cho tới khi có ít nhất 1 key kết nối thành công
+  let liveRes = null;
+  for (const key of validKeys) {
+    liveRes = await testSingleLiveConnection(key, model, liveTimeoutMs);
+    if (liveRes.ok) break;
+  }
+  if (liveRes && !liveRes.ok) {
+    return { ...liveRes, validKeys: [], failedCount: candidatePool.length };
+  }
+
+  const poolSummary =
+    failedKeys.length === 0
+      ? `Toàn bộ ${validKeys.length}/${candidatePool.length} keys hoạt động tốt (Live & Pool sẵn sàng)`
+      : `Đã giữ lại ${validKeys.length}/${candidatePool.length} keys hợp lệ (Đã tự động loại bỏ ${failedKeys.length} key không đủ điều kiện)`;
+
+  return {
+    ok: true,
+    message: poolSummary,
+    validCount: validKeys.length,
+    totalCount: candidatePool.length,
+    failedCount: failedKeys.length,
+    validKeys,
+  };
+}
+
 export let previewSession = null;
 export async function previewVoice(payload = {}) {
   if (liveSession) return { ok: false, error: "Sleep Iris before previewing a voice." };
-  const apiKey = (payload.key || process.env.GEMINI_API_KEY || "").trim();
+  const candidatePool = payload.key ? parseGeminiKeys(payload.key) : [];
+  const apiKey = (candidatePool[0] || getNextGeminiKey({ purpose: "live" }) || "").trim();
   if (!apiKey) return { ok: false, error: "Save your Gemini key first." };
   const voiceName = payload.voice || process.env.GEMINI_LIVE_VOICE || "Zephyr";
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Camera,
   Check,
@@ -54,18 +54,19 @@ const I18N = {
     language: "Language / Ngôn ngữ",
     langEn: "English (Default)",
     langVi: "Tiếng Việt",
-    geminiTitle: "Gemini API Keys",
-    geminiHint: "Powers Iris's realtime voice. Get one free at Google AI Studio.",
-    apiKey: "Gemini API Key",
+    geminiTitle: "Gemini API Key Pool (3 Primary + 7 Standby)",
+    geminiHint: "3 dedicated keys (Live, Meeting, Vision) + 7 shared standby keys to auto-bypass 429.",
+    apiKey: "Gemini API Key Pool (One key per line)",
     apiKeySaved: "•••• Stored (enter new to change)",
-    apiKeyPlaceholder: "AI… paste your key",
-    apiKeyNote: "Get a free key from Google AI Studio. Stored locally only.",
-    visionKey: "Vision API Key (Optional)",
+    apiKeyPlaceholder: "Paste list of Gemini API keys (one per line)...",
+    apiKeyNote: "Get free keys from Google AI Studio. Invalid keys are filtered automatically.",
+    visionKey: "Dedicated Vision API Key (Optional)",
     visionKeySaved: "•••• Stored (enter new to change)",
-    visionKeyPlaceholder: "For vision/image analysis (avoids live quota)",
-    visionKeyNote: "Separate key for image processing. Uses Live key if empty.",
-    testGemini: "Test Gemini",
-    keyWorks: "Key works",
+    visionKeyPlaceholder: "Key 3 in pool is already for Vision. Set only for separate key.",
+    visionKeyNote: "Key 3 in Key Pool is already dedicated to Vision. Leave empty to use Key 3.",
+    testGemini: "Test & Clean Keys",
+    formatClean: "Format 1 key/line",
+    keyWorks: "All keys ready",
     omniStart: "Start Omni",
     omniStop: "Stop Omni",
     omniRunning: "Running (Port {port})",
@@ -157,17 +158,18 @@ const I18N = {
     language: "Ngôn Ngữ Giao Diện",
     langEn: "Tiếng Anh (Mặc định)",
     langVi: "Tiếng Việt",
-    geminiTitle: "Khoá Gemini API",
-    geminiHint: "Cung cấp giọng nói thời gian thực. Lấy miễn phí tại Google AI Studio.",
-    apiKey: "Khoá Gemini API",
+    geminiTitle: "Khoá Gemini API Pool (3 Key Độc Lập + 7 Key Dự Phòng)",
+    geminiHint: "3 key độc lập (Live, Meeting, Vision) + 7 key dự phòng dùng chung tự động né lỗi 429.",
+    apiKey: "Danh Sách Gemini API Keys (Mỗi key 1 dòng)",
     apiKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
-    apiKeyPlaceholder: "AI… dán khoá của bạn",
-    apiKeyNote: "Lấy khoá miễn phí tại Google AI Studio. Chỉ lưu trữ trên máy.",
-    visionKey: "Khoá Vision API (Tuỳ chọn)",
+    apiKeyPlaceholder: "Dán danh sách các key (mỗi key 1 dòng)...",
+    apiKeyNote: "Lấy khoá miễn phí tại Google AI Studio. Key lỗi/hết hạn sẽ tự động bị loại bỏ.",
+    visionKey: "Khoá Vision API Riêng (Tuỳ chọn)",
     visionKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
-    visionKeyPlaceholder: "Dùng xử lý ảnh (tránh đụng quota)",
-    visionKeyNote: "Tách riêng quota xử lý ảnh. Nếu bỏ trống sẽ dùng chung khoá trên.",
-    testGemini: "Kiểm tra Gemini",
+    visionKeyPlaceholder: "Key 3 trong Pool đã dành cho Vision. Chỉ điền nếu dùng key ngoài.",
+    visionKeyNote: "Key 3 trong Pool đã dành riêng cho Vision. Nếu để trống sẽ tự dùng Key 3.",
+    testGemini: "Kiểm tra & Lọc Key",
+    formatClean: "Định dạng 1 key/dòng",
     keyWorks: "Kết nối tốt",
     omniStart: "Bật Omni",
     omniStop: "Tắt Omni",
@@ -477,8 +479,24 @@ export default function SetupPanel({
 
   async function testGemini() {
     setGemini({ status: "testing" });
-    const result = await window.iris.testGemini(draft.GEMINI_API_KEY.trim());
-    setGemini(result.ok ? { status: "ok", message: t.keyWorks } : { status: "error", message: result.error });
+    const rawInput = draft.GEMINI_API_KEY.trim();
+    const result = await window.iris.testGemini(rawInput);
+    if (result.ok) {
+      if (Array.isArray(result.validKeys) && result.validKeys.length > 0) {
+        // Tự động giữ nguyên các key đủ điều kiện (mỗi key 1 dòng)
+        // và loại bỏ các key lỗi / không đủ điều kiện khỏi danh sách
+        set("GEMINI_API_KEY", result.validKeys.join("\n"));
+      }
+      setGemini({
+        status: "ok",
+        message: result.message || t.keyWorks,
+      });
+    } else {
+      setGemini({
+        status: "error",
+        message: result.error || (lang === "vi" ? "Kiểm tra thất bại" : "Test failed"),
+      });
+    }
   }
 
   async function checkClaude() {
@@ -556,15 +574,132 @@ export default function SetupPanel({
             : t.omniStopped;
   const omniEndpointUrl = `${omni.url.replace(/\/+$/, "")}/parse`;
 
+  const parsedGeminiKeys = useMemo(() => {
+    const raw = draft.GEMINI_API_KEY.trim();
+    if (!raw) return [];
+    const items = raw.split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean);
+    const keys = items
+      .map((item) => {
+        const match = item.match(/AIza[0-9A-Za-z-_]{30,}/);
+        return match ? match[0] : item.split(/\s+/)[0];
+      })
+      .filter(Boolean);
+    return Array.from(new Set(keys));
+  }, [draft.GEMINI_API_KEY]);
+
+  const activeKeyCount = parsedGeminiKeys.length > 0 ? parsedGeminiKeys.length : (config.geminiKeyCount || 0);
+
+  const cleanAndFormatOnePerLine = () => {
+    if (parsedGeminiKeys.length > 0) {
+      set("GEMINI_API_KEY", parsedGeminiKeys.join("\n"));
+    }
+  };
+
+  const poolStatusBadge = (() => {
+    if (activeKeyCount >= 10) {
+      return <span className="pool-status-tag tag-full">10/10 Keys · Tối ưu nhất</span>;
+    }
+    if (activeKeyCount >= 3) {
+      return (
+        <span className="pool-status-tag tag-ready">
+          {activeKeyCount}/10 Keys · {lang === "vi" ? `3 Độc Lập + ${activeKeyCount - 3} Dự Phòng` : `3 Primary + ${activeKeyCount - 3} Standby`}
+        </span>
+      );
+    }
+    if (activeKeyCount >= 1) {
+      return <span className="pool-status-tag tag-warn">{activeKeyCount}/10 Keys · {lang === "vi" ? "Tối thiểu" : "Basic"}</span>;
+    }
+    return <span className="pool-status-tag tag-empty">0/10 Keys</span>;
+  })();
+
+  const roleLiveActive = activeKeyCount >= 1;
+  const roleMeetingActive = activeKeyCount >= 2;
+  const roleVisionActive = activeKeyCount >= 3;
+  const standbyCount = Math.max(0, activeKeyCount - 3);
+
   const geminiSection = (
-    <SetupBlock icon={<KeyRound size={15} />} title={t.geminiTitle} hint={t.geminiHint}>
-      <div className="setup-grid-2">
-        <label className="setup-field compact">
-          <span>{t.apiKey}</span>
-          <input
-            type="password"
+    <SetupBlock
+      icon={<KeyRound size={15} />}
+      title={t.geminiTitle}
+      hint={t.geminiHint}
+      aside={poolStatusBadge}
+    >
+      <div className="pool-container">
+        {/* Hàng 4 thẻ vai trò: Key 1 (Live), Key 2 (Meeting), Key 3 (Vision), Keys 4-10 (Dự phòng né lỗi 429) */}
+        <div className="pool-roles-grid">
+          <div className={`pool-role-card${roleLiveActive ? " active" : ""}`}>
+            <div className="pool-role-head">
+              <span>KEY 1 · DÒNG 1</span>
+              <span className="pool-role-indicator" />
+            </div>
+            <div className="pool-role-title">🎙️ Live Voice</div>
+            <div className="pool-role-desc">
+              {lang === "vi" ? "Đàm thoại giọng nói độc lập" : "Dedicated live voice"}
+            </div>
+          </div>
+
+          <div className={`pool-role-card${roleMeetingActive ? " active" : ""}`}>
+            <div className="pool-role-head">
+              <span>KEY 2 · DÒNG 2</span>
+              <span className="pool-role-indicator" />
+            </div>
+            <div className="pool-role-title">📝 Alt+M / Alt+T</div>
+            <div className="pool-role-desc">
+              {lang === "vi" ? "Ghi âm & Live Prompter" : "Meeting & teleprompter"}
+            </div>
+          </div>
+
+          <div className={`pool-role-card${roleVisionActive ? " active" : ""}`}>
+            <div className="pool-role-head">
+              <span>KEY 3 · DÒNG 3</span>
+              <span className="pool-role-indicator" />
+            </div>
+            <div className="pool-role-title">👁️ Vision</div>
+            <div className="pool-role-desc">
+              {lang === "vi" ? "Chụp màn hình & Webcam" : "Screen & camera vision"}
+            </div>
+          </div>
+
+          <div className={`pool-role-card standby${standbyCount > 0 ? " active" : ""}`}>
+            <div className="pool-role-head">
+              <span>KEYS 4–10 · DỰ PHÒNG</span>
+              <span className="pool-role-indicator" />
+            </div>
+            <div className="pool-role-title">🛡️ Standby ({standbyCount}/7)</div>
+            <div className="pool-role-desc">
+              {lang === "vi" ? "Dùng chung né lỗi 429" : "Auto-bypass 429 quota"}
+            </div>
+          </div>
+        </div>
+
+        {/* Khung nhập danh sách 10 API Key: mỗi key 1 dòng */}
+        <div className="pool-textarea-box">
+          <div className="pool-textarea-top">
+            <span className="pool-textarea-title">
+              {lang === "vi" ? "DANH SÁCH KEY (MỖI KEY 1 DÒNG — TỐI ĐA 10 KEYS)" : "KEY LIST (ONE KEY PER LINE — UP TO 10 KEYS)"}
+            </span>
+            {parsedGeminiKeys.length > 0 && (
+              <button
+                type="button"
+                className="pool-clean-btn"
+                onClick={cleanAndFormatOnePerLine}
+                title={lang === "vi" ? "Định dạng lại danh sách thành mỗi key một dòng sạch sẽ" : "Format cleanly as 1 key per line"}
+              >
+                ✨ {lang === "vi" ? "Chuẩn hoá 1 key/dòng" : "Format 1 key/line"}
+              </button>
+            )}
+          </div>
+          <textarea
+            className="pool-textarea"
+            rows={7}
             value={draft.GEMINI_API_KEY}
-            placeholder={config.geminiApiKeySet ? `•••• ${config.geminiApiKeyHint} — ${t.apiKeySaved}` : t.apiKeyPlaceholder}
+            placeholder={
+              config.geminiApiKeySet && !draft.GEMINI_API_KEY
+                ? (lang === "vi"
+                    ? `•••• ${config.geminiKeyCount || 1} keys đã lưu an toàn trong hệ thống ••••\n\nBấm "Kiểm tra & Lọc Key" bên dưới để quét kiểm tra và nạp danh sách vào đây,\nhoặc dán danh sách key mới (mỗi key 1 dòng, tối đa 10 keys).`
+                    : `•••• ${config.geminiKeyCount || 1} keys stored in system ••••\n\nClick "Test & Clean Keys" below to test and load keys,\nor paste new keys (one per line, up to 10 keys).`)
+                : `AIzaSy... (Dòng 1: Key Live đàm thoại giọng nói)\nAIzaSy... (Dòng 2: Key Cuộc họp Alt+M & Teleprompter Alt+T)\nAIzaSy... (Dòng 3: Key Vision chụp ảnh màn hình & camera)\nAIzaSy... (Dòng 4: Key Dự phòng 1 tự động né lỗi 429)\nAIzaSy... (Dòng 5: Key Dự phòng 2)\n... (Mỗi key một dòng, tối đa 10 keys)`
+            }
             onChange={(event) => {
               set("GEMINI_API_KEY", event.target.value);
               setGemini({ status: "idle" });
@@ -572,37 +707,54 @@ export default function SetupPanel({
             autoComplete="off"
             spellCheck={false}
           />
-          <small className="setup-note">
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-              Google AI Studio
+          <div className="pool-textarea-sub">
+            <span>
+              {lang === "vi"
+                ? "💡 Khi bấm \"Kiểm tra & Lọc Key\", key lỗi/hỏng sẽ tự động bị xoá khỏi danh sách, key hợp lệ được giữ nguyên."
+                : "💡 Clicking \"Test & Clean Keys\" automatically deletes invalid keys and keeps qualifying keys intact."}
+            </span>
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="pool-link">
+              Google AI Studio ↗
             </a>
-            . {t.apiKeyNote}
-          </small>
-        </label>
-        <label className="setup-field compact">
-          <span>{t.visionKey}</span>
-          <input
-            type="password"
-            value={draft.GEMINI_VISION_API_KEY}
-            placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — ${t.visionKeySaved}` : t.visionKeyPlaceholder}
-            onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <small className="setup-note">{t.visionKeyNote}</small>
-        </label>
-      </div>
-      <div className="setup-actions compact setup-block-actions">
-        <button
-          type="button"
-          className={`setup-btn${gemini.status === "ok" ? " is-ok" : ""}`}
-          onClick={testGemini}
-          disabled={!keyReady || gemini.status === "testing"}
-        >
-          {gemini.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
-          {t.testGemini}
-        </button>
-        <TestBadge state={gemini} okLabel={t.keyWorks} />
+          </div>
+        </div>
+
+        {/* Nút kiểm tra & huy hiệu trạng thái */}
+        <div className="setup-actions compact setup-block-actions pool-action-bar">
+          <button
+            type="button"
+            className={`setup-btn${gemini.status === "ok" ? " is-ok" : ""}`}
+            onClick={testGemini}
+            disabled={!keyReady || gemini.status === "testing"}
+          >
+            {gemini.status === "testing" ? <Loader2 size={13} className="spin" /> : null}
+            🔍 {t.testGemini}
+          </button>
+          <TestBadge state={gemini} okLabel={t.keyWorks} />
+        </div>
+
+        {/* Tuỳ chọn Vision Key riêng biệt (gọn gàng, không phá vỡ bố cục) */}
+        <div className="pool-vision-extra">
+          <details className="pool-vision-details" open={Boolean(draft.GEMINI_VISION_API_KEY)}>
+            <summary>
+              ⚙️ {lang === "vi" ? "Tuỳ chọn nâng cao: Dùng khoá Vision API riêng ngoài Pool (Không bắt buộc)" : "Advanced: Use separate Vision API Key outside Pool (Optional)"}
+            </summary>
+            <div className="pool-vision-body">
+              <label className="setup-field compact">
+                <span>{t.visionKey}</span>
+                <input
+                  type="password"
+                  value={draft.GEMINI_VISION_API_KEY}
+                  placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — ${t.visionKeySaved}` : t.visionKeyPlaceholder}
+                  onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <small className="setup-note">{t.visionKeyNote}</small>
+              </label>
+            </div>
+          </details>
+        </div>
       </div>
     </SetupBlock>
   );
