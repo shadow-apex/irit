@@ -19,6 +19,7 @@ import PoQuestionBanner from "./components/PoQuestionBanner";
 import ProjectBar from "./components/ProjectBar";
 import ReaderOverlay from "./components/ReaderOverlay";
 import HistoryDrawer from "./components/HistoryDrawer";
+import MeetingHistoryModal from "./components/MeetingHistoryModal";
 import TaskChooser from "./components/TaskChooser";
 import SetupPanel from "./components/SetupPanel";
 import HandReticles from "./components/HandReticles";
@@ -137,11 +138,20 @@ export default function App() {
   const [modeTransition, setModeTransition] = useState<"to-hud" | "to-deck" | null>(null);
   const modeTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [meetingHistoryOpen, setMeetingHistoryOpen] = useState(false);
 
   useEffect(() => {
     if (window.iris?.onFullscreenChange) {
       return window.iris.onFullscreenChange((payload: { fullscreen: boolean }) => {
         setIsFullscreen(payload.fullscreen);
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (window.iris?.onToggleMeetingHistory) {
+      return window.iris.onToggleMeetingHistory(() => {
+        setMeetingHistoryOpen((prev) => !prev);
       });
     }
   }, []);
@@ -505,7 +515,7 @@ export default function App() {
         const el = document.elementFromPoint(event.clientX, event.clientY);
         const next = Boolean(
           el?.closest?.(
-            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot",
+            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot, .meeting-history-modal",
           ),
         );
         if (next !== interactive) {
@@ -2076,6 +2086,7 @@ export default function App() {
           handStateRef={handStateRef}
           readerOpen={Boolean(openNote)}
           hudTopNotchEnabled={hudTopNotchEnabled}
+          onOpenMeetingHistory={() => setMeetingHistoryOpen(true)}
         />
       ) : (
       <div
@@ -2252,6 +2263,10 @@ export default function App() {
           stepsOpenIds={stepsOpenIds}
           onToggleTaskSteps={toggleTaskSteps}
         />
+      ) : null}
+
+      {meetingHistoryOpen ? (
+        <MeetingHistoryModal onClose={() => setMeetingHistoryOpen(false)} />
       ) : null}
 
       {taskChooser ? (

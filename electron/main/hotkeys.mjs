@@ -19,6 +19,7 @@ export const DEFAULT_HOTKEYS = Object.freeze({
   companionPip: "Alt+C",
   smartHomePip: "Alt+H",
   meetingRecorder: "Alt+M",
+  meetingHistory: "CommandOrControl+Alt+M",
   teleprompter: "Alt+T",
   copilot: "Alt+A",
 });

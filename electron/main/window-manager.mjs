@@ -138,7 +138,8 @@ export function enterHud() {
     mainWindow.setAlwaysOnTop(true, "screen-saver");
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
-    mainWindow.show();
+    // Dùng showInactive thay vì show() để không chiếm focus bàn phím, tránh làm Windows kẹt phím Alt/Ctrl
+    mainWindow.showInactive();
   }, 170);
 }
 

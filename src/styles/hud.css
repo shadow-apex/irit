@@ -753,3 +753,61 @@ html:not(.hud-mode) .ssr-root {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ===== Meeting History Modal (Ctrl + Alt + M) ===== */
+.meeting-history-modal {
+  animation: hudPopup 0.28s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.meeting-history-modal table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.meeting-history-modal th,
+.meeting-history-modal td {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.meeting-history-modal th {
+  background: rgba(255, 255, 255, 0.06);
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.meeting-history-modal tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.meeting-history-modal ul,
+.meeting-history-modal ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.meeting-history-modal li {
+  margin-bottom: 4px;
+}
+
+.meeting-history-modal h1,
+.meeting-history-modal h2,
+.meeting-history-modal h3 {
+  color: #f1f5f9;
+  margin-top: 14px;
+  margin-bottom: 8px;
+}
+
+.meeting-history-modal blockquote {
+  border-left: 3px solid #34d399;
+  padding-left: 12px;
+  margin: 10px 0;
+  color: #94a3b8;
+  background: rgba(52, 211, 153, 0.05);
+  padding: 6px 12px;
+  border-radius: 0 6px 6px 0;
+}
+

@@ -13,6 +13,7 @@ import { mainWindow } from "./window-manager.mjs";
 import { enterHud } from "./window-manager.mjs";
 import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
+import { grabPrimaryScreenJpeg } from "./vision.mjs";
 
 export let liveTranscriber = null; // handle { proc, state, exitCode }
 export let liveTranscripts = [];
@@ -44,7 +45,7 @@ export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
 let localGenAi = null;
 async function getGenAi() {
   if (ai) return ai;
-  const key = (process.env.GEMINI_API_KEY || "").trim();
+  const key = (process.env.GEMINI_API_KEY || process.env.GEMINI_VISION_API_KEY || "").trim();
   if (!key) return null;
   if (!localGenAi) {
     const { GoogleGenAI } = await import("@google/genai");
@@ -53,34 +54,77 @@ async function getGenAi() {
   return localGenAi;
 }
 
-export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 400 } = {}) {
-  const apiKey = (process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
+export async function getGeminiVisionClient() {
+  const key = (process.env.GEMINI_VISION_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+  if (!key) return null;
+  const { GoogleGenAI } = await import("@google/genai");
+  return new GoogleGenAI({ apiKey: key });
+}
+
+export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 600 } = {}) {
+  const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
   if (!apiKey) {
     throw new Error(
-      "Thiếu IRIS_TELEPROMPTER_ANTHROPIC_KEY trong .env — cần API key Claude riêng cho tính năng Dịch/Nhắc bài (xem .env.example)."
+      "Thiếu ANTHROPIC_API_KEY trong cấu hình / .env — chưa cấu hình API key Claude."
     );
   }
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userText }],
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text().catch(() => res.statusText);
-    throw new Error(`Claude API lỗi ${res.status}: ${errText}`);
+  const candidateModels = [
+    process.env.ANTHROPIC_MODEL,
+    "claude-3-7-sonnet-latest",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-latest",
+  ].filter(Boolean);
+
+  const uniqueModels = [...new Set(candidateModels)];
+  let lastErr = null;
+
+  for (const model of uniqueModels) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userText }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        if (res.status === 404 && uniqueModels.indexOf(model) < uniqueModels.length - 1) {
+          console.warn(`[callClaudeForTeleprompter] Model ${model} không tồn tại (404), thử model tiếp theo...`);
+          continue;
+        }
+        throw new Error(`Claude API (${model}) lỗi ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      const block = Array.isArray(data.content) ? data.content.find((b) => b.type === "text") : null;
+      return (block?.text || "").trim();
+    } catch (err) {
+      if (err.name === "AbortError") {
+        throw new Error("Claude API quá thời gian chờ (15s)");
+      }
+      lastErr = err;
+      if (!err.message?.includes("404")) {
+        throw err;
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
-  const data = await res.json();
-  const block = Array.isArray(data.content) ? data.content.find((b) => b.type === "text") : null;
-  return (block?.text || "").trim();
+
+  throw lastErr || new Error("Không thể gọi Claude API");
 }
 
 let hudClearTimer = null;
@@ -94,7 +138,7 @@ export function updateTeleprompterHud() {
       t.push(`[Đang dịch]: ${currentStreamingTranslation}`);
     }
     if (t.length) {
-      content += "\n\n" + t.join("\n");
+      content += `\n\n🌐 [Dịch sang ${translateTargetLang || "ngôn ngữ đích"}]:\n` + t.join("\n");
     }
   }
   // Nhắc bài không còn ghi đè vào `content` dạng text (dòng đơn, dễ mất) —
@@ -105,8 +149,8 @@ export function updateTeleprompterHud() {
     mainWindow.webContents.send("hud:message", {
       title: "Live Teleprompter",
       content,
-      copilotHistory: copilotEnabled ? copilotHistory : undefined,
-      copilotStatus: copilotEnabled ? copilotStatus : undefined,
+      copilotHistory: (copilotEnabled || copilotHistory.length > 0) ? copilotHistory : undefined,
+      copilotStatus: (copilotEnabled || copilotStatus) ? copilotStatus : undefined,
     });
   } catch (err) {
     console.warn("[updateTeleprompterHud] Lỗi gửi hud:message:", err);
@@ -114,24 +158,24 @@ export function updateTeleprompterHud() {
 }
 
 export async function toggleTranslateMode(targetLang) {
-  translateEnabled = !translateEnabled;
-  if (translateEnabled) {
-    translateTargetLang = (targetLang || "English").trim();
+  const cleanLang = (targetLang || "").trim();
+  if (cleanLang) {
+    // Nếu chọn ngôn ngữ cụ thể -> luôn BẬT và chuyển sang ngôn ngữ đó
+    translateEnabled = true;
+    translateTargetLang = cleanLang;
     liveTranslations = [];
     currentStreamingTranslation = "";
-    // Dịch và Nhắc bài loại trừ nhau (xem comment ở khai báo translateEnabled
-    // phía trên) — tắt Nhắc bài nếu đang bật, đối xứng với việc
-    // toggleCopilotMode() đã tắt Dịch khi bật Nhắc bài. Bản trước chỉ tắt
-    // 1 chiều (bật Nhắc bài mới tắt Dịch) nên bật Dịch trong lúc Nhắc bài
-    // đang chạy khiến cả 2 chạy song song, chồng gợi ý lên nhau.
     if (copilotEnabled) {
       copilotEnabled = false;
       copilotStatus = "";
       if (copilotTimer) clearTimeout(copilotTimer);
     }
   } else {
+    // Tắt dịch
+    translateEnabled = false;
     translateTargetLang = "";
     liveTranslations = [];
+    currentStreamingTranslation = "";
   }
   updateTeleprompterHud();
   return { status: "success", message: `Dịch: ${translateEnabled ? `BẬT (${translateTargetLang})` : "TẮT"}` };
@@ -279,16 +323,23 @@ export async function toggleLiveTranscriber() {
                        }
                      }
                      updateLiveHud();
-                   } else {
-                     const translated = await callClaudeForTeleprompter(sysPrompt, userText, { maxTokens: 200 });
-                     if (translated) {
-                       liveTranslations.push(translated);
-                       if (liveTranslations.length > 3) liveTranslations.shift();
-                       if (liveLogStream) {
-                         const latencyMs = Date.now() - finalizedAt;
-                         liveLogStream.write(`[Dịch Claude -> ${translateTargetLang}] (⏱ ${latencyMs}ms): ${translated}\n`);
-                       }
+                   }
+                   if (liveTranslations.length === 0 || !genAi) {
+                     const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
+                     if (claudeKey) {
+                       currentStreamingTranslation = "⏳...";
                        updateLiveHud();
+                       const translated = await callClaudeForTeleprompter(sysPrompt, userText, { maxTokens: 300 });
+                       currentStreamingTranslation = "";
+                       if (translated) {
+                         liveTranslations.push(translated);
+                         if (liveTranslations.length > 3) liveTranslations.shift();
+                         if (liveLogStream) {
+                           const latencyMs = Date.now() - finalizedAt;
+                           liveLogStream.write(`[Dịch Claude -> ${translateTargetLang}] (⏱ ${latencyMs}ms): ${translated}\n`);
+                         }
+                         updateLiveHud();
+                       }
                      }
                    }
                  } catch (e) {
@@ -446,54 +497,130 @@ export async function toggleLiveTranscriber() {
 }
 
 export async function askTeleprompter(question) {
-  if (!liveTranscriber || liveTranscriber.state === "dead") {
-    return { status: "error", error: "Vui lòng bật Live Teleprompter (Alt+T) trước." };
+  if (!question || typeof question !== "string" || !question.trim()) {
+    return { status: "error", error: "Câu hỏi không được để trống." };
   }
-  
-  if (!copilotEnabled) {
-    toggleCopilotMode();
-  }
-  
-  const contextText = copilotBuffer.join("\n");
-  const systemPrompt = "Bạn là trợ lý đắc lực trong cuộc họp. Dựa vào transcript cuộc họp sau đây, hãy trả lời câu hỏi của tôi thật ngắn gọn và chính xác.\n\nTranscript:\n" + contextText;
-  
-  copilotStatus = "🔎 Đang tra cứu AI...";
+  const cleanQ = question.trim();
+
+  // Đảm bảo mở HUD và kích hoạt chế độ nhắc bài để hiển thị kết quả
+  copilotEnabled = true;
+  enterHud();
+
+  const contextText = copilotBuffer.length > 0
+    ? copilotBuffer.join("\n")
+    : (liveTranscripts.length > 0 ? liveTranscripts.join("\n") : "(Chưa có nội dung phiên âm)");
+
+  const systemPrompt =
+    "Bạn là trợ lý AI thông minh trong cuộc họp và hỗ trợ công việc. " +
+    "Dựa vào nội dung cuộc họp hoặc ảnh chụp màn hình hiện tại (nếu có), hãy trả lời câu hỏi của người dùng thật súc tích, chính xác và trực tiếp.\n\n" +
+    "Nội dung phiên âm cuộc họp gần nhất:\n" + contextText;
+
+  copilotStatus = "⏳ Đang gửi câu hỏi tới Claude...";
   updateTeleprompterHud();
 
   let answer = "";
   let engineUsed = "Claude";
-  try {
-    answer = await callClaudeForTeleprompter(systemPrompt, question, { maxTokens: 400 });
-  } catch (err) {
-    const genAi = await getGenAi();
-    if (!genAi) {
-       copilotStatus = ""; updateTeleprompterHud(); return { status: "error", error: "Cả Claude và Gemini API đều chưa được cấu hình." };
-    }
-    // fallback gemini
+  let claudeError = null;
+
+  // 1. Ưu tiên gọi Claude API trước
+  const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
+  if (claudeKey) {
     try {
-      const response = await genAi.models.generateContent({
-        model: "gemini-flash-latest",
-        contents: systemPrompt + "\n\nCâu hỏi: " + question,
+      answer = await callClaudeForTeleprompter(systemPrompt, cleanQ, { maxTokens: 600 });
+      engineUsed = "Claude";
+    } catch (err) {
+      claudeError = err;
+      console.warn("[askTeleprompter] Claude API thất bại, chuyển sang Gemini Vision:", err.message);
+    }
+  } else {
+    claudeError = new Error("Chưa cấu hình ANTHROPIC_API_KEY trong .env");
+  }
+
+  // 2. Dự phòng: Không có key Claude hoặc Claude lỗi => dùng Gemini Vision + chụp màn hình
+  if (!answer) {
+    copilotStatus = "📸 Đang chụp màn hình & chuyển sang Gemini Vision...";
+    updateTeleprompterHud();
+
+    const geminiClient = await getGeminiVisionClient();
+    if (!geminiClient) {
+      copilotStatus = "";
+      updateTeleprompterHud();
+      const prefix = claudeError ? `Claude: ${claudeError.message}. ` : "";
+      return {
+        status: "error",
+        error: `${prefix}Gemini Vision chưa được cấu hình (thiếu GEMINI_API_KEY hoặc GEMINI_VISION_API_KEY).`
+      };
+    }
+
+    try {
+      // Chụp màn hình chính gửi kèm cho Gemini Vision
+      let screenBase64 = null;
+      try {
+        const grabbed = await grabPrimaryScreenJpeg(75);
+        if (grabbed?.buffer && Buffer.isBuffer(grabbed.buffer)) {
+          screenBase64 = grabbed.buffer.toString("base64");
+        }
+      } catch (grabErr) {
+        console.warn("[askTeleprompter] Không thể chụp màn hình cho Gemini Vision:", grabErr.message);
+      }
+
+      const visionModel = String(process.env.GEMINI_VISION_MODEL || "gemini-flash-latest").trim();
+      const prompt =
+        `${systemPrompt}\n\n` +
+        (screenBase64 ? "Lưu ý: Đã đính kèm ảnh chụp màn hình hiện tại để bạn quan sát ngữ cảnh ứng dụng/tài liệu đang mở.\n\n" : "") +
+        `Câu hỏi của người dùng: ${cleanQ}`;
+
+      const contents = [];
+      if (screenBase64) {
+        contents.push({
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: screenBase64,
+          },
+        });
+      }
+      contents.push({ text: prompt });
+
+      let geminiTimer = null;
+      const res = await Promise.race([
+        geminiClient.models.generateContent({
+          model: visionModel,
+          contents,
+        }),
+        new Promise((_, reject) => {
+          geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
+        }),
+      ]).finally(() => {
+        if (geminiTimer) clearTimeout(geminiTimer);
       });
-      answer = (response.text || "").trim();
-      engineUsed = "Gemini";
+
+      answer = (res?.text || "").trim();
+      engineUsed = screenBase64 ? "Gemini Vision" : "Gemini";
     } catch (gErr) {
-       copilotStatus = ""; updateTeleprompterHud(); return { status: "error", error: "Lỗi gọi API: " + gErr.message };
+      copilotStatus = "";
+      updateTeleprompterHud();
+      const prefix = claudeError ? `Claude: ${claudeError.message}. ` : "";
+      return {
+        status: "error",
+        error: `${prefix}Gemini Vision lỗi: ${gErr.message}`,
+      };
     }
   }
 
   if (answer) {
     copilotHistory.push({
       id: `${Date.now()}-qna`,
-      question: `🔎 (Hỏi trực tiếp): ${question}`,
+      question: `🔎 (Hỏi trực tiếp): ${cleanQ}`,
       answer: answer,
       ts: Date.now(),
       engine: engineUsed,
     });
-    if (copilotHistory.length > COPILOT_HISTORY_MAX) copilotHistory.shift();
+    if (copilotHistory.length > COPILOT_HISTORY_MAX) {
+      copilotHistory.shift();
+    }
   }
-  
+
   copilotStatus = "";
   updateTeleprompterHud();
-  return { status: "success" };
+  return { status: "success", answer, engine: engineUsed };
 }

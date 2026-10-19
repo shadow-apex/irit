@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone, Monitor, Subtitles, Disc } from "lucide-react";
+import { Hand, PictureInPicture2, Radio, Settings, Bot, Smartphone, Monitor, Subtitles, Disc, Loader2 } from "lucide-react";
 import AppLauncher from "./AppLauncher";
 
 function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
@@ -36,17 +36,45 @@ export default function TopBar({
 }) {
   const [isScreenVision, setIsScreenVision] = useState(false);
   const [isMeetingRecording, setIsMeetingRecording] = useState(false);
+  const [isMeetingSummarizing, setIsMeetingSummarizing] = useState(false);
+  const [meetingStatusText, setMeetingStatusText] = useState("");
+  const [meetingStartTime, setMeetingStartTime] = useState<number | null>(null);
+  const [recordingDuration, setRecordingDuration] = useState("");
   const [isTeleprompter, setIsTeleprompter] = useState(false);
 
   const refreshStates = useCallback(() => {
     window.iris?.getScreenVisionState?.().then((s) => setIsScreenVision(!!s?.isVisionEnabled)).catch(() => {});
-    window.iris?.getMeetingRecordingState?.().then((s) => setIsMeetingRecording(!!s?.isRecording)).catch(() => {});
+    window.iris
+      ?.getMeetingRecordingState?.()
+      .then((s) => {
+        setIsMeetingRecording(!!s?.isRecording);
+        setIsMeetingSummarizing(!!s?.isSummarizing);
+        setMeetingStatusText(s?.statusText || "");
+        setMeetingStartTime(s?.startTime || null);
+      })
+      .catch(() => {});
     window.iris?.getTeleprompterState?.().then((s) => setIsTeleprompter(!!s?.transcriberActive)).catch(() => {});
   }, []);
 
   useEffect(() => {
+    if (!isMeetingRecording || !meetingStartTime) {
+      setRecordingDuration("");
+      return;
+    }
+    const tick = () => {
+      const sec = Math.max(0, Math.floor((Date.now() - meetingStartTime) / 1000));
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      setRecordingDuration(`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+    };
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [isMeetingRecording, meetingStartTime]);
+
+  useEffect(() => {
     refreshStates();
-    const iv = setInterval(refreshStates, 2500);
+    const iv = setInterval(refreshStates, 1500);
     return () => clearInterval(iv);
   }, [refreshStates]);
 
@@ -61,6 +89,7 @@ export default function TopBar({
   };
 
   const handleToggleMeeting = async () => {
+    if (isMeetingSummarizing) return;
     await window.iris?.toggleMeetingRecording?.();
     refreshStates();
   };
@@ -115,12 +144,29 @@ export default function TopBar({
           <Subtitles size={16} />
         </button>
         <button
-          className={`theme-toggle ${isMeetingRecording ? "active" : ""}`}
+          className={`theme-toggle ${isMeetingRecording || isMeetingSummarizing ? "active" : ""}`}
           onClick={handleToggleMeeting}
-          title={`Ghi âm & Tóm tắt cuộc họp (Alt+M)${isMeetingRecording ? " · Đang ghi âm" : ""}`}
+          disabled={isMeetingSummarizing}
+          title={
+            isMeetingSummarizing
+              ? `Đang xử lý cuộc họp: ${meetingStatusText || "Đang bóc băng & tóm tắt..."}`
+              : `Ghi âm & Tóm tắt cuộc họp (Alt+M)${isMeetingRecording ? ` · Đang ghi âm (${recordingDuration || "00:00"})` : ""}`
+          }
           aria-label="Toggle Meeting Recording"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            width: isMeetingRecording && recordingDuration ? "auto" : undefined,
+            padding: isMeetingRecording && recordingDuration ? "0 8px" : undefined,
+          }}
         >
-          <Disc size={16} />
+          {isMeetingSummarizing ? <Loader2 size={16} className="spin" /> : <Disc size={16} />}
+          {isMeetingRecording && recordingDuration && (
+            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "#ef4444" }}>
+              {recordingDuration}
+            </span>
+          )}
         </button>
         <AppLauncher />
         <button

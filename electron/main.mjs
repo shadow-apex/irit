@@ -49,6 +49,8 @@ import {
   mainWindow,
   appIcon,
   createWindow,
+  enterHud,
+  exitHud,
   toggleHud,
   uiMode,
   createTray,
@@ -59,6 +61,7 @@ import {
   toggleDeckFullscreen,
   isDeckFullscreen,
 } from "./main/window-manager.mjs";
+import { unstickModifiers } from "./computer-session.mjs";
 import {
   liveSession,
   liveStatus,
@@ -105,7 +108,7 @@ import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
 import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
-import { toggleMeetingRecording, meetingRecorder } from "./main/meeting-recording.mjs";
+import { toggleMeetingRecording, meetingRecorder, getMeetingState, listMeetingHistory, summarizeMeetingAudio } from "./main/meeting-recording.mjs";
 import {
   toggleTranslateMode,
   toggleCopilotMode,
@@ -370,8 +373,8 @@ app.whenReady().then(() => {
     translateEnabled,
     translateTargetLang,
     copilotEnabled,
-    copilotHistory: copilotEnabled ? copilotHistory : [],
-    copilotStatus: copilotEnabled ? copilotStatus : "",
+    copilotHistory: (copilotEnabled || copilotHistory.length > 0) ? copilotHistory : [],
+    copilotStatus: copilotStatus || "",
   }));
   ipcMain.handle("teleprompter:toggle-translate", (_event, targetLang) => toggleTranslateMode(targetLang));
   ipcMain.handle("teleprompter:toggle-copilot", () => toggleCopilotMode());
@@ -380,9 +383,32 @@ app.whenReady().then(() => {
   ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());
   ipcMain.handle("vision:get-screen-state", () => ({ isVisionEnabled }));
   ipcMain.handle("meeting:toggle", () => toggleMeetingRecording());
-  ipcMain.handle("meeting:get-state", () => ({
-    isRecording: Boolean(meetingRecorder && meetingRecorder.state !== "dead"),
-  }));
+  ipcMain.handle("meeting:get-state", () => getMeetingState());
+  ipcMain.handle("meeting:list-history", () => listMeetingHistory());
+  ipcMain.handle("meeting:summarize", async (_event, targetPath) => summarizeMeetingAudio(targetPath));
+  ipcMain.handle("meeting:open-folder", async (_event, folderPath) => {
+    if (!folderPath || typeof folderPath !== "string") return false;
+    try {
+      let p = folderPath;
+      if (fs.existsSync(p)) {
+        const stat = fs.statSync(p);
+        if (!stat.isDirectory()) p = path.dirname(p);
+        await shell.openPath(p);
+        return true;
+      }
+    } catch (e) {
+      console.warn("[meeting:open-folder] Lỗi mở thư mục:", e);
+    }
+    return false;
+  });
+  let hudOpenedForMeetingHistory = false;
+  ipcMain.handle("meeting:close-history", () => {
+    if (hudOpenedForMeetingHistory) {
+      hudOpenedForMeetingHistory = false;
+      exitHud();
+    }
+    return { ok: true };
+  });
   ipcMain.on("win:control", (_event, action) => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();
@@ -493,6 +519,9 @@ app.whenReady().then(() => {
   const registerHud = (acc) => {
     try {
       return globalShortcut.register(acc, () => {
+        setTimeout(() => {
+          unstickModifiers().catch(() => {});
+        }, 50);
         toggleHud();
         updateTrayMenu();
       });
@@ -508,6 +537,9 @@ app.whenReady().then(() => {
 
   // Phím tắt Ctrl + Space để tràn toàn màn hình (phủ cả taskbar)
   globalShortcut.register("CommandOrControl+Space", () => {
+    setTimeout(() => {
+      unstickModifiers().catch(() => {});
+    }, 50);
     toggleDeckFullscreen();
   });
 
@@ -574,6 +606,18 @@ app.whenReady().then(() => {
     companionPip: { label: "Companion PiP", run: sendToRenderer("ui:toggle-companion-pip") },
     smartHomePip: { label: "Smart Home Cameras PiP", run: sendToRenderer("ui:toggle-smarthome-pip") },
     meetingRecorder: { label: "Meeting Recorder", run: () => toggleMeetingRecording() },
+    meetingHistory: {
+      label: "Meeting History",
+      run: () => {
+        if (uiMode === "deck") {
+          hudOpenedForMeetingHistory = true;
+          enterHud();
+        }
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents?.isDestroyed?.()) {
+          mainWindow.webContents.send("meeting:toggle-history");
+        }
+      },
+    },
     teleprompter: { label: "Teleprompter", run: () => toggleLiveTranscriber() },
     copilot: { label: "AI Copilot", run: () => toggleCopilotMode() },
   };
@@ -581,8 +625,16 @@ app.whenReady().then(() => {
     const accelerator = hotkeys[id];
     if (!accelerator) continue; // bị tắt qua IRIS_HOTKEYS hoặc trùng phím
     let ok = false;
+    const safeRun = () => {
+      if (/alt|commandorcontrol|ctrl|shift|super/i.test(accelerator)) {
+        setTimeout(() => {
+          unstickModifiers().catch(() => {});
+        }, 50);
+      }
+      action.run();
+    };
     try {
-      ok = globalShortcut.register(accelerator, action.run);
+      ok = globalShortcut.register(accelerator, safeRun);
     } catch (e) {
       emitEvent({ type: "log", level: "error", message: `Invalid ${action.label} hotkey ${accelerator}: ${e?.message || e}` });
       continue;
@@ -594,6 +646,9 @@ app.whenReady().then(() => {
 
   for (let i = 1; i <= 9; i++) {
     globalShortcut.register(`CommandOrControl+Alt+${i}`, () => {
+      setTimeout(() => {
+        unstickModifiers().catch(() => {});
+      }, 50);
       if (mainWindow) {
         mainWindow.webContents.send("ui:expand-robot-pip", i);
       }
@@ -603,6 +658,9 @@ app.whenReady().then(() => {
   // Phím tắt Alt+S bổ trợ cho Screen Vision (tiện dụng, song song với Super+Shift+V)
   try {
     globalShortcut.register("Alt+S", () => {
+      setTimeout(() => {
+        unstickModifiers().catch(() => {});
+      }, 50);
       toggleScreenVision();
     });
   } catch (e) {}

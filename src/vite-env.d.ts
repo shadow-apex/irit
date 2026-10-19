@@ -25,6 +25,24 @@ type TeleprompterCopilotEntry = {
   engine?: string;
 };
 
+type MeetingHistoryItem = {
+  id: string;
+  date: string;
+  time: string;
+  timeKey: string;
+  folderPath: string;
+  wavPath: string | null;
+  transcriptPath: string | null;
+  summaryPath: string | null;
+  summaryContent: string;
+  snippet: string;
+  createdAt: number | null;
+  hasSummary: boolean;
+  hasWav: boolean;
+  hasTranscript: boolean;
+  durationSeconds?: number;
+};
+
 // Ported from myiris (prompt-review-gate spec): a brief parked by
 // submit_claude_task for Approve/Edit/Cancel before any Claude tokens are
 // spent.
@@ -328,7 +346,18 @@ type IrisApi = {
   toggleScreenVision: () => Promise<{ status: string; message?: string; error?: string }>;
   getScreenVisionState: () => Promise<{ isVisionEnabled: boolean }>;
   toggleMeetingRecording: () => Promise<{ status: string; message?: string; error?: string }>;
-  getMeetingRecordingState: () => Promise<{ isRecording: boolean }>;
+  getMeetingRecordingState: () => Promise<{
+    isRecording: boolean;
+    isSummarizing?: boolean;
+    statusText?: string;
+    startTime?: number | null;
+    elapsedSeconds?: number;
+  }>;
+  getMeetingHistory: () => Promise<MeetingHistoryItem[]>;
+  openMeetingFolder: (folderPath: string) => Promise<boolean>;
+  closeMeetingHistory: () => Promise<{ ok: boolean }>;
+  summarizeMeetingSession: (targetPath: string) => Promise<{ status: string; summary?: string; error?: string }>;
+  onToggleMeetingHistory: (callback: () => void) => () => void;
   onSnapDeskVision: (callback: () => void) => () => void;
   sendDeskVisionFrame: (data: string) => void;
   onToggleDeskContinuous: (callback: (enabled: boolean) => void) => () => void;

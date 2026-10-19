@@ -67,6 +67,15 @@ contextBridge.exposeInMainWorld("iris", {
   getScreenVisionState: () => ipcRenderer.invoke("vision:get-screen-state"),
   toggleMeetingRecording: () => ipcRenderer.invoke("meeting:toggle"),
   getMeetingRecordingState: () => ipcRenderer.invoke("meeting:get-state"),
+  getMeetingHistory: () => ipcRenderer.invoke("meeting:list-history"),
+  openMeetingFolder: (folderPath) => ipcRenderer.invoke("meeting:open-folder", folderPath),
+  closeMeetingHistory: () => ipcRenderer.invoke("meeting:close-history"),
+  summarizeMeetingSession: (targetPath) => ipcRenderer.invoke("meeting:summarize", targetPath),
+  onToggleMeetingHistory: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("meeting:toggle-history", handler);
+    return () => ipcRenderer.removeListener("meeting:toggle-history", handler);
+  },
   sendDeskVisionFrame: (base64) => ipcRenderer.send("vision:desk-frame", base64),
   // V-12/V-13: renderer báo trạng thái thật để main không "đoán"
   reportDeskVisionState: (enabled) => ipcRenderer.send("vision:desk-state", { enabled: enabled === true }),

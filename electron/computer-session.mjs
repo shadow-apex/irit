@@ -146,6 +146,31 @@ export async function pressKeyCombo(rawText) {
 }
 
 /**
+ * Tự động gửi tín hiệu KEYUP cho các phím bổ trợ (Alt, Ctrl, Shift, Win)
+ * để giải phóng bàn phím trên Windows nếu OS bị "kẹt phím" (latch state)
+ * sau khi người dùng bấm phím tắt toàn cục (Alt+M, Ctrl+Alt+M...).
+ */
+export async function unstickModifiers() {
+  const modKeys = [
+    Key.LeftAlt,
+    Key.RightAlt,
+    Key.LeftControl,
+    Key.RightControl,
+    Key.LeftShift,
+    Key.RightShift,
+    Key.LeftSuper,
+    Key.RightSuper,
+  ];
+  for (const k of modKeys) {
+    try {
+      await keyboard.releaseKey(k);
+    } catch {
+      // Ignore if key is not down
+    }
+  }
+}
+
+/**
  * Gõ văn bản native trên Windows:
  * - Chuỗi ASCII thuần (như "hello world", "abc", số, code): dùng keyboard.type() gõ phím trực tiếp
  *   từng ký tự để người dùng thấy máy tự gõ thật sự.

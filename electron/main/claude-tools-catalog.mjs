@@ -41,13 +41,13 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "computer_use_omniparser",
-          description: "Take control of the user's computer screen to click on an element using OmniParser local vision model (FREE, No tokens!). Invoke this when the user asks you to click on something or interact with the screen using OmniParser.",
+          description: "MANDATORY PRIMARY TOOL for clicking any visual element on the user's computer screen (e.g. buttons, icons, links, search bars, tabs, checkboxes, menus, windows). Uses the local OmniParser AI vision model (or Gemini Vision fallback) to take a fresh full-resolution screenshot, detect the target's exact pixel coordinates, and click it accurately. ALWAYS invoke this tool whenever the user asks to click, press, tap, or select ANY named element, icon, or button on the screen (in Vietnamese: 'click vào...', 'bấm vào...', 'chọn icon...', 'nhấp vào nút...', 'bấm ô tìm kiếm...'). NEVER guess or estimate x/y coordinates yourself with mouse_control when the user refers to an element on the screen.",
           parameters: {
             type: "object",
             properties: {
               task: {
                 type: "string",
-                description: "The description of what to click (e.g. 'the Start button', 'the login button', 'the search bar')."
+                description: "The description, text label, or name of the visual element to click (e.g. 'the Play button', 'nút Bắt đầu', 'icon Chrome', 'ô tìm kiếm', 'the Login button', 'dấu X đóng tab')."
               }
             },
             required: ["task"]
@@ -304,7 +304,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "mouse_control",
-          description: "Control the mouse cursor by screen coordinates via tools/mouse_control.py: move it (optionally clicking on arrival), click (left/right/middle, single/double), drag from one point to another, scroll, or read its current position. Movement is FAST by default (a short curved path, ~0.1 s); set human_like=true only if a slower human-like curve is wanted. Coordinates are PHYSICAL screen pixels (space:'screen'); if you read coordinates off a screenshot/vision frame (which is downscaled), pass space:'frame' and Iris converts them. Out-of-range points are clamped to the virtual desktop (all monitors) and kept away from the corner fail-safe. action 'release' lets go of all mouse buttons (recovery after a failed drag). Use when the user gives explicit x/y coordinates or asks you to move/click/drag the mouse pointer somewhere on screen (e.g. 'di chuyen chuot den toa do 500 300', 'click vao diem 800, 400', 'keo tu diem A den diem B').",
+          description: "Control the mouse cursor ONLY by RAW/EXPLICIT numeric coordinates or physical mouse actions: relative movements, scrolling, dragging between two points, or clicking at an EXPLICIT coordinate provided by the user (e.g. 'di chuyển chuột đến toạ độ 500 300', 'click tại 800, 400', 'cuộn chuột xuống', 'kéo chuột từ A đến B'). CRITICAL: DO NOT use mouse_control to click on visual UI elements, icons, or named buttons (e.g. 'click vào nút X', 'bấm vào icon Y') by guessing coordinates from screen vision — ALWAYS use computer_use_omniparser instead, which uses the specialized OmniParser detector to find exact coordinates without guessing. Only use mouse_control when the user explicitly provides numbers/coordinates or asks to scroll/drag.",
           parameters: {
             type: "object",
             properties: {

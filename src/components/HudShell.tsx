@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal, Search } from "lucide-react";
+import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal, Search, History } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
@@ -116,6 +116,7 @@ export default function HudShell({
   handStateRef,
   readerOpen,
   hudTopNotchEnabled,
+  onOpenMeetingHistory,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -196,6 +197,7 @@ export default function HudShell({
   handStateRef?: { current: HandState };
   readerOpen?: boolean;
   hudTopNotchEnabled?: boolean;
+  onOpenMeetingHistory?: () => void;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -257,6 +259,7 @@ export default function HudShell({
 
   // Dropdown chọn ngôn ngữ cho nút Dịch — nhỏ gọn để không che khung transcript.
   const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const langPickerWrapRef = useRef<HTMLDivElement>(null);
   const TRANSLATE_LANGS = [
     "Tiếng Việt (Vietnamese)",
     "Tiếng Anh (English)",
@@ -266,9 +269,24 @@ export default function HudShell({
     "Tiếng Pháp (French)",
   ];
 
+  useEffect(() => {
+    if (!langPickerOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (langPickerWrapRef.current && !langPickerWrapRef.current.contains(e.target as Node)) {
+        setLangPickerOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [langPickerOpen]);
+
   // Hỏi AI trực tiếp từ HUD (Icon kính lúp)
   const [showAiQuery, setShowAiQuery] = useState(false);
   const [aiQueryText, setAiQueryText] = useState("");
+  const [isAskingAi, setIsAskingAi] = useState(false);
+  const [aiQueryError, setAiQueryError] = useState("");
   const aiQueryWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -346,6 +364,27 @@ export default function HudShell({
     if (line.startsWith("💡")) {
       return <div key={i} className="ai-suggestion-box">{line}</div>;
     }
+    if (line.startsWith("🌐 [Dịch")) {
+      return (
+        <p key={i} style={{ color: '#38bdf8', fontSize: 11, fontWeight: 600, borderTop: '1px dashed rgba(255,255,255,0.15)', paddingTop: 4, marginTop: 4 }}>
+          {line}
+        </p>
+      );
+    }
+    if (line.startsWith("[Đang dịch]")) {
+      return (
+        <p key={i} style={{ color: '#facc15', fontStyle: 'italic', fontSize: 12 }}>
+          ⏳ {line}
+        </p>
+      );
+    }
+    if (line.startsWith("⚠️ Lỗi dịch")) {
+      return (
+        <p key={i} style={{ color: '#f87171', fontSize: 11 }}>
+          {line}
+        </p>
+      );
+    }
     if (line.startsWith("[Bạn]")) {
       return <p key={i} style={{ color: '#4ade80' }}><strong>Bạn:</strong> {line.replace("[Bạn]", "").trim()}</p>;
     } else if (line.startsWith("[Đối tác]")) {
@@ -413,7 +452,7 @@ export default function HudShell({
               style={{ position: "absolute", top: 8, left: 12, display: "flex", gap: 6, alignItems: "center", zIndex: 10 }}
             >
               {onToggleTranslate ? (
-                <div style={{ position: "relative" }}>
+                <div ref={langPickerWrapRef} style={{ position: "relative" }}>
                   <button
                     onClick={() => setLangPickerOpen((v) => !v)}
                     style={{
@@ -440,26 +479,38 @@ export default function HudShell({
                         padding: 4,
                         minWidth: 170,
                         zIndex: 20,
+                        boxShadow: "0 4px 14px rgba(0,0,0,0.6)",
                       }}
                     >
                       {teleprompterState?.translateEnabled ? (
                         <button
-                          style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#f87171", background: "none", border: "none", cursor: "pointer" }}
+                          style={{
+                            display: "block", width: "100%", textAlign: "left", padding: "6px 8px",
+                            fontSize: 11, color: "#f87171", background: "none", border: "none",
+                            cursor: "pointer", borderBottom: "1px solid #222", marginBottom: 2,
+                          }}
                           onClick={() => { onToggleTranslate(""); setLangPickerOpen(false); }}
                         >
-                          Tắt dịch
+                          ✖ Tắt dịch
                         </button>
-                      ) : (
-                        TRANSLATE_LANGS.map((lang) => (
+                      ) : null}
+                      {TRANSLATE_LANGS.map((lang) => {
+                        const isCurrent = teleprompterState?.translateEnabled && teleprompterState?.translateTargetLang === lang;
+                        return (
                           <button
                             key={lang}
-                            style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#ccc", background: "none", border: "none", cursor: "pointer" }}
+                            style={{
+                              display: "block", width: "100%", textAlign: "left", padding: "6px 8px",
+                              fontSize: 11, color: isCurrent ? "#60a5fa" : "#ccc",
+                              background: isCurrent ? "rgba(96,165,250,0.12)" : "none",
+                              borderRadius: 4, border: "none", cursor: "pointer",
+                            }}
                             onClick={() => { onToggleTranslate(lang); setLangPickerOpen(false); }}
                           >
-                            {lang}
+                            {isCurrent ? "✓ " : ""}{lang}
                           </button>
-                        ))
-                      )}
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
@@ -485,29 +536,41 @@ export default function HudShell({
               {/* Ai Query Kính Lúp */}
               <div ref={aiQueryWrapRef} style={{ display: "flex", alignItems: "center", position: "relative" }}>
                 <button
+                  type="button"
                   onClick={() => setShowAiQuery(!showAiQuery)}
-                  title="Hỏi AI về cuộc trò chuyện"
+                  title="Hỏi AI về cuộc trò chuyện hoặc màn hình"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center",
                     padding: "4px", borderRadius: 6, border: "1px solid #333",
-                    background: showAiQuery ? "rgba(168,85,247,0.18)" : "#151515",
-                    color: showAiQuery ? "#a855f7" : "#ccc", cursor: "pointer",
+                    background: (showAiQuery || isAskingAi) ? "rgba(168,85,247,0.18)" : "#151515",
+                    color: (showAiQuery || isAskingAi) ? "#a855f7" : "#ccc", cursor: "pointer",
                   }}
                 >
-                  <Search size={14} />
+                  <Search size={14} className={isAskingAi ? "animate-pulse" : ""} />
                 </button>
                 {showAiQuery && (
                   <form
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                       e.preventDefault();
                       const text = aiQueryText.trim();
-                      if (text) {
+                      if (text && !isAskingAi) {
+                        setIsAskingAi(true);
+                        setAiQueryError("");
                         setAiQueryText("");
                         setShowAiQuery(false);
-                        if (window.iris.askTeleprompter) {
-                          window.iris.askTeleprompter(text);
-                        } else if (onSendSupplement) {
-                          onSendSupplement(text);
+                        try {
+                          if (window.iris?.askTeleprompter) {
+                            const res = await window.iris.askTeleprompter(text);
+                            if (res && res.status === "error") {
+                              setAiQueryError(res.error || "Lỗi khi hỏi AI");
+                            }
+                          } else if (onSendSupplement) {
+                            onSendSupplement(text);
+                          }
+                        } catch (err: any) {
+                          setAiQueryError(err?.message || "Lỗi kết nối khi gửi câu hỏi");
+                        } finally {
+                          setIsAskingAi(false);
                         }
                       }
                     }}
@@ -529,10 +592,59 @@ export default function HudShell({
                 )}
               </div>
             </div>
+          ) : (hudMessage.title === "Meeting Summarizer" ||
+               hudMessage.title.toLowerCase().includes("cuộc họp") ||
+               hudMessage.title.toLowerCase().includes("meeting") ||
+               hudMessage.title.toLowerCase().includes("ghi âm") ||
+               hudMessage.title.toLowerCase().includes("tóm tắt")) && onOpenMeetingHistory ? (
+            <div
+              className="hud-hit"
+              style={{ position: "absolute", top: 8, left: 12, display: "flex", gap: 6, alignItems: "center", zIndex: 10 }}
+            >
+              <button
+                onClick={onOpenMeetingHistory}
+                title="Xem lịch sử các lần tóm tắt trước (Ctrl+Alt+M)"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  fontSize: 11,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(52, 211, 153, 0.4)",
+                  background: "rgba(16, 185, 129, 0.15)",
+                  color: "#6ee7b7",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                <History size={13} />
+                Lịch sử tóm tắt
+              </button>
+            </div>
           ) : null}
-          <div className="hud-message-body" style={{ marginTop: hudMessage.title === "Live Teleprompter" ? 34 : 15, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {hudMessage.title === "Live Teleprompter" && teleprompterState?.copilotEnabled ? (
-              // Nhắc bài đang bật: thu gọn phụ đề thô lại thành 1 dải nhỏ phía
+          <div
+            className="hud-message-body"
+            style={{
+              marginTop:
+                hudMessage.title === "Live Teleprompter" ||
+                ((hudMessage.title === "Meeting Summarizer" ||
+                  hudMessage.title.toLowerCase().includes("cuộc họp") ||
+                  hudMessage.title.toLowerCase().includes("meeting") ||
+                  hudMessage.title.toLowerCase().includes("ghi âm") ||
+                  hudMessage.title.toLowerCase().includes("tóm tắt")) &&
+                  onOpenMeetingHistory)
+                  ? 34
+                  : 15,
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            {hudMessage.title === "Live Teleprompter" && (teleprompterState?.copilotEnabled || filteredCopilotHistory.length > 0 || isAskingAi || Boolean(hudMessage.copilotStatus) || Boolean(aiQueryError)) ? (
+              // Nhắc bài đang bật hoặc có câu hỏi AI: thu gọn phụ đề thô lại thành 1 dải nhỏ phía
               // trên (vẫn thấy được đang nói gì), nhường phần lớn không gian
               // cho bảng câu hỏi/gợi ý — đây là phần chính người dùng cần khi
               // "sếp hỏi thông tin".
@@ -543,7 +655,7 @@ export default function HudShell({
               hudMessage.content.split("\n").map(renderTranscriptLine)
             )}
 
-            {hudMessage.title === "Live Teleprompter" && teleprompterState?.copilotEnabled ? (
+            {hudMessage.title === "Live Teleprompter" && (teleprompterState?.copilotEnabled || filteredCopilotHistory.length > 0 || isAskingAi || Boolean(hudMessage.copilotStatus) || Boolean(aiQueryError)) ? (
               <div className="copilot-panel hud-hit">
                 <div
                   className="copilot-history-scroll"
@@ -565,6 +677,24 @@ export default function HudShell({
                       <div key={entry.id} className="copilot-entry">
                         <div className="copilot-entry-meta">
                           <span className="copilot-entry-question" title={entry.question}>❓ {entry.question}</span>
+                          {entry.engine ? (
+                            <span
+                              className="copilot-entry-engine"
+                              style={{
+                                fontSize: 10,
+                                padding: "1px 6px",
+                                borderRadius: 4,
+                                marginLeft: "auto",
+                                marginRight: 8,
+                                fontWeight: 500,
+                                color: entry.engine.toLowerCase().includes("claude") ? "#fb923c" : "#38bdf8",
+                                background: entry.engine.toLowerCase().includes("claude") ? "rgba(251,146,60,0.15)" : "rgba(56,189,248,0.15)",
+                                border: `1px solid ${entry.engine.toLowerCase().includes("claude") ? "rgba(251,146,60,0.3)" : "rgba(56,189,248,0.3)"}`,
+                              }}
+                            >
+                              {entry.engine}
+                            </span>
+                          ) : null}
                           <span className="copilot-entry-time">{new Date(entry.ts).toLocaleTimeString()}</span>
                         </div>
                         <div className="ai-suggestion-box">💡 {entry.answer}</div>
@@ -574,6 +704,13 @@ export default function HudShell({
                 </div>
                 {hudMessage.copilotStatus ? (
                   <div className="ai-suggestion-status">{hudMessage.copilotStatus}</div>
+                ) : isAskingAi ? (
+                  <div className="ai-suggestion-status">⏳ Đang gửi câu hỏi tới AI...</div>
+                ) : null}
+                {aiQueryError ? (
+                  <div className="ai-suggestion-status" style={{ color: "#f87171" }}>
+                    ⚠️ {aiQueryError}
+                  </div>
                 ) : null}
               </div>
             ) : null}
