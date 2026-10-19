@@ -24,7 +24,7 @@ import { resolvePythonCommand } from "./sidecar-process.mjs";
 import { unpackedRepoRoot, userDataDir } from "./paths.mjs";
 import { saveScreenshot } from "./screenshot-store.mjs";
 import { grabJpeg, createFrameLoop } from "./vision-capture.mjs";
-import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 
 const MAX_IPC_FRAME_CHARS = 5_600_000; // ≈ 4 MB nhị phân sau base64
 
@@ -47,23 +47,46 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
   if (!hasVisionPool || !base64Jpeg) return null;
   let timer = null;
   try {
-    const model = String(process.env.GEMINI_VISION_MODEL || "gemini-flash-latest").trim();
+    const candidateModels = Array.from(
+      new Set(
+        [
+          String(process.env.GEMINI_VISION_MODEL || "").trim(),
+          "gemini-2.0-flash",
+          "gemini-1.5-flash",
+          "gemini-2.5-flash",
+          "gemini-flash-latest",
+        ].filter(Boolean)
+      )
+    );
+
     const res = await Promise.race([
       withGeminiFailover(
         async (apiKey) => {
           const visionAi = getGenAiClient(apiKey);
-          return visionAi.models.generateContent({
-            model,
-            contents: [
-              { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
-              `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
-            ],
-          });
+          let lastErr = null;
+          for (const m of candidateModels) {
+            try {
+              return await visionAi.models.generateContent({
+                model: m,
+                contents: [
+                  { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
+                  `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
+                ],
+              });
+            } catch (err) {
+              lastErr = err;
+              if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                continue;
+              }
+              throw err;
+            }
+          }
+          throw lastErr || new Error("Không thể gọi Gemini Vision.");
         },
         { purpose: "vision", preferVision: true }
       ),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("vision timeout")), 3000);
+        timer = setTimeout(() => reject(new Error("vision timeout")), 6000);
       }),
     ]);
     return (res?.text || "").trim() || null;

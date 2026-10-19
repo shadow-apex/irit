@@ -10,7 +10,39 @@ import { spawnSidecar, stopSidecar, resolvePythonCommand } from "./sidecar-proce
 import { mainWindow, enterHud } from "./window-manager.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { emitEvent } from "./events.mjs";
-import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+
+const MEETING_CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
+      String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-flash",
+      "gemini-flash-latest",
+    ].filter(Boolean)
+  )
+);
+
+async function generateMeetingContent(client, payload) {
+  let lastErr = null;
+  for (const m of MEETING_CANDIDATE_MODELS) {
+    try {
+      return await client.models.generateContent({
+        ...payload,
+        model: m,
+      });
+    } catch (err) {
+      lastErr = err;
+      if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error("Không thể gọi model Gemini cho cuộc họp.");
+}
 
 // Thời lượng tối đa mỗi phân đoạn WAV gửi lên Gemini (25 phút ~ 48,000 audio tokens,
 // dưới xa trần 250k TPM của Gemini Free Tier và vừa khít giới hạn 8192 output tokens/lần gọi).
@@ -264,8 +296,7 @@ async function transcribeSingleWavChunk(fallbackAi, chunk, chunkIdx, totalChunks
                   ? `\n- LƯU Ý: Đoạn âm thanh này bắt đầu từ mốc thời gian [${formatMMSS(chunk.startSec)}] của cuộc họp.`
                   : "";
 
-              const transResponse = await ai.models.generateContent({
-                model: "gemini-flash-latest",
+              const transResponse = await generateMeetingContent(ai, {
                 contents: [
                   { fileData: { fileUri: uploadResult.uri, mimeType: uploadResult.mimeType || "audio/wav" } },
                   `Bạn là chuyên gia gỡ băng ghi âm cuộc họp. Hãy nghe thật kỹ file âm thanh này và xuất ra toàn bộ bản ghi lời thoại (transcript) chi tiết bằng tiếng Việt.\n- Giữ nguyên toàn bộ nội dung thảo luận, không tóm tắt hay cắt xén lời thoại ở bước này.\n- Phân đoạn rõ ràng theo mốc thời gian hoặc người nói nếu nhận diện được (ví dụ: [00:05] Người nói 1: ...).\n- Ghi lại trung thực các ý kiến, tranh luận và số liệu được nêu trong cuộc họp.${timeOffsetHint}`,
@@ -736,8 +767,7 @@ async function summarizeWithGemini(transcript, fallbackAi) {
         withGeminiFailover(
           async (apiKey) => {
             const client = getGenAiClient(apiKey) || fallbackAi;
-            return client.models.generateContent({
-              model: "gemini-flash-latest",
+            return generateMeetingContent(client, {
               contents: [
                 `Hãy trích xuất chi tiết mọi chủ đề thảo luận, số liệu, quyết định và công việc cần làm (Action Items) trong phân đoạn ${i + 1}/${segments.length} của cuộc họp sau:\n\n---\n${segments[i]}\n---`,
               ],
@@ -756,8 +786,7 @@ async function summarizeWithGemini(transcript, fallbackAi) {
     withGeminiFailover(
       async (apiKey) => {
         const client = getGenAiClient(apiKey) || fallbackAi;
-        return client.models.generateContent({
-          model: "gemini-flash-latest",
+        return generateMeetingContent(client, {
           contents: [prompt],
         });
       },

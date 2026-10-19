@@ -56,6 +56,18 @@ def load_env_file() -> None:
 
 load_env_file()
 
+def get_gemini_api_key() -> str | None:
+    key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if key:
+        return key
+    keys = (os.environ.get("GEMINI_API_KEYS") or "").strip()
+    if keys:
+        import re
+        parts = [k.strip() for k in re.split(r"[,;\r\n\s]+", keys) if k.strip()]
+        if parts:
+            return parts[0]
+    return None
+
 SYSTEM_INSTRUCTION = """
 You are Iris, the realtime voice front-end for the user. Your brain and hands
 are Hermes, an autonomous agent that can use the terminal, files, web search,
@@ -222,7 +234,7 @@ class AudioLoop:
 
         self.client = genai.Client(
             http_options={"api_version": "v1beta"},
-            api_key=os.environ.get("GEMINI_API_KEY"),
+            api_key=get_gemini_api_key(),
         )
 
     def _get_frame(self, cap: Any) -> dict[str, Any] | None:
@@ -590,7 +602,7 @@ class AudioLoop:
             emit_log(f"Could not start Hermes automatically: {exc}", level="warning")
 
     async def run(self) -> None:
-        if not os.environ.get("GEMINI_API_KEY"):
+        if not get_gemini_api_key():
             emit("fatal", message="GEMINI_API_KEY is not set.")
             return
 

@@ -339,14 +339,24 @@ export function getNextGeminiKey(options = {}) {
 export function isRateLimitError(err) {
   if (!err) return false;
   const status = err?.status ?? err?.code ?? err?.httpStatus ?? err?.error?.code;
-  if (status === 429 || status === "429" || status === "RESOURCE_EXHAUSTED") {
+  if (
+    status === 429 ||
+    status === "429" ||
+    status === "RESOURCE_EXHAUSTED" ||
+    status === 503 ||
+    status === "503" ||
+    status === "UNAVAILABLE"
+  ) {
     return true;
   }
-  if (err?.error?.status === "RESOURCE_EXHAUSTED") {
+  if (
+    err?.error?.status === "RESOURCE_EXHAUSTED" ||
+    err?.error?.status === "UNAVAILABLE"
+  ) {
     return true;
   }
   const msg = String(err?.message || err?.error?.message || err || "");
-  return /\b429\b|RESOURCE_EXHAUSTED|quota|rate[\s_-]*limit|too many requests/i.test(msg);
+  return /\b(429|503)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|quota|rate[\s_-]*limit|too many requests|high demand|spikes in demand|temporarily unavailable|overloaded/i.test(msg);
 }
 
 /**

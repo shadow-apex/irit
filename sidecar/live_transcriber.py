@@ -58,6 +58,10 @@ import time
 import queue
 import asyncio
 import threading
+import warnings
+
+# Tắt cảnh báo SoundcardRuntimeWarning gây tràn log và crash trên Windows
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import soundcard as sc

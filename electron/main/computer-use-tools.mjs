@@ -26,7 +26,7 @@ import { mainWindow } from "./window-manager.mjs";
 import { toggleScreenVision, toggleCameraStreamVision, grabPrimaryScreenJpeg, visionFrameGeometry } from "./vision.mjs";
 import { toggleMeetingRecording } from "./meeting-recording.mjs";
 import { toggleCopilotMode, toggleLiveTranscriber } from "./teleprompter.mjs";
-import { getAllGeminiKeys, getGenAiClient, withGeminiFailover } from "./gemini-keys.mjs";
+import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 
 // Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
 // generates audio and its transcript still lands in Comms), but playback is
@@ -297,15 +297,38 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
       withGeminiFailover(
         async (apiKey) => {
           const client = getGenAiClient(apiKey);
-          return client.models.generateContent({
-            model: "gemini-flash-latest",
-            contents: [
-              { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
-              { text: prompt },
-            ],
-            // JSON thuần + temperature 0: toạ độ ổn định, không kèm lời dẫn/markdown.
-            config: { responseMimeType: "application/json", temperature: 0 },
-          });
+          const candidateModels = Array.from(
+            new Set(
+              [
+                String(process.env.GEMINI_VISION_MODEL || "").trim(),
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+                "gemini-2.5-flash",
+                "gemini-flash-latest",
+              ].filter(Boolean)
+            )
+          );
+          let lastErr = null;
+          for (const m of candidateModels) {
+            try {
+              return await client.models.generateContent({
+                model: m,
+                contents: [
+                  { inlineData: { mimeType: imgMime || "image/png", data: imgBuffer.toString("base64") } },
+                  { text: prompt },
+                ],
+                // JSON thuần + temperature 0: toạ độ ổn định, không kèm lời dẫn/markdown.
+                config: { responseMimeType: "application/json", temperature: 0 },
+              });
+            } catch (err) {
+              lastErr = err;
+              if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                continue;
+              }
+              throw err;
+            }
+          }
+          throw lastErr || new Error("Không thể gọi Gemini Vision cho Computer Use.");
         },
         { purpose: "vision", preferVision: true }
       ),

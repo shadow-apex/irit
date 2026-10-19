@@ -14,7 +14,19 @@ import { enterHud } from "./window-manager.mjs";
 import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { grabPrimaryScreenJpeg } from "./vision.mjs";
-import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover } from "./gemini-keys.mjs";
+import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+
+const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      String(process.env.GEMINI_TRANSLATE_MODEL || "").trim(),
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-flash",
+      "gemini-flash-latest",
+    ].filter(Boolean)
+  )
+);
 
 export let liveTranscriber = null; // handle { proc, state, exitCode }
 export let liveTranscripts = [];
@@ -306,17 +318,30 @@ export async function toggleLiveTranscriber() {
                          async (apiKey) => {
                            fullText = "";
                            const client = getGenAiClient(apiKey);
-                           const responseStream = await client.models.generateContentStream({
-                             model: "gemini-flash-latest",
-                             contents: sysPrompt + "\n\n" + userText,
-                           });
-                           for await (const chunk of responseStream) {
-                             if (chunk.text) {
-                               fullText += chunk.text;
-                               currentStreamingTranslation = fullText.trim();
-                               updateLiveHud();
+                           let streamErr = null;
+                           for (const m of TELEPROMPTER_CANDIDATE_MODELS) {
+                             try {
+                               const responseStream = await client.models.generateContentStream({
+                                 model: m,
+                                 contents: sysPrompt + "\n\n" + userText,
+                               });
+                               for await (const chunk of responseStream) {
+                                 if (chunk.text) {
+                                   fullText += chunk.text;
+                                   currentStreamingTranslation = fullText.trim();
+                                   updateLiveHud();
+                                 }
+                               }
+                               return;
+                             } catch (err) {
+                               streamErr = err;
+                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                                 continue;
+                               }
+                               throw err;
                              }
                            }
+                           if (streamErr) throw streamErr;
                          },
                          { purpose: "teleprompter" }
                        );
@@ -423,17 +448,43 @@ export async function toggleLiveTranscriber() {
                      ? await withGeminiFailover(
                          async (apiKey) => {
                            const client = getGenAiClient(apiKey);
-                           return client.models.generateContent({
-                             model: "gemini-flash-latest",
-                             contents: systemPrompt + "\n\n" + contextText,
-                           });
+                           let lastErr = null;
+                           for (const m of TELEPROMPTER_CANDIDATE_MODELS) {
+                             try {
+                               return await client.models.generateContent({
+                                 model: m,
+                                 contents: systemPrompt + "\n\n" + contextText,
+                               });
+                             } catch (err) {
+                               lastErr = err;
+                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                                 continue;
+                               }
+                               throw err;
+                             }
+                           }
+                           throw lastErr || new Error("Không thể gọi Gemini Copilot.");
                          },
                          { purpose: "teleprompter" }
                        )
-                     : await ai.models.generateContent({
-                         model: "gemini-flash-latest",
-                         contents: systemPrompt + "\n\n" + contextText,
-                       });
+                     : await (async () => {
+                         let lastErr = null;
+                         for (const m of TELEPROMPTER_CANDIDATE_MODELS) {
+                           try {
+                             return await ai.models.generateContent({
+                               model: m,
+                               contents: systemPrompt + "\n\n" + contextText,
+                             });
+                           } catch (err) {
+                             lastErr = err;
+                             if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                               continue;
+                             }
+                             throw err;
+                           }
+                         }
+                         throw lastErr || new Error("Không thể gọi Gemini Copilot.");
+                       })();
                    suggestion = (response?.text || "").trim();
                    engineUsed = "Gemini (fallback)";
                  } catch (geminiErr) {
@@ -564,7 +615,7 @@ export async function askTeleprompter(question) {
       console.warn("[askTeleprompter] Claude API thất bại, chuyển sang Gemini Vision:", err.message);
     }
   } else {
-    claudeError = new Error("Chưa cấu hình ANTHROPIC_API_KEY trong .env");
+    claudeError = null;
   }
 
   // 2. Dự phòng: Không có key Claude hoặc Claude lỗi => dùng Gemini Vision + chụp màn hình
@@ -599,7 +650,18 @@ export async function askTeleprompter(question) {
         console.warn("[askTeleprompter] Không thể chụp màn hình cho Gemini Vision:", grabErr.message);
       }
 
-      const visionModel = String(process.env.GEMINI_VISION_MODEL || "gemini-flash-latest").trim();
+      const candidateModels = Array.from(
+        new Set(
+          [
+            String(process.env.GEMINI_VISION_MODEL || "").trim(),
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-flash",
+            "gemini-flash-latest",
+          ].filter(Boolean)
+        )
+      );
+
       const prompt =
         `${systemPrompt}\n\n` +
         (screenBase64 ? "Lưu ý: Đã đính kèm ảnh chụp màn hình hiện tại để bạn quan sát ngữ cảnh ứng dụng/tài liệu đang mở.\n\n" : "") +
@@ -617,18 +679,30 @@ export async function askTeleprompter(question) {
       contents.push({ text: prompt });
 
       const invokeVision = async (client) => {
-        let geminiTimer = null;
-        return Promise.race([
-          client.models.generateContent({
-            model: visionModel,
-            contents,
-          }),
-          new Promise((_, reject) => {
-            geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
-          }),
-        ]).finally(() => {
-          if (geminiTimer) clearTimeout(geminiTimer);
-        });
+        let lastErr = null;
+        for (const modelToTry of candidateModels) {
+          let geminiTimer = null;
+          try {
+            return await Promise.race([
+              client.models.generateContent({
+                model: modelToTry,
+                contents,
+              }),
+              new Promise((_, reject) => {
+                geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
+              }),
+            ]);
+          } catch (modelErr) {
+            lastErr = modelErr;
+            if (isRateLimitError(modelErr) || /503|UNAVAILABLE|high demand/i.test(modelErr?.message || "")) {
+              continue;
+            }
+            throw modelErr;
+          } finally {
+            if (geminiTimer) clearTimeout(geminiTimer);
+          }
+        }
+        throw lastErr || new Error("Không thể kết nối tới các model Gemini Vision.");
       };
 
       const res = usePoolFailover
@@ -648,9 +722,19 @@ export async function askTeleprompter(question) {
       copilotStatus = "";
       updateTeleprompterHud();
       const prefix = claudeError ? `Claude: ${claudeError.message}. ` : "";
+      let cleanMsg = gErr?.message || String(gErr);
+      try {
+        const parsed = JSON.parse(cleanMsg);
+        if (parsed?.error?.message) cleanMsg = parsed.error.message;
+      } catch {}
+      if (/high demand|UNAVAILABLE|503/i.test(cleanMsg)) {
+        cleanMsg = "Máy chủ Gemini đang quá tải tạm thời (503 High Demand). Vui lòng thử lại sau vài giây.";
+      } else if (/quota|RESOURCE_EXHAUSTED|429/i.test(cleanMsg)) {
+        cleanMsg = "Hết hạn mức API Gemini (429 Quota). Hệ thống đang chuyển sang key dự phòng.";
+      }
       return {
         status: "error",
-        error: `${prefix}Gemini Vision lỗi: ${gErr.message}`,
+        error: `${prefix}Gemini Vision: ${cleanMsg}`,
       };
     }
   }

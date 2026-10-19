@@ -118,7 +118,27 @@ test(
 );
 
 test(
-  "withGeminiFailover: ném ngay các lỗi không phải 429 mà không đánh dấu cooldown key",
+  "withGeminiFailover: tự động chuyển key khi gặp lỗi 503 UNAVAILABLE / high demand từ Google",
+  withSavedEnv(async () => {
+    process.env.GEMINI_API_KEY = "key_1,key_2";
+    const tried = [];
+    const res = await withGeminiFailover(async (k) => {
+      tried.push(k);
+      if (k === "key_1") {
+        const err = new Error("This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.");
+        err.status = 503;
+        throw err;
+      }
+      return "recovered";
+    });
+    assert.equal(res, "recovered");
+    assert.deepEqual(tried, ["key_1", "key_2"]);
+    assert.equal(isKeyRateLimited("key_1"), true);
+  })
+);
+
+test(
+  "withGeminiFailover: ném ngay các lỗi không phải 429/503 mà không đánh dấu cooldown key",
   withSavedEnv(async () => {
     process.env.GEMINI_API_KEY = "key_1,key_2";
 
