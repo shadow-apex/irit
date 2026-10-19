@@ -20,10 +20,11 @@ const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
   new Set(
     [
       String(process.env.GEMINI_TRANSLATE_MODEL || "").trim(),
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
       "gemini-2.5-flash",
+      "gemini-3.8-flash",
       "gemini-flash-latest",
+      "gemini-3.5-flash",
+      "gemini-2.0-flash",
     ].filter(Boolean)
   )
 );
@@ -335,7 +336,7 @@ export async function toggleLiveTranscriber() {
                                return;
                              } catch (err) {
                                streamErr = err;
-                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
                                  continue;
                                }
                                throw err;
@@ -457,7 +458,7 @@ export async function toggleLiveTranscriber() {
                                });
                              } catch (err) {
                                lastErr = err;
-                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
                                  continue;
                                }
                                throw err;
@@ -477,7 +478,7 @@ export async function toggleLiveTranscriber() {
                              });
                            } catch (err) {
                              lastErr = err;
-                             if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+                             if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
                                continue;
                              }
                              throw err;
@@ -654,10 +655,11 @@ export async function askTeleprompter(question) {
         new Set(
           [
             String(process.env.GEMINI_VISION_MODEL || "").trim(),
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
             "gemini-2.5-flash",
+            "gemini-3.8-flash",
             "gemini-flash-latest",
+            "gemini-3.5-flash",
+            "gemini-2.0-flash",
           ].filter(Boolean)
         )
       );
@@ -694,7 +696,7 @@ export async function askTeleprompter(question) {
             ]);
           } catch (modelErr) {
             lastErr = modelErr;
-            if (isRateLimitError(modelErr) || /503|UNAVAILABLE|high demand/i.test(modelErr?.message || "")) {
+            if (isRateLimitError(modelErr) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(modelErr?.message || "")) {
               continue;
             }
             throw modelErr;

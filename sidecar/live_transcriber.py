@@ -65,6 +65,11 @@ warnings.filterwarnings("ignore")
 
 import numpy as np
 import soundcard as sc
+try:
+    warnings.filterwarnings("ignore", category=sc.SoundcardRuntimeWarning)
+    warnings.simplefilter("ignore")
+except Exception:
+    pass
 
 # --------------------------------------------------------------------------
 # Cấu hình
@@ -158,7 +163,7 @@ class AudioChannel:
 
     def _capture_loop(self):
         try:
-            with self.device.recorder(samplerate=SAMPLE_RATE) as recorder:
+            with self.device.recorder(samplerate=SAMPLE_RATE, blocksize=FRAME_SAMPLES) as recorder:
                 while not self.stop_event.is_set():
                     data = recorder.record(numframes=FRAME_SAMPLES)
                     try:

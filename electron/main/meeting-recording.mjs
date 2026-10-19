@@ -17,10 +17,11 @@ const MEETING_CANDIDATE_MODELS = Array.from(
     [
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
       String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
       "gemini-2.5-flash",
+      "gemini-3.8-flash",
       "gemini-flash-latest",
+      "gemini-3.5-flash",
+      "gemini-2.0-flash",
     ].filter(Boolean)
   )
 );
@@ -35,7 +36,7 @@ async function generateMeetingContent(client, payload) {
       });
     } catch (err) {
       lastErr = err;
-      if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+      if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
         continue;
       }
       throw err;

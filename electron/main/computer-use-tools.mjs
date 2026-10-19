@@ -322,7 +322,7 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
               });
             } catch (err) {
               lastErr = err;
-              if (isRateLimitError(err) || /503|UNAVAILABLE|high demand/i.test(err?.message || "")) {
+              if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
                 continue;
               }
               throw err;
