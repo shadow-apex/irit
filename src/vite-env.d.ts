@@ -163,9 +163,11 @@ type IrisConfig = {
   geminiApiKeySet: boolean;
   geminiApiKeyHint: string;
   geminiKeyCount?: number;
+  geminiKeysRaw?: string;
   geminiPartition?: { live: number; meeting: number; vision: number; total: number };
   geminiVisionApiKeySet: boolean;
   geminiVisionApiKeyHint: string;
+  geminiVisionKeysRaw?: string;
   anthropicApiKeySet: boolean;
   anthropicApiKeyHint: string;
   autoStart?: boolean;

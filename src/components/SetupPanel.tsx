@@ -350,8 +350,8 @@ export default function SetupPanel({
   const t = I18N[lang];
 
   const [draft, setDraft] = useState<Draft>({
-    GEMINI_API_KEY: "",
-    GEMINI_VISION_API_KEY: "",
+    GEMINI_API_KEY: config.geminiKeysRaw || "",
+    GEMINI_VISION_API_KEY: config.geminiVisionKeysRaw || "",
     ANTHROPIC_API_KEY: "",
     GEMINI_LIVE_MODEL: config.geminiModel,
     GEMINI_LIVE_VOICE: config.geminiVoice,
@@ -678,16 +678,44 @@ export default function SetupPanel({
             <span className="pool-textarea-title">
               {lang === "vi" ? "DANH SÁCH KEY (MỖI KEY 1 DÒNG — TỐI ĐA 10 KEYS)" : "KEY LIST (ONE KEY PER LINE — UP TO 10 KEYS)"}
             </span>
-            {parsedGeminiKeys.length > 0 && (
-              <button
-                type="button"
-                className="pool-clean-btn"
-                onClick={cleanAndFormatOnePerLine}
-                title={lang === "vi" ? "Định dạng lại danh sách thành mỗi key một dòng sạch sẽ" : "Format cleanly as 1 key per line"}
-              >
-                ✨ {lang === "vi" ? "Chuẩn hoá 1 key/dòng" : "Format 1 key/line"}
-              </button>
-            )}
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {config.geminiKeysRaw && draft.GEMINI_API_KEY.trim() !== config.geminiKeysRaw.trim() && (
+                <button
+                  type="button"
+                  className="pool-clean-btn"
+                  onClick={() => set("GEMINI_API_KEY", config.geminiKeysRaw || "")}
+                  title={lang === "vi" ? "Khôi phục lại danh sách các key đã lưu trong hệ thống" : "Restore saved keys"}
+                >
+                  🔄 {lang === "vi" ? "Nạp lại key đã lưu" : "Restore saved"}
+                </button>
+              )}
+              {config.geminiKeysRaw &&
+                parsedGeminiKeys.length > 0 &&
+                parsedGeminiKeys.some((k) => !(config.geminiKeysRaw || "").includes(k)) && (
+                  <button
+                    type="button"
+                    className="pool-clean-btn"
+                    onClick={() => {
+                      const saved = (config.geminiKeysRaw || "").split("\n").map((s) => s.trim()).filter(Boolean);
+                      const merged = Array.from(new Set([...saved, ...parsedGeminiKeys]));
+                      set("GEMINI_API_KEY", merged.join("\n"));
+                    }}
+                    title={lang === "vi" ? "Ghép key mới vào danh sách key đang hoạt động" : "Merge new key with saved keys"}
+                  >
+                    ➕ {lang === "vi" ? "Ghép với key đã lưu" : "Merge with saved"}
+                  </button>
+                )}
+              {parsedGeminiKeys.length > 0 && (
+                <button
+                  type="button"
+                  className="pool-clean-btn"
+                  onClick={cleanAndFormatOnePerLine}
+                  title={lang === "vi" ? "Định dạng lại danh sách thành mỗi key một dòng sạch sẽ" : "Format cleanly as 1 key per line"}
+                >
+                  ✨ {lang === "vi" ? "Chuẩn hoá 1 key/dòng" : "Format 1 key/line"}
+                </button>
+              )}
+            </div>
           </div>
           <textarea
             className="pool-textarea"

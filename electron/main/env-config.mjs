@@ -114,6 +114,7 @@ export function getFullConfig() {
     geminiApiKeySet: geminiKeys.length > 0,
     geminiApiKeyHint: formatKeyPoolHint(geminiKeys),
     geminiKeyCount: geminiKeys.length,
+    geminiKeysRaw: geminiKeys.join("\n"),
     geminiPartition: {
       live: partitions.live.length,
       meeting: partitions.meeting.length,
@@ -122,6 +123,7 @@ export function getFullConfig() {
     },
     geminiVisionApiKeySet: visionKeys.length > 0,
     geminiVisionApiKeyHint: formatKeyPoolHint(visionKeys),
+    geminiVisionKeysRaw: visionKeys.join("\n"),
     anthropicApiKeySet: Boolean((process.env.ANTHROPIC_API_KEY || "").trim()),
     anthropicApiKeyHint: (process.env.ANTHROPIC_API_KEY || "").trim().slice(-4),
     geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
