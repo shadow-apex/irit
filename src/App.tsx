@@ -1638,7 +1638,15 @@ export default function App() {
     // (rất bình thường trong 1 cuộc họp) là toàn bộ HUD — bao gồm cả bảng
     // lịch sử câu hỏi/gợi ý của Nhắc bài — sẽ tự đóng, đúng thứ người dùng
     // yêu cầu KHÔNG được xảy ra ("không bị mất khi sếp hỏi câu khác").
-    if (hudMessage.title === "Live Teleprompter") return;
+    if (
+      hudMessage.title === "Live Teleprompter" ||
+      hudMessage.title === "Meeting Summarizer" ||
+      hudMessage.title.toLowerCase().includes("cuộc họp") ||
+      hudMessage.title.toLowerCase().includes("meeting") ||
+      hudMessage.title.toLowerCase().includes("tóm tắt")
+    ) {
+      return;
+    }
     const text = `${hudMessage.title ?? ""} ${hudMessage.content ?? ""}`;
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
     const readingTimeMs = (wordCount / 200) * 60000;

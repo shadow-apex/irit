@@ -1,5 +1,45 @@
 /// <reference types="vite/client" />
 
+type KeyPoolItem = {
+  index: number;
+  hint: string;
+  keyHint?: string;
+  role: string;
+  ready: boolean;
+  isPrimary?: boolean;
+  status?: string;
+  remainingCooldownSec: number;
+  cooldownRemainingSeconds?: number;
+  totalCalls: number;
+  calls?: number;
+  totalRateLimits: number;
+  rateLimits?: number;
+  lastUsed: number | null;
+};
+
+type KeyPoolStatus = {
+  configured: boolean;
+  totalKeys: number;
+  readyCount: number;
+  activeKeys?: number;
+  cooldownCount: number;
+  cooldownKeys?: number;
+  keys: KeyPoolItem[];
+};
+
+type ScreenCropRect = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  xRatio?: number;
+  yRatio?: number;
+  widthRatio?: number;
+  heightRatio?: number;
+};
+
+
+
 type SidecarMode = "none" | "camera" | "screen";
 
 type SidecarEvent = {
@@ -345,7 +385,18 @@ type IrisApi = {
   }>;
   toggleTranslate: (targetLang: string) => Promise<{ status: string; message: string }>;
   toggleInterviewCopilot: () => Promise<{ status: string; message: string }>;
-  askTeleprompter: (question: string) => Promise<{ status: string; error?: string }>;
+  askTeleprompter: (
+    question: string,
+    options?: {
+      cropRect?: ScreenCropRect;
+      imageBase64?: string;
+      isFullScreen?: boolean;
+      hideUntilResolved?: boolean;
+    }
+  ) => Promise<{ status: string; error?: string }>;
+  exportTeleprompterMinutes: () => Promise<{ ok: boolean; path?: string; count?: number; message?: string; error?: string }>;
+  getKeyPoolStatus: () => Promise<KeyPoolStatus>;
+  grabScreenRegion: (cropRect?: ScreenCropRect) => Promise<string | null>;
   toggleLiveTranscriber: () => Promise<{ status: string; message?: string; error?: string }>;
   toggleScreenVision: () => Promise<{ status: string; message?: string; error?: string }>;
   getScreenVisionState: () => Promise<{ isVisionEnabled: boolean }>;

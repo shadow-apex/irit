@@ -51,11 +51,9 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
       new Set(
         [
           String(process.env.GEMINI_VISION_MODEL || "").trim(),
-          "gemini-2.5-flash",
           "gemini-3.8-flash",
+          "gemini-2.5-flash",
           "gemini-flash-latest",
-          "gemini-3.5-flash",
-          "gemini-2.0-flash",
         ].filter(Boolean)
       )
     );
@@ -76,7 +74,10 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
               });
             } catch (err) {
               lastErr = err;
-              if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
+              if (isRateLimitError(err)) {
+                throw err;
+              }
+              if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                 continue;
               }
               throw err;
@@ -211,8 +212,8 @@ function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
   });
 }
 
-/** Chụp màn hình chính → { buffer: JPEG, geometry }. Dùng chung cho vòng lặp vision và take_ai_screenshot. */
-export async function grabPrimaryScreenJpeg(quality = 50) {
+/** Chụp màn hình chính → { buffer: JPEG, geometry }. Hỗ trợ tuỳ chọn cropRect để khoanh vùng (Snipping Tool). */
+export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
   const { desktopCapturer, systemPreferences } = electron;
   if (process.platform === "darwin" && systemPreferences?.getMediaAccessStatus) {
     const st = systemPreferences.getMediaAccessStatus("screen");
@@ -232,7 +233,27 @@ export async function grabPrimaryScreenJpeg(quality = 50) {
     // Đa màn hình: chọn đúng màn hình chính theo display_id (sources[0] không đảm bảo).
     const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
     if (src && !src.thumbnail.isEmpty()) {
-      const b = src.thumbnail.toJPEG(quality);
+      let img = src.thumbnail;
+      if (cropRect) {
+        try {
+          const imgSize = img.getSize();
+          const cropX = Math.max(0, Math.min(imgSize.width - 10, Math.round(cropRect.xRatio != null ? cropRect.xRatio * imgSize.width : cropRect.x || 0)));
+          const cropY = Math.max(0, Math.min(imgSize.height - 10, Math.round(cropRect.yRatio != null ? cropRect.yRatio * imgSize.height : cropRect.y || 0)));
+          const maxW = imgSize.width - cropX;
+          const maxH = imgSize.height - cropY;
+          const rawW = Math.round(cropRect.widthRatio != null ? cropRect.widthRatio * imgSize.width : cropRect.width || maxW);
+          const rawH = Math.round(cropRect.heightRatio != null ? cropRect.heightRatio * imgSize.height : cropRect.height || maxH);
+          const cropW = Math.max(10, Math.min(maxW, rawW));
+          const cropH = Math.max(10, Math.min(maxH, rawH));
+
+          if (cropW >= 10 && cropH >= 10) {
+            img = img.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
+          }
+        } catch (cropErr) {
+          console.warn("[grabPrimaryScreenJpeg] Lỗi cắt vùng chọn màn hình:", cropErr.message);
+        }
+      }
+      const b = img.toJPEG(quality);
       if (b && b.length > 0) buffer = b;
     }
     sources.length = 0; // giải phóng NativeImage — vòng lặp chạy liên tục
@@ -255,6 +276,12 @@ export async function grabPrimaryScreenJpeg(quality = 50) {
   }
 
   return { buffer, geometry };
+}
+
+/** Chụp riêng một vùng màn hình được chỉ định (Snipping Tool) - trả về base64 cho renderer */
+export async function grabScreenRegionJpeg(cropRect, quality = 80) {
+  const res = await grabPrimaryScreenJpeg(quality, { cropRect });
+  return res?.buffer ? res.buffer.toString("base64") : null;
 }
 
 export async function captureScreenForVision() {

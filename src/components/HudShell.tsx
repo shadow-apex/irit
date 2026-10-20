@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal, Search, History } from "lucide-react";
+import { ChevronDown, Crop, Monitor, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal, Eye, PenTool, Network, X, GripHorizontal, Search, History } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
@@ -261,12 +261,12 @@ export default function HudShell({
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const langPickerWrapRef = useRef<HTMLDivElement>(null);
   const TRANSLATE_LANGS = [
-    "Tiếng Việt (Vietnamese)",
-    "Tiếng Anh (English)",
-    "Tiếng Trung (Chinese)",
-    "Tiếng Nhật (Japanese)",
-    "Tiếng Hàn (Korean)",
-    "Tiếng Pháp (French)",
+    "Tiếng Việt",
+    "Tiếng Anh",
+    "Tiếng Trung",
+    "Tiếng Nhật",
+    "Tiếng Hàn",
+    "Tiếng Pháp",
   ];
 
   useEffect(() => {
@@ -281,6 +281,69 @@ export default function HudShell({
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [langPickerOpen]);
+
+
+  // Export minutes to Second Brain state
+  const [isExportingMinutes, setIsExportingMinutes] = useState(false);
+  const [minutesExportStatus, setMinutesExportStatus] = useState("");
+
+  // Interactive Snipping Tool & Full Screen Vision state
+  const [isSnipping, setIsSnipping] = useState(false);
+  const [snipStart, setSnipStart] = useState<{ x: number; y: number } | null>(null);
+  const [snipCurrent, setSnipCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [isWaitingVision, setIsWaitingVision] = useState(false);
+  const [waitingVisionText, setWaitingVisionText] = useState("");
+  const [pendingVisionQuery, setPendingVisionQuery] = useState("");
+
+  useEffect(() => {
+    if (!isSnipping) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsSnipping(false);
+        setSnipStart(null);
+        setSnipCurrent(null);
+        setPendingVisionQuery("");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isSnipping]);
+
+  // Kích hoạt Khoanh vùng (Nhập câu hỏi trước -> Ẩn HUD -> Khoanh vùng -> Chờ kết quả mới mở lại HUD)
+  const handleStartSnip = (customQuery?: string) => {
+    const q = (customQuery ?? aiQueryText).trim() || "Giải đáp chi tiết nội dung trong vùng màn hình vừa được khoanh vùng này.";
+    setPendingVisionQuery(q);
+    setShowAiQuery(false);
+    setIsSnipping(true);
+  };
+
+  // Kích hoạt Toàn màn hình (Nhập câu hỏi trước -> Ẩn HUD -> Chụp màn hình -> Chờ kết quả mới mở lại HUD)
+  const handleFullScreenVision = (customQuery?: string) => {
+    const q = (customQuery ?? aiQueryText).trim() || "Phân tích nội dung chính đang hiển thị trên toàn bộ màn hình và tóm tắt những điểm quan trọng.";
+    setShowAiQuery(false);
+    setAiQueryText("");
+    setWaitingVisionText("Đang chụp & phân tích toàn màn hình với Gemini Vision...");
+    setIsWaitingVision(true);
+
+    // Độ trễ 180ms để HUD ẩn hoàn toàn khỏi màn hình trước khi chụp
+    setTimeout(async () => {
+      try {
+        if (window.iris?.askTeleprompter) {
+          const res = await window.iris.askTeleprompter(q, {
+            isFullScreen: true,
+            hideUntilResolved: true,
+          });
+          if (res && res.status === "error") {
+            setAiQueryError(res.error || "Lỗi khi gọi AI");
+          }
+        }
+      } catch (err: any) {
+        setAiQueryError(err?.message || "Lỗi kết nối khi gửi câu hỏi");
+      } finally {
+        setIsWaitingVision(false);
+      }
+    }, 180);
+  };
 
   // Hỏi AI trực tiếp từ HUD (Icon kính lúp)
   const [showAiQuery, setShowAiQuery] = useState(false);
@@ -411,8 +474,206 @@ export default function HudShell({
       ) : null}
 
 
+      {/* Interactive Full-Screen Snipping Overlay for Vision OCR & Q&A */}
+      {isSnipping ? (
+        <div
+          className="snipping-tool-overlay hud-hit"
+          style={{
+            position: "fixed",
+            inset: 0,
+            width: "100vw",
+            height: "100vh",
+            zIndex: 9999999,
+            cursor: "crosshair",
+            userSelect: "none",
+            backgroundColor: "rgba(0, 0, 0, 0.12)",
+          }}
+          onMouseDown={(e) => {
+            if (e.button === 0) {
+              setSnipStart({ x: e.clientX, y: e.clientY });
+              setSnipCurrent({ x: e.clientX, y: e.clientY });
+            }
+          }}
+          onMouseMove={(e) => {
+            if (snipStart) {
+              setSnipCurrent({ x: e.clientX, y: e.clientY });
+            }
+          }}
+          onMouseUp={async (e) => {
+            if (e.button !== 0 || !snipStart || !snipCurrent) {
+              setIsSnipping(false);
+              setSnipStart(null);
+              setSnipCurrent(null);
+              return;
+            }
+            const x1 = Math.min(snipStart.x, snipCurrent.x);
+            const y1 = Math.min(snipStart.y, snipCurrent.y);
+            const x2 = Math.max(snipStart.x, snipCurrent.x);
+            const y2 = Math.max(snipStart.y, snipCurrent.y);
+            const width = x2 - x1;
+            const height = y2 - y1;
+
+            setIsSnipping(false);
+            setSnipStart(null);
+            setSnipCurrent(null);
+
+            if (width >= 15 && height >= 15) {
+              const xRatio = Math.max(0, Math.min(1, x1 / window.innerWidth));
+              const yRatio = Math.max(0, Math.min(1, y1 / window.innerHeight));
+              const widthRatio = Math.max(0.01, Math.min(1 - xRatio, width / window.innerWidth));
+              const heightRatio = Math.max(0.01, Math.min(1 - yRatio, height / window.innerHeight));
+
+              const query = pendingVisionQuery || aiQueryText.trim() || "Giải đáp chi tiết nội dung trong vùng màn hình vừa được khoanh vùng này.";
+              setPendingVisionQuery("");
+              setAiQueryText("");
+              setWaitingVisionText(`Đang phân tích vùng chọn (${width}×${height}px) với Gemini Vision...`);
+              setIsWaitingVision(true);
+
+              try {
+                if (window.iris?.askTeleprompter) {
+                  const res = await window.iris.askTeleprompter(query, {
+                    cropRect: { x: x1, y: y1, width, height, xRatio, yRatio, widthRatio, heightRatio },
+                    hideUntilResolved: true,
+                  });
+                  if (res && res.status === "error") {
+                    setAiQueryError(res.error || "Lỗi khi hỏi AI");
+                  }
+                }
+              } catch (err: any) {
+                setAiQueryError(err?.message || "Lỗi kết nối khi gửi câu hỏi");
+              } finally {
+                setIsWaitingVision(false);
+              }
+            } else {
+              setPendingVisionQuery("");
+            }
+          }}
+        >
+          {/* Top Instruction Pill */}
+          <div
+            style={{
+              position: "absolute",
+              top: 28,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "rgba(15, 23, 42, 0.92)",
+              border: "1px solid rgba(56, 189, 248, 0.4)",
+              borderRadius: 24,
+              padding: "7px 20px",
+              color: "#f8fafc",
+              fontSize: 13,
+              fontWeight: 500,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+              backdropFilter: "blur(12px)",
+              pointerEvents: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              zIndex: 10000001,
+            }}
+          >
+            <span style={{ color: "#38bdf8", fontSize: 16 }}>✂️</span>
+            <span>Nhấn giữ & kéo chuột để khoanh vùng màn hình cần hỏi AI</span>
+            <span style={{ fontSize: 11, color: "#94a3b8", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: 12 }}>
+              ESC để huỷ
+            </span>
+          </div>
+
+          {/* Dynamic Selection Box */}
+          {snipStart && snipCurrent && (
+            <div
+              style={{
+                position: "absolute",
+                left: Math.min(snipStart.x, snipCurrent.x),
+                top: Math.min(snipStart.y, snipCurrent.y),
+                width: Math.abs(snipCurrent.x - snipStart.x),
+                height: Math.abs(snipCurrent.y - snipStart.y),
+                border: "2px dashed #38bdf8",
+                backgroundColor: "rgba(56, 189, 248, 0.12)",
+                boxShadow: "0 0 0 99999px rgba(0, 0, 0, 0.35)",
+                pointerEvents: "none",
+                zIndex: 10000000,
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: -24,
+                  right: 0,
+                  background: "#0284c7",
+                  color: "#fff",
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  fontFamily: "monospace",
+                  fontWeight: 600,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {Math.abs(snipCurrent.x - snipStart.x)} × {Math.abs(snipCurrent.y - snipStart.y)} px
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* Top Floating Badge while AI is analyzing screenshot in background */}
+      {isWaitingVision && (
+        <div
+          className="hud-hit"
+          style={{
+            position: "fixed",
+            top: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(15, 23, 42, 0.94)",
+            border: "1px solid rgba(56, 189, 248, 0.5)",
+            borderRadius: 24,
+            padding: "8px 22px",
+            color: "#f8fafc",
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+            backdropFilter: "blur(12px)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            zIndex: 9999999,
+          }}
+        >
+          <div
+            style={{
+              width: 14,
+              height: 14,
+              border: "2px solid #38bdf8",
+              borderTopColor: "transparent",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+            }}
+          />
+          <span>{waitingVisionText}</span>
+          <button
+            type="button"
+            onClick={() => setIsWaitingVision(false)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#94a3b8",
+              cursor: "pointer",
+              fontSize: 12,
+              marginLeft: 4,
+              padding: "2px 4px",
+            }}
+            title="Đóng thông báo"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Center Message Widget */}
-      {hudMessage ? (
+      {hudMessage && !isSnipping && !isWaitingVision ? (
         <div 
           className="hud-message-center hud-hit"
           onMouseDown={handleMsgMouseDown}
@@ -465,7 +726,9 @@ export default function HudShell({
                       cursor: "pointer",
                     }}
                   >
-                    🌐 {teleprompterState?.translateEnabled ? `Dịch: ${teleprompterState.translateTargetLang}` : "Dịch"}
+                    🌐 {teleprompterState?.translateEnabled
+                      ? ((teleprompterState.translateTargetLang || "").replace(/\s*\(.*?\)/g, "").trim() || "Dịch")
+                      : "Dịch"}
                   </button>
                   {langPickerOpen ? (
                     <div
@@ -495,7 +758,8 @@ export default function HudShell({
                         </button>
                       ) : null}
                       {TRANSLATE_LANGS.map((lang) => {
-                        const isCurrent = teleprompterState?.translateEnabled && teleprompterState?.translateTargetLang === lang;
+                        const cleanCurrent = (teleprompterState?.translateTargetLang || "").replace(/\s*\(.*?\)/g, "").trim();
+                        const isCurrent = teleprompterState?.translateEnabled && (teleprompterState?.translateTargetLang === lang || cleanCurrent === lang);
                         return (
                           <button
                             key={lang}
@@ -548,6 +812,45 @@ export default function HudShell({
                 >
                   <Search size={14} className={isAskingAi ? "animate-pulse" : ""} />
                 </button>
+
+                {/* Nút Xuất Biên Bản (Chỉ hiện icon) */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (isExportingMinutes) return;
+                    setIsExportingMinutes(true);
+                    setMinutesExportStatus("Đang lưu...");
+                    try {
+                      const res = await window.iris?.exportTeleprompterMinutes();
+                      if (res && res.ok) {
+                        setMinutesExportStatus(`✓ Đã lưu (${res.count || 0})`);
+                      } else {
+                        setMinutesExportStatus("⚠️ " + (res?.message || res?.error || "Lỗi lưu"));
+                      }
+                    } catch (err: any) {
+                      setMinutesExportStatus("⚠️ " + (err?.message || "Lỗi lưu"));
+                    } finally {
+                      setIsExportingMinutes(false);
+                      setTimeout(() => setMinutesExportStatus(""), 4000);
+                    }
+                  }}
+                  title={minutesExportStatus ? `Biên bản: ${minutesExportStatus}` : "Lưu biên bản cuộc họp & nhắc bài vào Second Brain Markdown"}
+                  style={{
+                    fontSize: 12,
+                    padding: "4px 8px",
+                    borderRadius: 6,
+                    border: "1px solid #333",
+                    background: minutesExportStatus.startsWith("✓") ? "rgba(34,197,94,0.18)" : "#151515",
+                    color: minutesExportStatus.startsWith("✓") ? "#4ade80" : "#ccc",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {minutesExportStatus.startsWith("✓") ? "✓" : (isExportingMinutes ? "⏳" : "💾")}
+                </button>
+
                 {showAiQuery && (
                   <form
                     onSubmit={async (e) => {
@@ -574,20 +877,97 @@ export default function HudShell({
                         }
                       }
                     }}
-                    style={{ position: "absolute", left: "100%", marginLeft: 6, display: "flex", width: 220 }}
+                    style={{
+                      position: "absolute",
+                      left: "100%",
+                      marginLeft: 6,
+                      display: "flex",
+                      alignItems: "center",
+                      width: 290,
+                      zIndex: 40,
+                      gap: 4,
+                      background: "#111",
+                      padding: "4px 6px",
+                      borderRadius: 8,
+                      border: "1px solid #444",
+                      boxShadow: "0 6px 18px rgba(0,0,0,0.6)",
+                    }}
                   >
                     <input
                       autoFocus
                       type="text"
-                      placeholder="Hỏi AI điều gì đó..."
+                      placeholder="Hỏi AI... (Enter để hỏi ngay)"
                       value={aiQueryText}
                       onChange={(e) => setAiQueryText(e.target.value)}
                       style={{
-                        width: "100%", padding: "4px 8px", borderRadius: 6,
-                        border: "1px solid #444", background: "#111", color: "#fff",
-                        fontSize: 11, outline: "none"
+                        flex: 1,
+                        padding: "4px 6px",
+                        borderRadius: 4,
+                        border: "none",
+                        background: "#1e1e1e",
+                        color: "#fff",
+                        fontSize: 11,
+                        outline: "none",
                       }}
                     />
+                    <button
+                      type="button"
+                      onClick={() => handleStartSnip(aiQueryText)}
+                      title="Khoanh vùng màn hình kèm câu hỏi này"
+                      style={{
+                        padding: "4px 6px",
+                        borderRadius: 5,
+                        border: "1px solid #333",
+                        background: "#1c1c1c",
+                        color: "#aaa",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "#fff";
+                        e.currentTarget.style.borderColor = "#555";
+                        e.currentTarget.style.background = "#2a2a2a";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "#aaa";
+                        e.currentTarget.style.borderColor = "#333";
+                        e.currentTarget.style.background = "#1c1c1c";
+                      }}
+                    >
+                      <Crop size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFullScreenVision(aiQueryText)}
+                      title="Chụp toàn màn hình kèm câu hỏi này"
+                      style={{
+                        padding: "4px 6px",
+                        borderRadius: 5,
+                        border: "1px solid #333",
+                        background: "#1c1c1c",
+                        color: "#aaa",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "#fff";
+                        e.currentTarget.style.borderColor = "#555";
+                        e.currentTarget.style.background = "#2a2a2a";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "#aaa";
+                        e.currentTarget.style.borderColor = "#333";
+                        e.currentTarget.style.background = "#1c1c1c";
+                      }}
+                    >
+                      <Monitor size={12} />
+                    </button>
                   </form>
                 )}
               </div>
@@ -648,7 +1028,16 @@ export default function HudShell({
               // trên (vẫn thấy được đang nói gì), nhường phần lớn không gian
               // cho bảng câu hỏi/gợi ý — đây là phần chính người dùng cần khi
               // "sếp hỏi thông tin".
-              <div className="teleprompter-caption-strip hud-hit">
+              <div
+                className="teleprompter-caption-strip hud-hit"
+                style={{
+                  maxHeight: teleprompterState?.translateEnabled && teleprompterState?.copilotEnabled ? "140px" : undefined,
+                  overflowY: teleprompterState?.translateEnabled && teleprompterState?.copilotEnabled ? "auto" : undefined,
+                  borderBottom: teleprompterState?.translateEnabled && teleprompterState?.copilotEnabled ? "1px solid rgba(255,255,255,0.08)" : undefined,
+                  paddingBottom: teleprompterState?.translateEnabled && teleprompterState?.copilotEnabled ? "6px" : undefined,
+                  marginBottom: teleprompterState?.translateEnabled && teleprompterState?.copilotEnabled ? "6px" : undefined,
+                }}
+              >
                 {hudMessage.content.split("\n").map(renderTranscriptLine)}
               </div>
             ) : (

@@ -378,6 +378,25 @@ export default function SetupPanel({
   const [cam, setCam] = useState<PermState>("idle");
   const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([]);
   const [saving, setSaving] = useState(false);
+  const [liveKeyPool, setLiveKeyPool] = useState<KeyPoolStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchStatus = async () => {
+      if (!window.iris?.getKeyPoolStatus) return;
+      try {
+        const res = await window.iris.getKeyPoolStatus();
+        if (active && res) setLiveKeyPool(res);
+      } catch {}
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
 
   const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
@@ -760,6 +779,52 @@ export default function SetupPanel({
           </button>
           <TestBadge state={gemini} okLabel={t.keyWorks} />
         </div>
+
+                {/* Giám sát trạng thái Key Pool thời gian thực */}
+        {liveKeyPool && liveKeyPool.configured && liveKeyPool.keys.length > 0 && (
+          <div className="pool-live-monitor">
+            <div className="pool-live-header">
+              <div className="pool-live-title">
+                <span>⚡ {lang === "vi" ? "Giám Sát 10 Key Pool Thời Gian Thực" : "Real-time Key Pool Monitor"}</span>
+                <span className="pool-live-sub">
+                  {liveKeyPool.readyCount}/{liveKeyPool.totalKeys} {lang === "vi" ? "Sẵn sàng" : "Ready"}
+                  {liveKeyPool.cooldownCount > 0 ? (
+                    <span className="pool-live-cooldown-count"> · {liveKeyPool.cooldownCount} {lang === "vi" ? "đang hồi chiêu" : "in cooldown"}</span>
+                  ) : null}
+                </span>
+              </div>
+              <div className="pool-live-badge-group">
+                <span className="pool-live-badge live-ready">● {liveKeyPool.readyCount} Ready</span>
+                {liveKeyPool.cooldownCount > 0 && (
+                  <span className="pool-live-badge live-cooldown">⏳ {liveKeyPool.cooldownCount} Cooldown</span>
+                )}
+              </div>
+            </div>
+            <div className="pool-live-keys-grid">
+              {liveKeyPool.keys.map((k) => (
+                <div key={k.index} className={`pool-live-key-card ${k.ready ? "is-ready" : "is-cooldown"}`}>
+                  <div className="pool-live-key-top">
+                    <span className="pool-live-key-idx">#{k.index + 1}</span>
+                    <span className="pool-live-key-role">{k.role}</span>
+                    <span className={`pool-live-key-status-dot ${k.ready ? "ready" : "cooldown"}`} />
+                  </div>
+                  <div className="pool-live-key-hint">{k.hint}</div>
+                  <div className="pool-live-key-stats">
+                    {k.ready ? (
+                      <span className="key-stat-ready">🟢 {lang === "vi" ? "Sẵn sàng" : "Ready"}</span>
+                    ) : (
+                      <span className="key-stat-cd">🟡 {k.remainingCooldownSec}s</span>
+                    )}
+                    <span className="key-stat-calls">{k.totalCalls} calls</span>
+                    {k.totalRateLimits > 0 && (
+                      <span className="key-stat-limits" title="Số lần chạm hạn mức 429">{k.totalRateLimits} 429s</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Tuỳ chọn Vision Key riêng biệt (gọn gàng, không phá vỡ bố cục) */}
         <div className="pool-vision-extra">

@@ -143,6 +143,107 @@ def get_fallback_model():
 
 
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# Gemini 2.5 Flash Cloud Audio STT (Dự phòng thông minh khi thiếu Deepgram)
+# --------------------------------------------------------------------------
+
+def get_gemini_keys():
+    keys = []
+    env_vars = [
+        "GEMINI_API_KEY_MEETING",
+        "GEMINI_API_KEY",
+        "GEMINI_API_KEY_LIVE",
+        "GEMINI_API_KEY_VISION",
+    ] + [f"GEMINI_API_KEY_STANDBY_{i}" for i in range(1, 8)]
+
+    for var in env_vars:
+        val = os.environ.get(var) or ""
+        for raw in val.replace("\r", "\n").split("\n"):
+            for part in raw.split(","):
+                k = part.strip().strip('"').strip("'")
+                if k and len(k) > 20 and k not in keys:
+                    keys.append(k)
+
+    if not keys:
+        for env_file in [".env", os.path.join(os.path.dirname(__file__), "..", ".env")]:
+            if os.path.exists(env_file):
+                try:
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if any(line.strip().startswith(v + "=") for v in env_vars):
+                                val = line.strip().split("=", 1)[1]
+                                for raw in val.replace("\r", "\n").split("\n"):
+                                    for part in raw.split(","):
+                                        k = part.strip().strip('"').strip("'")
+                                        if k and len(k) > 20 and k not in keys:
+                                            keys.append(k)
+                except Exception:
+                    pass
+    return keys
+
+GEMINI_STT_KEYS = get_gemini_keys()
+_gemini_key_idx = 0
+_gemini_key_lock = threading.Lock()
+
+
+def transcribe_gemini_audio(mono_float: np.ndarray, sample_rate: int = 16000) -> str | None:
+    """Gửi batch audio tới Gemini 2.5 Flash Audio API. 0% CPU, độ trễ ~1.5s."""
+    global _gemini_key_idx
+    if not GEMINI_STT_KEYS:
+        return None
+    try:
+        import io
+        import wave
+        from google import genai
+        from google.genai import types
+
+        clipped = np.clip(mono_float, -1.0, 1.0)
+        pcm16 = (clipped * 32767.0).astype(np.int16).tobytes()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm16)
+        wav_bytes = buf.getvalue()
+
+        for _ in range(min(len(GEMINI_STT_KEYS), 3)):
+            with _gemini_key_lock:
+                key = GEMINI_STT_KEYS[_gemini_key_idx % len(GEMINI_STT_KEYS)]
+            try:
+                client = genai.Client(api_key=key)
+                prompt = (
+                    "Chép lại lời nói (transcribe) trong file âm thanh này bằng tiếng Việt. "
+                    "Chỉ trả về văn bản lời nói chính xác, tuyệt đối không giải thích hay thêm định dạng thừa. "
+                    "Nếu là im lặng hoặc tiếng ồn không có lời nói, chỉ trả về chuỗi rỗng."
+                )
+                resp = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
+                        prompt,
+                    ],
+                )
+                text = (resp.text or "").strip()
+                if text.startswith("```") and text.endswith("```"):
+                    text = text.strip("`").strip()
+                return text
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    with _gemini_key_lock:
+                        _gemini_key_idx = (_gemini_key_idx + 1) % len(GEMINI_STT_KEYS)
+                    continue
+                else:
+                    with _gemini_key_lock:
+                        _gemini_key_idx = (_gemini_key_idx + 1) % len(GEMINI_STT_KEYS)
+                    return None
+    except Exception as e:
+        print(f"[Gemini Cloud STT] Không thể xử lý audio: {e}", file=sys.stderr, flush=True)
+        return None
+    return None
+
 # Một nguồn âm thanh (mic của bạn HOẶC loopback loa/đối tác)
 # --------------------------------------------------------------------------
 
@@ -342,12 +443,12 @@ class AudioChannel:
             self.emit(self._final_acc)
             self._final_acc = ""
 
-    # ---- Chế độ dự phòng: batch 4 giây bằng faster-whisper (bản cũ) --------
+    # ---- Chế độ dự phòng: Gemini 2.5 Flash Cloud Audio -> Whisper cục bộ --------
     async def run_fallback(self):
-        model = await asyncio.to_thread(get_fallback_model)
         needed_samples = int(SAMPLE_RATE * FALLBACK_CHUNK_SECONDS)
         buf = []
         buf_samples = 0
+        local_model = None
 
         while not self.stop_event.is_set():
             frame = self._next_raw_frame()
@@ -369,21 +470,33 @@ class AudioChannel:
                 continue
             mono = normalize_peak(mono)
 
-            try:
-                segments, _ = await asyncio.to_thread(
-                    model.transcribe,
-                    mono,
-                    beam_size=5,
-                    language="vi",
-                    vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=300),
-                    condition_on_previous_text=False,
-                    no_speech_threshold=0.6,
-                )
-                text = "".join(seg.text for seg in segments).strip()
-            except Exception as e:
-                print(f"[{self.label}] Lỗi transcribe dự phòng: {e}", file=sys.stderr, flush=True)
-                text = ""
+            # Ưu tiên 1: Gemini 2.5 Flash Cloud Audio (0% CPU, 0s startup)
+            text = None
+            if GEMINI_STT_KEYS:
+                try:
+                    text = await asyncio.to_thread(transcribe_gemini_audio, mono, SAMPLE_RATE)
+                except Exception as e:
+                    print(f"[{self.label}] Gemini STT fallback lỗi: {e}", file=sys.stderr, flush=True)
+
+            # Ưu tiên 2: Rớt về faster-whisper cục bộ nếu Gemini không khả dụng
+            if text is None:
+                if local_model is None:
+                    local_model = await asyncio.to_thread(get_fallback_model)
+                try:
+                    segments, _ = await asyncio.to_thread(
+                        local_model.transcribe,
+                        mono,
+                        beam_size=5,
+                        language="vi",
+                        vad_filter=True,
+                        vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=300),
+                        condition_on_previous_text=False,
+                        no_speech_threshold=0.6,
+                    )
+                    text = "".join(seg.text for seg in segments).strip()
+                except Exception as e:
+                    print(f"[{self.label}] Lỗi transcribe whisper dự phòng: {e}", file=sys.stderr, flush=True)
+                    text = ""
 
             self.emit(text)
 
@@ -403,13 +516,20 @@ class AudioChannel:
 
 async def main_async():
     if not DEEPGRAM_API_KEY:
-        print(
-            "[FALLBACK] Không thấy DEEPGRAM_API_KEY trong môi trường — dùng ngay chế độ dự phòng "
-            "cục bộ (faster-whisper, batch 4s, độ trễ cao hơn mục tiêu <1.5s). "
-            "Xem .env.example để bật streaming cloud (khuyến nghị).",
-            file=sys.stderr,
-            flush=True,
-        )
+        if GEMINI_STT_KEYS:
+            print(
+                f"[CLOUD-FALLBACK] Không có DEEPGRAM_API_KEY — kích hoạt Gemini 2.5 Flash Audio API "
+                f"({len(GEMINI_STT_KEYS)} keys trong Pool, 0% CPU, độ trễ ~1.5s).",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                "[FALLBACK] Không thấy DEEPGRAM_API_KEY và không có Gemini Key — dùng chế độ dự phòng "
+                "cục bộ (faster-whisper). Xem .env.example để bật streaming cloud.",
+                file=sys.stderr,
+                flush=True,
+            )
     else:
         print(f"[CLOUD] Dùng Deepgram streaming (nova-3, language={STT_LANGUAGE}).", file=sys.stderr, flush=True)
 

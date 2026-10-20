@@ -18,7 +18,7 @@ import { runQueue } from "./claude-runner.mjs";
 import { repoRoot } from "./paths.mjs";
 
 export const iconPath = path.join(repoRoot, "build", "icon.png");
-export const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : null;
+export const appIcon = (fs.existsSync(iconPath) && nativeImage?.createFromPath) ? nativeImage.createFromPath(iconPath) : null;
 
 export let mainWindow = null;
 // Ported-capability accessor: canvas.mjs/second-brain.mjs receive this as an

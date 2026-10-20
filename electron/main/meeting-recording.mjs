@@ -17,11 +17,9 @@ const MEETING_CANDIDATE_MODELS = Array.from(
     [
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
       String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
-      "gemini-2.5-flash",
       "gemini-3.8-flash",
+      "gemini-2.5-flash",
       "gemini-flash-latest",
-      "gemini-3.5-flash",
-      "gemini-2.0-flash",
     ].filter(Boolean)
   )
 );
@@ -36,7 +34,10 @@ async function generateMeetingContent(client, payload) {
       });
     } catch (err) {
       lastErr = err;
-      if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
+      if (isRateLimitError(err)) {
+        throw err;
+      }
+      if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
         continue;
       }
       throw err;
@@ -349,6 +350,11 @@ export async function toggleMeetingRecording() {
   // --- BẮT ĐẦU GHI ÂM ---
   if (!meetingRecorder || meetingRecorder.state === "dead") {
     if (getAllGeminiKeys({ purpose: "meeting" }).length === 0) {
+      enterHud();
+      sendHudStatus(
+        "Thiếu API Key",
+        "Chưa cấu hình GEMINI_API_KEY. Vui lòng mở Cài đặt (Setup) và thêm ít nhất 1 API key để kích hoạt tính năng ghi âm & tóm tắt cuộc họp."
+      );
       return { status: "error", error: "Thiếu GEMINI_API_KEY, vui lòng cấu hình trước khi ghi âm." };
     }
 

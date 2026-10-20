@@ -48,7 +48,9 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
   const [history, setHistory] = useState<MeetingHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSession, setSelectedSession] = useState<MeetingHistoryItem | null>(null);
-  const [remainingSeconds, setRemainingSeconds] = useState(3);
+  const [isPinned, setIsPinned] = useState(false);
+  const AUTO_HIDE_TIMEOUT_MS = 30000;
+  const [remainingSeconds, setRemainingSeconds] = useState(30);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -78,11 +80,11 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
     return () => window.clearInterval(timer);
   }, [recordingState.isRecording, recordingState.startTime]);
 
-  // Theo dõi thời gian không hoạt động để tự ẩn sau 3 giây (như HUD Alt+M)
+  // Theo dõi thời gian không hoạt động
   const lastActiveRef = useRef<number>(Date.now());
   const resetInactivity = useCallback(() => {
     lastActiveRef.current = Date.now();
-    setRemainingSeconds(3);
+    setRemainingSeconds(Math.ceil(AUTO_HIDE_TIMEOUT_MS / 1000));
   }, []);
 
   const handleClose = useCallback(() => {
@@ -95,14 +97,14 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
   useEffect(() => {
     resetInactivity();
     const interval = window.setInterval(() => {
-      // Khi đang ghi âm hoặc đang gỡ băng & tóm tắt AI: giữ Hub luôn mở, không tự động đóng
-      if (processingId || recordingState.isSummarizing || recordingState.isRecording) {
+      // Khi đang xem chi tiết cuộc họp, đang ghim mở, đang ghi âm hoặc đang gỡ băng & tóm tắt: giữ Hub luôn mở
+      if (isPinned || selectedSession || processingId || recordingState.isSummarizing || recordingState.isRecording) {
         lastActiveRef.current = Date.now();
-        setRemainingSeconds(3);
+        setRemainingSeconds(Math.ceil(AUTO_HIDE_TIMEOUT_MS / 1000));
         return;
       }
       const elapsed = Date.now() - lastActiveRef.current;
-      const left = Math.max(0, 3000 - elapsed);
+      const left = Math.max(0, AUTO_HIDE_TIMEOUT_MS - elapsed);
       const secs = Math.ceil(left / 1000);
       setRemainingSeconds(secs);
       if (left <= 0) {
@@ -111,7 +113,7 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
     }, 200);
 
     return () => window.clearInterval(interval);
-  }, [handleClose, resetInactivity, processingId, recordingState.isSummarizing, recordingState.isRecording]);
+  }, [handleClose, resetInactivity, isPinned, selectedSession, processingId, recordingState.isSummarizing, recordingState.isRecording]);
 
   // Cập nhật trạng thái ghi âm định kỳ khi Hub đang mở
   const refreshRecordingState = useCallback(async () => {
@@ -324,9 +326,10 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Badge đếm ngược tự ẩn 3s */}
+          {/* Badge ghim mở / đếm ngược tự ẩn */}
           <div
-            title="Hub sẽ tự ẩn sau 3 giây nếu không có thao tác chuột hoặc cuộn trang (như HUD Alt+M)"
+            onClick={() => setIsPinned((v) => !v)}
+            title={isPinned ? "Đang ghim mở cố định (bấm để bật tự ẩn)" : "Bấm để ghim mở cố định không tự đóng"}
             style={{
               display: "flex",
               alignItems: "center",
@@ -334,13 +337,21 @@ export default function MeetingHistoryModal({ onClose }: MeetingHistoryModalProp
               fontSize: 11,
               padding: "3px 10px",
               borderRadius: 20,
-              background: "rgba(52, 211, 153, 0.12)",
-              border: "1px solid rgba(52, 211, 153, 0.3)",
-              color: "#6ee7b7",
+              background: isPinned ? "rgba(96, 165, 250, 0.18)" : "rgba(52, 211, 153, 0.12)",
+              border: isPinned ? "1px solid rgba(96, 165, 250, 0.4)" : "1px solid rgba(52, 211, 153, 0.3)",
+              color: isPinned ? "#60a5fa" : "#6ee7b7",
+              cursor: "pointer",
+              userSelect: "none",
             }}
           >
-            <Clock size={12} />
-            <span>Tự ẩn sau {remainingSeconds}s</span>
+            {isPinned ? (
+              <span>📌 Đã ghim mở</span>
+            ) : (
+              <>
+                <Clock size={12} />
+                <span>Tự ẩn sau {remainingSeconds}s</span>
+              </>
+            )}
           </div>
 
           <button

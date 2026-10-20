@@ -15,16 +15,15 @@ import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { grabPrimaryScreenJpeg } from "./vision.mjs";
 import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+import { getMeetingState } from "./meeting-recording.mjs";
 
 const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
   new Set(
     [
       String(process.env.GEMINI_TRANSLATE_MODEL || "").trim(),
-      "gemini-2.5-flash",
       "gemini-3.8-flash",
+      "gemini-2.5-flash",
       "gemini-flash-latest",
-      "gemini-3.5-flash",
-      "gemini-2.0-flash",
     ].filter(Boolean)
   )
 );
@@ -55,6 +54,7 @@ export let translateEnabled = false;
 export let translateTargetLang = "";
 export let liveTranslations = []; // song song với liveTranscripts, tối đa 3 dòng gần nhất
 export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
+export let allSessionTranscripts = []; // Toàn bộ lịch sử hội thoại trong phiên để tự động xuất biên bản Markdown
 
 async function getGenAi(apiKey) {
   const client = getGenAiClient(apiKey);
@@ -145,6 +145,15 @@ let hudClearTimer = null;
 
 export function updateTeleprompterHud() {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents?.isDestroyed?.()) return;
+
+  // Nếu đang trong phiên ghi âm hoặc tóm tắt cuộc họp (Alt+M), không ghi đè cửa sổ HUD của Meeting Summarizer
+  try {
+    const meeting = typeof getMeetingState === "function" ? getMeetingState() : null;
+    if (meeting?.isRecording || meeting?.isSummarizing) {
+      return;
+    }
+  } catch {}
+
   let content = liveTranscripts.join("\n");
   if (translateEnabled) {
     let t = [...liveTranslations];
@@ -165,6 +174,12 @@ export function updateTeleprompterHud() {
       content,
       copilotHistory: (copilotEnabled || copilotHistory.length > 0) ? copilotHistory : undefined,
       copilotStatus: (copilotEnabled || copilotStatus) ? copilotStatus : undefined,
+      teleprompterState: {
+        translateEnabled,
+        translateTargetLang,
+        copilotEnabled,
+        transcriptCount: allSessionTranscripts.length,
+      },
     });
   } catch (err) {
     console.warn("[updateTeleprompterHud] Lỗi gửi hud:message:", err);
@@ -179,11 +194,6 @@ export async function toggleTranslateMode(targetLang) {
     translateTargetLang = cleanLang;
     liveTranslations = [];
     currentStreamingTranslation = "";
-    if (copilotEnabled) {
-      copilotEnabled = false;
-      copilotStatus = "";
-      if (copilotTimer) clearTimeout(copilotTimer);
-    }
   } else {
     // Tắt dịch
     translateEnabled = false;
@@ -200,30 +210,75 @@ export function toggleCopilotMode() {
   if (!copilotEnabled) {
     copilotStatus = "";
     if (copilotTimer) clearTimeout(copilotTimer);
-    // Lịch sử gợi ý KHÔNG bị xoá khi tắt — chỉ ẩn khỏi HUD (updateTeleprompterHud
-    // không gửi copilotHistory khi copilotEnabled=false). Bật lại trong cùng
-    // phiên Alt+T sẽ thấy lại toàn bộ câu hỏi/gợi ý cũ, không bị mất.
   } else {
     copilotStatus = "💡 Nhắc bài đã BẬT — đang lắng nghe.";
-    // Dịch và Nhắc bài loại trừ nhau (1 khung nhỏ, tránh gọi 2 luồng API
-    // song song trên cùng transcript) — tắt Dịch nếu đang bật.
-    if (translateEnabled) {
-      translateEnabled = false;
-      translateTargetLang = "";
-      liveTranslations = [];
-    }
   }
-
-  // Đã bỏ hẳn cơ chế tự tắt/mở mic laptop (trước đây gửi
-  // "teleprompter:force-mic" mỗi khi bật/tắt Nhắc bài). Nhắc bài giờ CHỈ
-  // hiển thị gợi ý minh bạch trên HUD — không tự ý đổi trạng thái mic. Nút
-  // mic thủ công trên HUD hoạt động độc lập hoàn toàn với tính năng này.
 
   if (liveTranscriber && mainWindow) {
     updateTeleprompterHud();
   }
   
   return { status: "success", message: `Nhắc bài: ${copilotEnabled ? "ON" : "OFF"}` };
+}
+
+/**
+ * Tự động xuất biên bản cuộc họp & nhắc bài ra file Markdown trong ~/iris-second-brain/meetings/
+ */
+export async function exportTeleprompterMinutes() {
+  if (allSessionTranscripts.length === 0 && copilotHistory.length === 0) {
+    return { ok: false, status: "empty", message: "Chưa có dữ liệu hội thoại trong phiên này để xuất." };
+  }
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const timeStr = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const fileName = `teleprompter-${dateStr}_${timeStr}.md`;
+
+  const secondBrainDir = path.join(os.homedir(), "iris-second-brain", "meetings");
+  if (!fs.existsSync(secondBrainDir)) {
+    fs.mkdirSync(secondBrainDir, { recursive: true });
+  }
+  const filePath = path.join(secondBrainDir, fileName);
+
+  let md = `# BIÊN BẢN HỘI THOẠI & NHẮC BÀI (LIVE TELEPROMPTER)\n\n`;
+  md += `- **Thời gian xuất:** ${now.toLocaleString("vi-VN")}\n`;
+  md += `- **Chế độ dịch:** ${translateEnabled ? `BẬT (${translateTargetLang})` : "TẮT"}\n`;
+  md += `- **Chế độ nhắc bài (Copilot):** ${copilotEnabled ? "BẬT" : "TẮT"}\n`;
+  md += `- **Tổng số câu hội thoại:** ${allSessionTranscripts.length}\n`;
+  md += `- **Số câu hỏi & gợi ý:** ${copilotHistory.length}\n\n`;
+  md += `---\n\n`;
+
+  if (copilotHistory.length > 0) {
+    md += `## 💡 CÁC CÂU HỎI & GỢI Ý ĐỐI ĐÁP (COPILOT Q&A)\n\n`;
+    copilotHistory.forEach((item, idx) => {
+      md += `### ${idx + 1}. ${item.question}\n`;
+      md += `- **Thời gian:** ${new Date(item.ts).toLocaleTimeString("vi-VN")}\n`;
+      if (item.engine) md += `- **Engine:** ${item.engine}\n`;
+      md += `\n> **Gợi ý trả lời:**\n> ${item.answer.replace(/\n/g, "\n> ")}\n\n`;
+    });
+    md += `---\n\n`;
+  }
+
+  md += `## 📝 NỘI DUNG HỘI THOẠI CHI TIẾT (TRANSCRIPT)\n\n`;
+  allSessionTranscripts.forEach((line) => {
+    md += `**[${line.time}]** ${line.text}\n\n`;
+    if (line.translation) {
+      md += `> 🌐 *Bản dịch:* ${line.translation}\n\n`;
+    }
+  });
+
+  fs.writeFileSync(filePath, md, "utf8");
+
+  return {
+    ok: true,
+    status: "success",
+    path: filePath,
+    filePath,
+    fileName,
+    count: allSessionTranscripts.length + copilotHistory.length,
+    message: `Đã lưu biên bản thành công vào: ${fileName}`,
+  };
 }
 
 export async function toggleLiveTranscriber() {
@@ -244,6 +299,7 @@ export async function toggleLiveTranscriber() {
       },
     });
     liveTranscripts = [];
+    allSessionTranscripts = [];
     copilotBuffer = [];
     copilotHistory = [];
     copilotStatus = "";
@@ -336,7 +392,10 @@ export async function toggleLiveTranscriber() {
                                return;
                              } catch (err) {
                                streamErr = err;
-                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
+                               if (isRateLimitError(err)) {
+                                 throw err;
+                               }
+                               if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                  continue;
                                }
                                throw err;
@@ -458,7 +517,10 @@ export async function toggleLiveTranscriber() {
                                });
                              } catch (err) {
                                lastErr = err;
-                               if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
+                               if (isRateLimitError(err)) {
+                                 throw err;
+                               }
+                               if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                  continue;
                                }
                                throw err;
@@ -478,7 +540,10 @@ export async function toggleLiveTranscriber() {
                              });
                            } catch (err) {
                              lastErr = err;
-                             if (isRateLimitError(err) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(err?.message || "")) {
+                             if (isRateLimitError(err)) {
+                               throw err;
+                             }
+                             if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                continue;
                              }
                              throw err;
@@ -580,14 +645,18 @@ export async function toggleLiveTranscriber() {
 }
 
 export async function askTeleprompter(question) {
+  const options = arguments.length > 1 && arguments[1] ? arguments[1] : {};
+  const { cropRect, imageBase64, isFullScreen, hideUntilResolved } = (typeof options === "object" && options !== null) ? options : {};
   if (!question || typeof question !== "string" || !question.trim()) {
     return { status: "error", error: "Câu hỏi không được để trống." };
   }
   const cleanQ = question.trim();
 
-  // Đảm bảo mở HUD và kích hoạt chế độ nhắc bài để hiển thị kết quả
+  // Đảm bảo kích hoạt chế độ nhắc bài
   copilotEnabled = true;
-  enterHud();
+  if (!hideUntilResolved) {
+    enterHud();
+  }
 
   const contextText = copilotBuffer.length > 0
     ? copilotBuffer.join("\n")
@@ -598,75 +667,85 @@ export async function askTeleprompter(question) {
     "Dựa vào nội dung cuộc họp hoặc ảnh chụp màn hình hiện tại (nếu có), hãy trả lời câu hỏi của người dùng thật súc tích, chính xác và trực tiếp.\n\n" +
     "Nội dung phiên âm cuộc họp gần nhất:\n" + contextText;
 
-  copilotStatus = "⏳ Đang gửi câu hỏi tới Claude...";
-  updateTeleprompterHud();
+  const isVisionQuery = Boolean(cropRect || imageBase64 || isFullScreen);
+  const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
+
+  copilotStatus = isVisionQuery
+    ? (isFullScreen ? "📸 Đang phân tích toàn màn hình với Gemini Vision..." : "📸 Đang phân tích vùng khoanh với Gemini Vision...")
+    : (claudeKey ? "⏳ Đang gửi câu hỏi tới Claude..." : "⏳ Đang gửi câu hỏi tới AI...");
+
+  if (!hideUntilResolved) {
+    updateTeleprompterHud();
+  }
 
   let answer = "";
-  let engineUsed = "Claude";
+  let engineUsed = isVisionQuery ? "Gemini Vision" : (claudeKey ? "Claude" : "Gemini");
   let claudeError = null;
 
-  // 1. Ưu tiên gọi Claude API trước
-  const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
-  if (claudeKey) {
+  // 1. Ưu tiên gọi Claude API trước (nếu là câu hỏi văn bản thuần không kèm vùng khoanh màn hình)
+  if (claudeKey && !isVisionQuery) {
     try {
       answer = await callClaudeForTeleprompter(systemPrompt, cleanQ, { maxTokens: 600 });
       engineUsed = "Claude";
     } catch (err) {
       claudeError = err;
-      console.warn("[askTeleprompter] Claude API thất bại, chuyển sang Gemini Vision:", err.message);
+      console.warn("[askTeleprompter] Claude API thất bại, chuyển sang Gemini:", err.message);
     }
   } else {
     claudeError = null;
   }
 
-  // 2. Dự phòng: Không có key Claude hoặc Claude lỗi => dùng Gemini Vision + chụp màn hình
+  // 2. Dự phòng: Không có key Claude hoặc Claude lỗi, hoặc câu hỏi Vision => dùng Gemini
   if (!answer) {
-    copilotStatus = "📸 Đang chụp màn hình & chuyển sang Gemini Vision...";
+    copilotStatus = isVisionQuery
+      ? (isFullScreen ? "📸 Đang chụp màn hình & phân tích với Gemini Vision..." : "📸 Đang chụp vùng khoanh & phân tích với Gemini Vision...")
+      : "⏳ Đang suy nghĩ câu trả lời...";
     updateTeleprompterHud();
 
     const usePoolFailover = typeof withGeminiFailover === "function" && typeof getAllGeminiKeys === "function";
     const geminiClient = usePoolFailover ? null : await getGeminiVisionClient();
-    const hasVisionKey = usePoolFailover
-      ? getAllGeminiKeys({ purpose: "vision", preferVision: true }).length > 0
+    const hasKey = usePoolFailover
+      ? getAllGeminiKeys({ purpose: isVisionQuery ? "vision" : "general", preferVision: isVisionQuery }).length > 0
       : Boolean(geminiClient);
-    if (!hasVisionKey) {
+    if (!hasKey) {
       copilotStatus = "";
       updateTeleprompterHud();
       const prefix = claudeError ? `Claude: ${claudeError.message}. ` : "";
       return {
         status: "error",
-        error: `${prefix}Gemini Vision chưa được cấu hình (thiếu GEMINI_API_KEY hoặc GEMINI_VISION_API_KEY).`
+        error: `${prefix}Gemini chưa được cấu hình (thiếu GEMINI_API_KEY hoặc GEMINI_VISION_API_KEY).`
       };
     }
 
     try {
-      // Chụp màn hình chính gửi kèm cho Gemini Vision
-      let screenBase64 = null;
-      try {
-        const grabbed = await grabPrimaryScreenJpeg(75);
-        if (grabbed?.buffer && Buffer.isBuffer(grabbed.buffer)) {
-          screenBase64 = grabbed.buffer.toString("base64");
+      // Chỉ chụp màn hình khi có yêu cầu Vision (khoanh vùng hoặc toàn màn hình).
+      // Khi ấn Enter hỏi thông thường => KHÔNG chụp màn hình, trả lời trực tiếp bằng text.
+      let screenBase64 = imageBase64 || null;
+      if (isVisionQuery && !screenBase64) {
+        try {
+          const grabbed = await grabPrimaryScreenJpeg(75, { cropRect });
+          if (grabbed?.buffer && Buffer.isBuffer(grabbed.buffer)) {
+            screenBase64 = grabbed.buffer.toString("base64");
+          }
+        } catch (grabErr) {
+          console.warn("[askTeleprompter] Không thể chụp màn hình cho Gemini Vision:", grabErr.message);
         }
-      } catch (grabErr) {
-        console.warn("[askTeleprompter] Không thể chụp màn hình cho Gemini Vision:", grabErr.message);
       }
 
       const candidateModels = Array.from(
         new Set(
           [
-            String(process.env.GEMINI_VISION_MODEL || "").trim(),
-            "gemini-2.5-flash",
+            String((isVisionQuery ? process.env.GEMINI_VISION_MODEL : process.env.GEMINI_TEXT_MODEL) || "").trim(),
             "gemini-3.8-flash",
+            "gemini-2.5-flash",
             "gemini-flash-latest",
-            "gemini-3.5-flash",
-            "gemini-2.0-flash",
           ].filter(Boolean)
         )
       );
 
       const prompt =
         `${systemPrompt}\n\n` +
-        (screenBase64 ? "Lưu ý: Đã đính kèm ảnh chụp màn hình hiện tại để bạn quan sát ngữ cảnh ứng dụng/tài liệu đang mở.\n\n" : "") +
+        (screenBase64 ? (cropRect ? "Lưu ý: Đã đính kèm ảnh chụp VÙNG CHỌN màn hình người dùng vừa khoanh để bạn quan sát tập trung.\n\n" : "Lưu ý: Đã đính kèm ảnh chụp màn hình hiện tại để bạn quan sát ngữ cảnh ứng dụng/tài liệu đang mở.\n\n") : "") +
         `Câu hỏi của người dùng: ${cleanQ}`;
 
       const contents = [];
@@ -691,12 +770,15 @@ export async function askTeleprompter(question) {
                 contents,
               }),
               new Promise((_, reject) => {
-                geminiTimer = setTimeout(() => reject(new Error("Gemini Vision quá thời gian chờ (25s)")), 25000);
+                geminiTimer = setTimeout(() => reject(new Error("Gemini quá thời gian chờ (25s)")), 25000);
               }),
             ]);
           } catch (modelErr) {
             lastErr = modelErr;
-            if (isRateLimitError(modelErr) || /503|UNAVAILABLE|high demand|no longer available|not found|404|NOT_FOUND|deprecated/i.test(modelErr?.message || "")) {
+            if (isRateLimitError(modelErr)) {
+              throw modelErr;
+            }
+            if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(modelErr?.message || "")) {
               continue;
             }
             throw modelErr;
@@ -704,17 +786,17 @@ export async function askTeleprompter(question) {
             if (geminiTimer) clearTimeout(geminiTimer);
           }
         }
-        throw lastErr || new Error("Không thể kết nối tới các model Gemini Vision.");
+        throw lastErr || new Error("Không thể kết nối tới các model Gemini.");
       };
 
       const res = usePoolFailover
         ? await withGeminiFailover(
             async (apiKey) => {
               const client = await getGeminiVisionClient(apiKey);
-              if (!client) throw new Error("Không có Gemini Vision client khả dụng.");
+              if (!client) throw new Error("Không có Gemini client khả dụng.");
               return invokeVision(client);
             },
-            { purpose: "vision", preferVision: true }
+            { purpose: isVisionQuery ? "vision" : "general", preferVision: isVisionQuery }
           )
         : await invokeVision(geminiClient);
 
@@ -732,11 +814,11 @@ export async function askTeleprompter(question) {
       if (/high demand|UNAVAILABLE|503/i.test(cleanMsg)) {
         cleanMsg = "Máy chủ Gemini đang quá tải tạm thời (503 High Demand). Vui lòng thử lại sau vài giây.";
       } else if (/quota|RESOURCE_EXHAUSTED|429/i.test(cleanMsg)) {
-        cleanMsg = "Hết hạn mức API Gemini (429 Quota). Hệ thống đang chuyển sang key dự phòng.";
+        cleanMsg = "Toàn bộ API key Gemini trong kho đều đã chạm hạn mức ngày (429 Quota Exceeded). Vui lòng thêm key mới vào .env hoặc thử lại sau khi Google reset quota.";
       }
       return {
         status: "error",
-        error: `${prefix}Gemini Vision: ${cleanMsg}`,
+        error: `${prefix}Gemini${screenBase64 ? " Vision" : ""}: ${cleanMsg}`,
       };
     }
   }

@@ -226,6 +226,26 @@ export function isKeyRateLimited(apiKey, now = Date.now()) {
 }
 
 /**
+ * Bảng thống kê số lượt gọi và số lần chạm 429 theo thời gian thực (phục vụ Live Monitor)
+ */
+export const keyCallStats = new Map();
+
+function recordKeyCall(key) {
+  if (!key) return;
+  const current = keyCallStats.get(key) || { calls: 0, rateLimits: 0, lastUsed: 0 };
+  current.calls += 1;
+  current.lastUsed = Date.now();
+  keyCallStats.set(key, current);
+}
+
+function recordKeyRateLimit(key) {
+  if (!key) return;
+  const current = keyCallStats.get(key) || { calls: 0, rateLimits: 0, lastUsed: 0 };
+  current.rateLimits += 1;
+  keyCallStats.set(key, current);
+}
+
+/**
  * Đưa key bị lỗi 429 / hết quota vào danh sách chờ (cooldown).
  *
  * @param {string} apiKey
@@ -234,6 +254,7 @@ export function isKeyRateLimited(apiKey, now = Date.now()) {
 export function markKeyRateLimited(apiKey, cooldownSeconds = 60) {
   const cleanKey = String(apiKey || "").trim();
   if (!cleanKey) return;
+  recordKeyRateLimit(cleanKey);
   const seconds = Number.isFinite(cooldownSeconds) ? cooldownSeconds : 60;
   if (seconds <= 0) {
     keyCooldowns.delete(cleanKey);
@@ -247,9 +268,72 @@ export function markKeyRateLimited(apiKey, cooldownSeconds = 60) {
  */
 export function resetGeminiKeyPoolState() {
   keyCooldowns.clear();
+  keyCallStats.clear();
   clientCache.clear();
   standbyRoundRobinIndex = 0;
   defaultRoundRobinIndex = 0;
+}
+
+/**
+ * Lấy báo cáo trạng thái trực tiếp của 10 key trong Key Pool (Live Monitor)
+ * Bao gồm: danh xưng, vai trò, trạng thái sẵn sàng hay cooldown, số giây còn lại và số lượt gọi.
+ */
+export function getKeyPoolLiveStatus() {
+  const partitions = getGeminiPartitions();
+  const now = Date.now();
+
+  const mapKeyInfo = (key, role, index, isPrimary = false) => {
+    if (!key) return null;
+    const until = keyCooldowns.get(key) ?? 0;
+    const inCooldown = until > now;
+    const cooldownRemainingMs = inCooldown ? until - now : 0;
+    const remainingSec = Math.ceil(cooldownRemainingMs / 1000);
+    const stats = keyCallStats.get(key) || { calls: 0, rateLimits: 0, lastUsed: 0 };
+    const masked = key.length > 8 ? `${key.slice(0, 4)}...${key.slice(-4)}` : "••••";
+    return {
+      index,
+      hint: masked,
+      keyHint: masked,
+      role,
+      isPrimary,
+      ready: !inCooldown,
+      status: inCooldown ? "cooldown" : "ready",
+      remainingCooldownSec: remainingSec,
+      cooldownRemainingSeconds: remainingSec,
+      totalCalls: stats.calls,
+      calls: stats.calls,
+      totalRateLimits: stats.rateLimits,
+      rateLimits: stats.rateLimits,
+      lastUsed: stats.lastUsed,
+    };
+  };
+
+  const keys = [];
+  if (partitions.primary.live) {
+    keys.push(mapKeyInfo(partitions.primary.live, "Live Voice", 1, true));
+  }
+  if (partitions.primary.meeting) {
+    keys.push(mapKeyInfo(partitions.primary.meeting, "Meeting / Teleprompter", 2, true));
+  }
+  if (partitions.primary.vision) {
+    keys.push(mapKeyInfo(partitions.primary.vision, "Vision / Screen", 3, true));
+  }
+  partitions.standby.forEach((k, idx) => {
+    keys.push(mapKeyInfo(k, `Standby Dự Phòng ${idx + 1}`, idx + 4, false));
+  });
+
+  const readyCount = partitions.all.filter((k) => !isKeyRateLimited(k, now)).length;
+  const cooldownCount = partitions.all.filter((k) => isKeyRateLimited(k, now)).length;
+
+  return {
+    configured: partitions.all.length > 0,
+    totalKeys: partitions.all.length,
+    readyCount,
+    activeKeys: readyCount,
+    cooldownCount,
+    cooldownKeys: cooldownCount,
+    keys: keys.filter(Boolean),
+  };
 }
 
 /**
@@ -275,31 +359,37 @@ export function getNextGeminiKey(options = {}) {
   const now = Date.now();
   const group = normalizePurpose(options.purpose, options.preferVision);
 
+  let selectedKey = null;
+
   // 1) Nếu có xác định nhóm (live, meeting, vision): Kiểm tra key độc lập chuyên dụng trước
   if (group !== "default" && partitions.primary[group]) {
     const primaryKey = partitions.primary[group];
     if (!isKeyRateLimited(primaryKey, now)) {
-      return primaryKey;
-    }
-
-    // 2) Key chuyên dụng đang bị cooldown 429: Lấy từ Kho Dự Phòng Dùng Chung (7 keys standby)
-    const standbyPool = partitions.standby;
-    const totalStandby = standbyPool.length;
-    if (totalStandby > 0) {
-      for (let i = 0; i < totalStandby; i++) {
-        const idx = (standbyRoundRobinIndex + i) % totalStandby;
-        const candidate = standbyPool[idx];
-        if (!isKeyRateLimited(candidate, now)) {
-          standbyRoundRobinIndex = (idx + 1) % totalStandby;
-          return candidate;
+      selectedKey = primaryKey;
+    } else {
+      // 2) Key chuyên dụng đang bị cooldown 429: Lấy từ Kho Dự Phòng Dùng Chung (7 keys standby)
+      const standbyPool = partitions.standby;
+      const totalStandby = standbyPool.length;
+      if (totalStandby > 0) {
+        for (let i = 0; i < totalStandby; i++) {
+          const idx = (standbyRoundRobinIndex + i) % totalStandby;
+          const candidate = standbyPool[idx];
+          if (!isKeyRateLimited(candidate, now)) {
+            standbyRoundRobinIndex = (idx + 1) % totalStandby;
+            selectedKey = candidate;
+            break;
+          }
         }
       }
-    }
 
-    // 3) Nếu cả kho dự phòng cũng cạn: Mượn tạm key chính của các nhóm khác nếu còn rảnh
-    for (const otherKey of Object.values(partitions.primary)) {
-      if (otherKey && otherKey !== primaryKey && !isKeyRateLimited(otherKey, now)) {
-        return otherKey;
+      // 3) Nếu cả kho dự phòng cũng cạn: Mượn tạm key chính của các nhóm khác nếu còn rảnh
+      if (!selectedKey) {
+        for (const otherKey of Object.values(partitions.primary)) {
+          if (otherKey && otherKey !== primaryKey && !isKeyRateLimited(otherKey, now)) {
+            selectedKey = otherKey;
+            break;
+          }
+        }
       }
     }
   } else {
@@ -310,24 +400,31 @@ export function getNextGeminiKey(options = {}) {
       const candidate = allKeys[idx];
       if (!isKeyRateLimited(candidate, now)) {
         defaultRoundRobinIndex = (idx + 1) % total;
-        return candidate;
+        selectedKey = candidate;
+        break;
       }
     }
   }
 
   // 4) Fallback cuối cùng: Tất cả mọi key trong hệ thống đều đang cooldown
   // Chọn key có thời điểm hết hạn cooldown sớm nhất.
-  let bestKey = allKeys[0];
-  let earliestUntil = Infinity;
-  for (const key of allKeys) {
-    const until = keyCooldowns.get(key) ?? 0;
-    if (until < earliestUntil) {
-      earliestUntil = until;
-      bestKey = key;
+  if (!selectedKey) {
+    let bestKey = allKeys[0];
+    let earliestUntil = Infinity;
+    for (const key of allKeys) {
+      const until = keyCooldowns.get(key) ?? 0;
+      if (until < earliestUntil) {
+        earliestUntil = until;
+        bestKey = key;
+      }
     }
+    selectedKey = bestKey;
   }
 
-  return bestKey;
+  if (selectedKey) {
+    recordKeyCall(selectedKey);
+  }
+  return selectedKey;
 }
 
 /**
@@ -425,14 +522,14 @@ export function getGenAiClient(optionsOrKey) {
  */
 export async function withGeminiFailover(
   taskFn,
-  { purpose, maxRetries = 3, cooldownSeconds = 60, preferVision = false, includeVision = true, onFailover } = {}
+  { purpose, maxRetries, cooldownSeconds = 60, preferVision = false, includeVision = true, onFailover } = {}
 ) {
   const allKeys = getAllGeminiKeys({ purpose, preferVision, includeVision });
   if (allKeys.length === 0) {
     throw new Error("Thiếu GEMINI_API_KEY (chưa cấu hình API key Gemini).");
   }
 
-  const retries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3;
+  const retries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : Math.max(3, allKeys.length);
   const triedKeys = new Set();
   let lastError = null;
 

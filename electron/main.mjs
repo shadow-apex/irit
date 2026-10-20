@@ -106,7 +106,8 @@ import { stopWebServer } from "./web-server.mjs";
 import { stopOmniServer, setOmniLogger, ensureOmniServer, getOmniStatus, toggleOmniServer } from "./main/omni-server.mjs";
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
-import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus } from "./main/vision.mjs";
+import { getKeyPoolLiveStatus } from "./main/gemini-keys.mjs";
+import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus, grabScreenRegionJpeg } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
 import { toggleMeetingRecording, meetingRecorder, getMeetingState, listMeetingHistory, summarizeMeetingAudio } from "./main/meeting-recording.mjs";
 import {
@@ -120,6 +121,7 @@ import {
   copilotStatus,
   liveTranscriber,
   askTeleprompter,
+  exportTeleprompterMinutes,
 } from "./main/teleprompter.mjs";
 import { setUiContext } from "./main/computer-use-tools.mjs";
 import { notifyIris } from "./main/notify-iris.mjs";
@@ -378,7 +380,10 @@ app.whenReady().then(() => {
   }));
   ipcMain.handle("teleprompter:toggle-translate", (_event, targetLang) => toggleTranslateMode(targetLang));
   ipcMain.handle("teleprompter:toggle-copilot", () => toggleCopilotMode());
-  ipcMain.handle("teleprompter:ask", (_event, question) => askTeleprompter(question));
+  ipcMain.handle("teleprompter:ask", (_event, question, options) => askTeleprompter(question, options));
+  ipcMain.handle("teleprompter:export-minutes", () => exportTeleprompterMinutes());
+  ipcMain.handle("gemini-keys:get-status", () => getKeyPoolLiveStatus());
+  ipcMain.handle("vision:grab-region", (_event, cropRect) => grabScreenRegionJpeg(cropRect));
   ipcMain.handle("teleprompter:toggle-transcriber", () => toggleLiveTranscriber());
   ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());
   ipcMain.handle("vision:get-screen-state", () => ({ isVisionEnabled }));

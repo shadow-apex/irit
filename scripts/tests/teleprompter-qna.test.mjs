@@ -85,7 +85,7 @@ test("askTeleprompter logic: kiểm tra câu hỏi rỗng và ưu tiên Claude t
   assert.equal(sandbox1.copilotHistory[0].engine, "Claude");
   assert.equal(sandbox1.copilotHistory[0].answer, "Câu trả lời từ Claude");
 
-  // Trường hợp 2: Claude thất bại -> Tự động fallback sang Gemini Vision
+  // Trường hợp 2: Claude thất bại & người dùng yêu cầu Vision -> Tự động fallback sang Gemini Vision và chụp màn hình
   let geminiVisionCalled = false;
   let screenCaptured = false;
   const sandbox2 = {
@@ -110,7 +110,7 @@ test("askTeleprompter logic: kiểm tra câu hỏi rỗng và ưu tiên Claude t
   };
   vm.runInNewContext(`${fnCode}\nthis.askTeleprompter = askTeleprompter;`, sandbox2);
 
-  const res2 = await sandbox2.askTeleprompter("Màn hình này đang mở gì?");
+  const res2 = await sandbox2.askTeleprompter("Màn hình này đang mở gì?", { isFullScreen: true });
   assert.equal(res2.status, "success");
   assert.equal(res2.engine, "Gemini Vision");
   assert.ok(screenCaptured, "Chụp màn hình phải được kích hoạt");
@@ -118,4 +118,37 @@ test("askTeleprompter logic: kiểm tra câu hỏi rỗng và ưu tiên Claude t
   assert.equal(sandbox2.copilotHistory.length, 1);
   assert.equal(sandbox2.copilotHistory[0].engine, "Gemini Vision");
   assert.equal(sandbox2.copilotHistory[0].answer, "Câu trả lời từ Gemini Vision");
+
+  // Trường hợp 3: Hỏi văn bản thuần bằng cách ấn Enter (không chọn chụp màn hình) -> Tuyệt đối KHÔNG chụp màn hình
+  let textScreenCaptured = false;
+  let textOnlyCalled = false;
+  const sandbox3 = {
+    ...mockContext,
+    copilotHistory: [],
+    callClaudeForTeleprompter: async () => { throw new Error("Claude credit expired"); },
+    grabPrimaryScreenJpeg: async () => {
+      textScreenCaptured = true;
+      return { buffer: Buffer.from("fake-screen-jpeg") };
+    },
+    getGeminiVisionClient: async () => ({
+      models: {
+        generateContent: async ({ contents }) => {
+          textOnlyCalled = true;
+          const hasImage = contents.some((c) => c.inlineData);
+          assert.equal(hasImage, false, "Ấn Enter hỏi thông thường không được gửi kèm ảnh");
+          return { text: "Câu trả lời dạng văn bản từ Gemini" };
+        },
+      },
+    }),
+  };
+  vm.runInNewContext(`${fnCode}\nthis.askTeleprompter = askTeleprompter;`, sandbox3);
+
+  const res3 = await sandbox3.askTeleprompter("Giải thích quy tắc SOLID");
+  assert.equal(res3.status, "success");
+  assert.equal(res3.engine, "Gemini");
+  assert.equal(textScreenCaptured, false, "Ấn Enter hỏi thông thường tuyệt đối không được gọi grabPrimaryScreenJpeg");
+  assert.equal(textOnlyCalled, true, "Gemini text-only phải được gọi");
+  assert.equal(sandbox3.copilotHistory.length, 1);
+  assert.equal(sandbox3.copilotHistory[0].engine, "Gemini");
+  assert.equal(sandbox3.copilotHistory[0].answer, "Câu trả lời dạng văn bản từ Gemini");
 });
