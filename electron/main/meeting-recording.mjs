@@ -17,11 +17,13 @@ const MEETING_CANDIDATE_MODELS = Array.from(
     [
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
       String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-flash-latest",
+      "gemini-flash-lite-latest",
       "gemini-2.5-flash",
       "gemini-3-flash-preview",
-      "gemini-flash-lite-latest",
       "gemini-3.8-flash",
-      "gemini-flash-latest",
     ].filter(Boolean)
   )
 );
@@ -40,7 +42,13 @@ async function generateMeetingContent(client, payload) {
         // Thử model tiếp theo trong danh sách candidate trước khi chuyển sang key khác
         continue;
       }
-      if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
+      const errMsg = String(err?.message || "");
+      const errStatus = err?.status ?? err?.code ?? err?.httpStatus;
+      if (
+        errStatus === 404 ||
+        errStatus === 400 ||
+        /no longer available|not found|404|NOT_FOUND|deprecated|is not supported|invalid argument/i.test(errMsg)
+      ) {
         continue;
       }
       throw err;

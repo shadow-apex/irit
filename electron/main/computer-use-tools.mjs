@@ -160,7 +160,8 @@ export async function startOmniParserTask(args) {
       const primary = electron.screen?.getPrimaryDisplay?.();
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
-        thumbnailSize: { width: 1366, height: 768 },
+        // Cache-busting 0/1px jitter
+        thumbnailSize: { width: 1366 + (Date.now() % 2), height: 768 },
       });
       const primarySource =
         (primary ? sources?.find((s) => s.display_id === String(primary.id)) : null) ?? sources?.[0];
@@ -301,9 +302,12 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
             new Set(
               [
                 String(process.env.GEMINI_VISION_MODEL || "").trim(),
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+                "gemini-flash-latest",
+                "gemini-flash-lite-latest",
                 "gemini-2.5-flash",
                 "gemini-3.8-flash",
-                "gemini-flash-latest",
               ].filter(Boolean)
             )
           );
@@ -324,7 +328,13 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
               if (isRateLimitError(err)) {
                 continue;
               }
-              if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
+              const errMsg = String(err?.message || "");
+              const errStatus = err?.status ?? err?.code ?? err?.httpStatus;
+              if (
+                errStatus === 404 ||
+                errStatus === 400 ||
+                /no longer available|not found|404|NOT_FOUND|deprecated|is not supported|invalid argument/i.test(errMsg)
+              ) {
                 continue;
               }
               throw err;

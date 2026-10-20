@@ -40,6 +40,8 @@ const base64Of = (dataUrlOrB64) => {
  * gọi nhanh model gemini-flash-latest (tối đa 3s) kèm xoay vòng & tự động chuyển đổi khi chạm 429
  * để trích xuất mô tả chính xác khung hình.
  */
+let cachedWorkingVisionModel = null;
+
 export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn hình/camera") {
   const hasVisionPool =
     Boolean(String(process.env.GEMINI_VISION_API_KEY || "").trim()) ||
@@ -51,11 +53,14 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
       new Set(
         [
           String(process.env.GEMINI_VISION_MODEL || "").trim(),
+          cachedWorkingVisionModel,
+          "gemini-2.0-flash",
+          "gemini-1.5-flash",
+          "gemini-flash-latest",
+          "gemini-flash-lite-latest",
           "gemini-2.5-flash",
           "gemini-3-flash-preview",
-          "gemini-flash-lite-latest",
           "gemini-3.8-flash",
-          "gemini-flash-latest",
         ].filter(Boolean)
       )
     );
@@ -67,20 +72,28 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
           let lastErr = null;
           for (const m of candidateModels) {
             try {
-              return await visionAi.models.generateContent({
+              const result = await visionAi.models.generateContent({
                 model: m,
                 contents: [
                   { inlineData: { data: base64Jpeg, mimeType: "image/jpeg" } },
                   `Mô tả ngắn gọn, chính xác trong 1-2 câu bằng tiếng Việt những gì đang hiển thị trong ảnh chụp từ ${sourceLabel} này (tên ứng dụng/cửa sổ chính hoặc vật thể chính). Không nói lan man.`,
                 ],
               });
+              if (result) cachedWorkingVisionModel = m;
+              return result;
             } catch (err) {
               lastErr = err;
               if (isRateLimitError(err)) {
                 // Thử model dự phòng tiếp theo trên cùng key trước khi failover sang key khác
                 continue;
               }
-              if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
+              const errMsg = String(err?.message || "");
+              const errStatus = err?.status ?? err?.code ?? err?.httpStatus;
+              if (
+                errStatus === 404 ||
+                errStatus === 400 ||
+                /no longer available|not found|404|NOT_FOUND|deprecated|is not supported|invalid argument/i.test(errMsg)
+              ) {
                 continue;
               }
               throw err;
@@ -215,6 +228,8 @@ function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
   });
 }
 
+let screenGrabCounter = 0;
+
 /** Chụp màn hình chính → { buffer: JPEG, geometry }. Hỗ trợ tuỳ chọn cropRect để khoanh vùng (Snipping Tool). */
 export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
   const { desktopCapturer, systemPreferences } = electron;
@@ -231,7 +246,8 @@ export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
-      thumbnailSize: { width: geometry.frame_w, height: geometry.frame_h },
+      // Tránh Chromium thumbnail caching trên Windows: thay đổi kích thước 0/1px để ép capturer lấy frame mới từ OS
+      thumbnailSize: { width: geometry.frame_w + (screenGrabCounter++ % 2), height: geometry.frame_h },
     });
     // Đa màn hình: chọn đúng màn hình chính theo display_id (sources[0] không đảm bảo).
     const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
@@ -760,13 +776,21 @@ export async function takeCameraSnapshot(args = {}) {
   const save = args?.save !== false;
 
   const targetNorm = target.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
-  const isAltC = /^(?:camera\s*|may\s*anh\s*)?(?:alt\s*c|alt_c|companion|companion_phone|phone|dien\s*thoai|dt)(?:\s*camera)?$/i.test(targetNorm);
+  const isAltC =
+    /^(?:chup|xem|nhin|lay|mo)?\s*(?:anh|hinh|video)?\s*(?:camera\s*|may\s*anh\s*)?(?:alt\s*c|alt_c|companion|companion_phone|phone|dien\s*thoai|dt)(?:\s*camera)?$/i.test(targetNorm) ||
+    targetNorm.includes("alt c") ||
+    targetNorm.includes("alt_c") ||
+    targetNorm.includes("companion");
   if (isAltC) {
     return requestCompanionSnapshot({ timeoutMs: 8000, save });
   }
 
   // Nhận diện chụp màn hình máy tính (Desktop Screen) qua take_camera_snapshot
-  const isScreen = /^(?:camera\s*)?(?:screen|desktop|pc|computer|man\s*hinh|man\s*hinh\s*may\s*tinh)(?:\s*camera)?$/i.test(targetNorm);
+  const isScreen =
+    /^(?:chup|xem|nhin|lay)?\s*(?:anh|hinh)?\s*(?:camera\s*)?(?:screen|desktop|pc|computer|man\s*hinh|man\s*hinh\s*may\s*tinh)(?:\s*camera)?$/i.test(targetNorm) ||
+    targetNorm.includes("man hinh") ||
+    targetNorm === "screen" ||
+    targetNorm === "desktop";
   if (isScreen) {
     try {
       const { buffer, geometry } = await grabPrimaryScreenJpeg(75);
@@ -786,10 +810,20 @@ export async function takeCameraSnapshot(args = {}) {
           error: "Đã chụp màn hình nhưng không gửi được ảnh lên Gemini (chưa có phiên Live đang chạy).",
         };
       }
-      const [vision_summary] = await Promise.all([
+      const [vision_summary, activeWin] = await Promise.all([
         analyzeImageWithVisionApi(b64, "màn hình máy tính"),
-        new Promise((r) => setTimeout(r, 350)),
+        (async () => {
+          try {
+            const { activeWindowInfoTool } = await import("./local-tools.mjs");
+            return await activeWindowInfoTool();
+          } catch {
+            return null;
+          }
+        })(),
       ]);
+      const winTitle = activeWin?.title ? String(activeWin.title).trim() : "";
+      const winProc = activeWin?.process_name ? String(activeWin.process_name).trim() : "";
+      const activeWinDesc = winTitle ? `${winTitle}${winProc ? ` (${winProc})` : ""}` : "";
       emitEvent({
         type: "log",
         level: "info",
@@ -802,12 +836,14 @@ export async function takeCameraSnapshot(args = {}) {
         type: "screen",
         frame_geometry: geometry,
         ...(screenshot_path ? { screenshot_path } : {}),
+        ...(activeWinDesc ? { active_window: activeWinDesc } : {}),
         ...(vision_summary ? { vision_summary } : {}),
         message: `Đã chụp thành công ảnh màn hình máy tính.${screenshot_path ? ` Ảnh đã lưu tại: ${screenshot_path}` : ""}`,
         instructions:
-          "Ảnh chụp màn hình máy tính vừa được gửi cho bạn" +
-          (vision_summary ? ` (phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
-          ". Hãy nhìn trực tiếp vào ảnh vừa nhận và trả lời NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm câu hỏi của người dùng (TUYỆT ĐỐI không nói rông dài, không liệt kê từng icon nhỏ, không đoán mò từ lịch sử hội thoại cũ).",
+          "Ảnh chụp màn hình máy tính MỚI NHẤT VỪA CHỤP NGAY BÂY GIỜ vừa được gửi cho bạn. " +
+          (activeWinDesc ? `Cửa sổ đang mở trên cùng: "${activeWinDesc}". ` : "") +
+          (vision_summary ? `Phân tích AI màn hình hiện tại: "${vision_summary}". ` : "") +
+          "Hãy nhìn trực tiếp vào ảnh vừa nhận kết hợp thông tin cửa sổ hiện tại và trả lời NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm câu hỏi của người dùng (TUYỆT ĐỐI không nói rông dài, không dùng ảnh cũ từ lượt trước, không đoán mò từ lịch sử hội thoại cũ).",
       };
     } catch (err) {
       return {

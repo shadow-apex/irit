@@ -250,7 +250,7 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
       try {
         await Promise.race([
           testAi.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-2.0-flash",
             contents: "Hi",
           }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("probe-timeout")), 3500)),
@@ -287,7 +287,7 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
       try {
         await Promise.race([
           testAi.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-2.0-flash",
             contents: "Hi",
           }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("probe-timeout")), 3500)),

@@ -177,19 +177,24 @@ export async function takeAiScreenshotTool(args = {}) {
         error: "Đã chụp màn hình nhưng KHÔNG gửi được ảnh lên Gemini (chưa có phiên Live hoặc ảnh không hợp lệ).",
       };
     }
-    const [vision_summary] = await Promise.all([
+    const [vision_summary, activeWin] = await Promise.all([
       analyzeImageWithVisionApi(b64, "màn hình máy tính"),
-      new Promise((r) => setTimeout(r, 350)),
+      activeWindowInfoTool().catch(() => null),
     ]);
+    const winTitle = activeWin?.title ? String(activeWin.title).trim() : "";
+    const winProc = activeWin?.process_name ? String(activeWin.process_name).trim() : "";
+    const activeWinDesc = winTitle ? `${winTitle}${winProc ? ` (${winProc})` : ""}` : "";
     return {
       status: "success",
       ...(screenshot_path ? { screenshot_path } : {}),
+      ...(activeWinDesc ? { active_window: activeWinDesc } : {}),
       ...(vision_summary ? { vision_summary } : {}),
       frame_geometry: geometry,
       instructions:
-        "Ảnh chụp màn hình vừa được gửi cho bạn dưới dạng một khung hình — hãy nhìn trực tiếp vào ảnh vừa nhận" +
-        (vision_summary ? ` (kết quả phân tích nhanh từ Vision API: "${vision_summary}")` : "") +
-        " và mô tả NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm những gì đang mở trên màn hình (TUYỆT ĐỐI không nói rông dài, không liệt kê từng icon nhỏ, không đoán mò từ lịch sử hội thoại cũ). " +
+        "Ảnh chụp màn hình MỚI NHẤT VỪA CHỤP NGAY BÂY GIỜ đã được gửi cho bạn dưới dạng một khung hình. " +
+        (activeWinDesc ? `Cửa sổ đang mở trên cùng hiện tại: "${activeWinDesc}". ` : "") +
+        (vision_summary ? `Kết quả phân tích hình ảnh AI trực tiếp: "${vision_summary}". ` : "") +
+        "Hãy nhìn trực tiếp vào ảnh vừa nhận kết hợp thông tin cửa sổ hiện tại và mô tả NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm những gì đang mở trên màn hình (TUYỆT ĐỐI không nói rông dài, không dùng ảnh cũ từ lượt trước, không đoán mò từ lịch sử hội thoại cũ). " +
         "Nếu cần click vào một điểm trong ảnh, gọi mouse_control với space:\"frame\".",
     };
   } catch (err) {

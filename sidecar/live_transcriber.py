@@ -151,9 +151,14 @@ def get_fallback_model():
 def get_gemini_keys():
     keys = []
     env_vars = [
+        "GEMINI_TELEPROMPTER_API_KEY",
+        "GEMINI_MEETING_API_KEY",
         "GEMINI_API_KEY_MEETING",
         "GEMINI_API_KEY",
+        "GEMINI_API_KEYS",
+        "GEMINI_LIVE_API_KEY",
         "GEMINI_API_KEY_LIVE",
+        "GEMINI_VISION_API_KEY",
         "GEMINI_API_KEY_VISION",
     ] + [f"GEMINI_API_KEY_STANDBY_{i}" for i in range(1, 8)]
 
@@ -185,6 +190,17 @@ def get_gemini_keys():
 GEMINI_STT_KEYS = get_gemini_keys()
 _gemini_key_idx = 0
 _gemini_key_lock = threading.Lock()
+_client_cache = {}
+_client_cache_lock = threading.Lock()
+
+def get_cached_genai_client(api_key: str):
+    with _client_cache_lock:
+        if api_key not in _client_cache:
+            if len(_client_cache) >= 20:
+                _client_cache.clear()
+            from google import genai
+            _client_cache[api_key] = genai.Client(api_key=api_key)
+        return _client_cache[api_key]
 
 
 def transcribe_gemini_audio(mono_float: np.ndarray, sample_rate: int = 16000) -> str | None:
@@ -212,19 +228,42 @@ def transcribe_gemini_audio(mono_float: np.ndarray, sample_rate: int = 16000) ->
             with _gemini_key_lock:
                 key = GEMINI_STT_KEYS[_gemini_key_idx % len(GEMINI_STT_KEYS)]
             try:
-                client = genai.Client(api_key=key)
+                client = get_cached_genai_client(key)
                 prompt = (
                     "Chép lại lời nói (transcribe) trong file âm thanh này bằng tiếng Việt. "
                     "Chỉ trả về văn bản lời nói chính xác, tuyệt đối không giải thích hay thêm định dạng thừa. "
                     "Nếu là im lặng hoặc tiếng ồn không có lời nói, chỉ trả về chuỗi rỗng."
                 )
-                resp = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[
-                        types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
-                        prompt,
-                    ],
-                )
+                candidate_models = [
+                    os.environ.get("GEMINI_STT_MODEL", "").strip(),
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                    "gemini-2.5-flash",
+                    "gemini-flash-latest",
+                ]
+                candidate_models = [m for m in candidate_models if m]
+                resp = None
+                last_model_err = None
+                for m_name in candidate_models:
+                    try:
+                        resp = client.models.generate_content(
+                            model=m_name,
+                            contents=[
+                                types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
+                                prompt,
+                            ],
+                        )
+                        break
+                    except Exception as m_err:
+                        last_model_err = m_err
+                        m_err_str = str(m_err)
+                        if "429" in m_err_str or "RESOURCE_EXHAUSTED" in m_err_str:
+                            raise m_err
+                        if any(w in m_err_str for w in ["404", "NOT_FOUND", "not found", "is not supported", "deprecated"]):
+                            continue
+                        raise m_err
+                if resp is None:
+                    raise last_model_err or Exception("All Gemini STT models failed")
                 text = (resp.text or "").strip()
                 if text.startswith("```") and text.endswith("```"):
                     text = text.strip("`").strip()
