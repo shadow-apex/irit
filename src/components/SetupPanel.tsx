@@ -54,16 +54,16 @@ const I18N = {
     language: "Language / Ngôn ngữ",
     langEn: "English (Default)",
     langVi: "Tiếng Việt",
-    geminiTitle: "Gemini API Key Pool (3 Primary + 7 Standby)",
-    geminiHint: "3 dedicated keys (Live, Meeting, Vision) + 7 shared standby keys to auto-bypass 429.",
+    geminiTitle: "Gemini API Key Pool (4 Primary + 6 Standby)",
+    geminiHint: "4 dedicated keys (Live, Alt+M Meeting, Alt+T Teleprompter, Vision) + 6 shared standby keys to auto-bypass 429.",
     apiKey: "Gemini API Key Pool (One key per line)",
     apiKeySaved: "•••• Stored (enter new to change)",
     apiKeyPlaceholder: "Paste list of Gemini API keys (one per line)...",
     apiKeyNote: "Get free keys from Google AI Studio. Invalid keys are filtered automatically.",
     visionKey: "Dedicated Vision API Key (Optional)",
     visionKeySaved: "•••• Stored (enter new to change)",
-    visionKeyPlaceholder: "Key 3 in pool is already for Vision. Set only for separate key.",
-    visionKeyNote: "Key 3 in Key Pool is already dedicated to Vision. Leave empty to use Key 3.",
+    visionKeyPlaceholder: "Key 4 in pool is already for Vision. Set only for separate key.",
+    visionKeyNote: "Key 4 in Key Pool is already dedicated to Vision. Leave empty to use Key 4.",
     testGemini: "Test & Clean Keys",
     formatClean: "Format 1 key/line",
     keyWorks: "All keys ready",
@@ -158,16 +158,16 @@ const I18N = {
     language: "Ngôn Ngữ Giao Diện",
     langEn: "Tiếng Anh (Mặc định)",
     langVi: "Tiếng Việt",
-    geminiTitle: "Khoá Gemini API Pool (3 Key Độc Lập + 7 Key Dự Phòng)",
-    geminiHint: "3 key độc lập (Live, Meeting, Vision) + 7 key dự phòng dùng chung tự động né lỗi 429.",
+    geminiTitle: "Khoá Gemini API Pool (4 Key Độc Lập + 6 Key Dự Phòng)",
+    geminiHint: "4 key độc lập (Live Voice, Alt+M Cuộc họp, Alt+T Teleprompter, Vision) + 6 key dự phòng dùng chung tự động né lỗi 429.",
     apiKey: "Danh Sách Gemini API Keys (Mỗi key 1 dòng)",
     apiKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
     apiKeyPlaceholder: "Dán danh sách các key (mỗi key 1 dòng)...",
     apiKeyNote: "Lấy khoá miễn phí tại Google AI Studio. Key lỗi/hết hạn sẽ tự động bị loại bỏ.",
     visionKey: "Khoá Vision API Riêng (Tuỳ chọn)",
     visionKeySaved: "•••• Đã lưu (nhập khoá mới để thay)",
-    visionKeyPlaceholder: "Key 3 trong Pool đã dành cho Vision. Chỉ điền nếu dùng key ngoài.",
-    visionKeyNote: "Key 3 trong Pool đã dành riêng cho Vision. Nếu để trống sẽ tự dùng Key 3.",
+    visionKeyPlaceholder: "Key 4 trong Pool đã dành cho Vision. Chỉ điền nếu dùng key ngoài.",
+    visionKeyNote: "Key 4 trong Pool đã dành riêng cho Vision. Nếu để trống sẽ tự dùng Key 4.",
     testGemini: "Kiểm tra & Lọc Key",
     formatClean: "Định dạng 1 key/dòng",
     keyWorks: "Kết nối tốt",
@@ -391,9 +391,13 @@ export default function SetupPanel({
     };
     fetchStatus();
     const interval = setInterval(fetchStatus, 2000);
+    const unsubscribe = window.iris?.onKeyPoolUpdate?.((status) => {
+      if (active && status) setLiveKeyPool(status);
+    });
     return () => {
       active = false;
       clearInterval(interval);
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
@@ -578,20 +582,9 @@ export default function SetupPanel({
   const keyReady = draft.GEMINI_API_KEY.trim().length > 0 || config.geminiApiKeySet;
 
   // ---- Section renderers ----
-  // ---- OmniParser: nhãn/trạng thái dẫn xuất từ dữ liệu thô (đổi ngôn ngữ vẫn đúng) ----
+  // ---- OmniParser: trạng thái dẫn xuất từ dữ liệu thô ----
   const omniBusy = omni.phase === "starting" || omni.phase === "stopping";
   const omniRunning = omni.phase === "running";
-  const omniBadgeLabel =
-    omni.phase === "running"
-      ? t.omniRunning.replace("{port}", String(omni.port))
-      : omni.phase === "starting"
-        ? t.omniStarting
-        : omni.phase === "stopping"
-          ? t.omniStopping
-          : omni.phase === "error"
-            ? t.omniError
-            : t.omniStopped;
-  const omniEndpointUrl = `${omni.url.replace(/\/+$/, "")}/parse`;
 
   const parsedGeminiKeys = useMemo(() => {
     const raw = draft.GEMINI_API_KEY.trim();
@@ -618,10 +611,10 @@ export default function SetupPanel({
     if (activeKeyCount >= 10) {
       return <span className="pool-status-tag tag-full">10/10 Keys · Tối ưu nhất</span>;
     }
-    if (activeKeyCount >= 3) {
+    if (activeKeyCount >= 4) {
       return (
         <span className="pool-status-tag tag-ready">
-          {activeKeyCount}/10 Keys · {lang === "vi" ? `3 Độc Lập + ${activeKeyCount - 3} Dự Phòng` : `3 Primary + ${activeKeyCount - 3} Standby`}
+          {activeKeyCount}/10 Keys · {lang === "vi" ? `4 Độc Lập + ${activeKeyCount - 4} Dự Phòng` : `4 Primary + ${activeKeyCount - 4} Standby`}
         </span>
       );
     }
@@ -633,8 +626,9 @@ export default function SetupPanel({
 
   const roleLiveActive = activeKeyCount >= 1;
   const roleMeetingActive = activeKeyCount >= 2;
-  const roleVisionActive = activeKeyCount >= 3;
-  const standbyCount = Math.max(0, activeKeyCount - 3);
+  const roleTeleprompterActive = activeKeyCount >= 3;
+  const roleVisionActive = activeKeyCount >= 4;
+  const standbyCount = Math.max(0, activeKeyCount - 4);
 
   const geminiSection = (
     <SetupBlock
@@ -644,7 +638,7 @@ export default function SetupPanel({
       aside={poolStatusBadge}
     >
       <div className="pool-container">
-        {/* Hàng 4 thẻ vai trò: Key 1 (Live), Key 2 (Meeting), Key 3 (Vision), Keys 4-10 (Dự phòng né lỗi 429) */}
+        {/* Hàng 5 thẻ vai trò: Key 1 (Live), Key 2 (Meeting), Key 3 (Teleprompter), Key 4 (Vision), Keys 5-10 (Dự phòng né lỗi 429) */}
         <div className="pool-roles-grid">
           <div className={`pool-role-card${roleLiveActive ? " active" : ""}`}>
             <div className="pool-role-head">
@@ -662,15 +656,26 @@ export default function SetupPanel({
               <span>KEY 2 · DÒNG 2</span>
               <span className="pool-role-indicator" />
             </div>
-            <div className="pool-role-title">📝 Alt+M / Alt+T</div>
+            <div className="pool-role-title">📝 Alt+M Cuộc Họp</div>
             <div className="pool-role-desc">
-              {lang === "vi" ? "Ghi âm & Live Prompter" : "Meeting & teleprompter"}
+              {lang === "vi" ? "Ghi âm & Tóm tắt độc lập" : "Dedicated meeting recorder"}
+            </div>
+          </div>
+
+          <div className={`pool-role-card${roleTeleprompterActive ? " active" : ""}`}>
+            <div className="pool-role-head">
+              <span>KEY 3 · DÒNG 3</span>
+              <span className="pool-role-indicator" />
+            </div>
+            <div className="pool-role-title">💬 Alt+T Prompter</div>
+            <div className="pool-role-desc">
+              {lang === "vi" ? "Dịch & Nhắc bài độc lập" : "Dedicated teleprompter"}
             </div>
           </div>
 
           <div className={`pool-role-card${roleVisionActive ? " active" : ""}`}>
             <div className="pool-role-head">
-              <span>KEY 3 · DÒNG 3</span>
+              <span>KEY 4 · DÒNG 4</span>
               <span className="pool-role-indicator" />
             </div>
             <div className="pool-role-title">👁️ Vision</div>
@@ -681,10 +686,10 @@ export default function SetupPanel({
 
           <div className={`pool-role-card standby${standbyCount > 0 ? " active" : ""}`}>
             <div className="pool-role-head">
-              <span>KEYS 4–10 · DỰ PHÒNG</span>
+              <span>KEYS 5–10 · DỰ PHÒNG</span>
               <span className="pool-role-indicator" />
             </div>
-            <div className="pool-role-title">🛡️ Standby ({standbyCount}/7)</div>
+            <div className="pool-role-title">🛡️ Standby ({standbyCount}/6)</div>
             <div className="pool-role-desc">
               {lang === "vi" ? "Dùng chung né lỗi 429" : "Auto-bypass 429 quota"}
             </div>
@@ -745,7 +750,7 @@ export default function SetupPanel({
                 ? (lang === "vi"
                     ? `•••• ${config.geminiKeyCount || 1} keys đã lưu an toàn trong hệ thống ••••\n\nBấm "Kiểm tra & Lọc Key" bên dưới để quét kiểm tra và nạp danh sách vào đây,\nhoặc dán danh sách key mới (mỗi key 1 dòng, tối đa 10 keys).`
                     : `•••• ${config.geminiKeyCount || 1} keys stored in system ••••\n\nClick "Test & Clean Keys" below to test and load keys,\nor paste new keys (one per line, up to 10 keys).`)
-                : `AIzaSy... (Dòng 1: Key Live đàm thoại giọng nói)\nAIzaSy... (Dòng 2: Key Cuộc họp Alt+M & Teleprompter Alt+T)\nAIzaSy... (Dòng 3: Key Vision chụp ảnh màn hình & camera)\nAIzaSy... (Dòng 4: Key Dự phòng 1 tự động né lỗi 429)\nAIzaSy... (Dòng 5: Key Dự phòng 2)\n... (Mỗi key một dòng, tối đa 10 keys)`
+                : `AIzaSy... (Dòng 1: Key Live đàm thoại giọng nói)\nAIzaSy... (Dòng 2: Key Cuộc họp Alt+M)\nAIzaSy... (Dòng 3: Key Teleprompter Alt+T)\nAIzaSy... (Dòng 4: Key Vision chụp ảnh màn hình & camera)\nAIzaSy... (Dòng 5: Key Dự phòng 1 tự động né lỗi 429)\nAIzaSy... (Dòng 6: Key Dự phòng 2)\n... (Mỗi key một dòng, tối đa 10 keys)`
             }
             onChange={(event) => {
               set("GEMINI_API_KEY", event.target.value);
@@ -781,73 +786,52 @@ export default function SetupPanel({
         </div>
 
                 {/* Giám sát trạng thái Key Pool thời gian thực */}
+        {/* Giám sát trạng thái Key Pool thời gian thực (Thu gọn mặc định) */}
         {liveKeyPool && liveKeyPool.configured && liveKeyPool.keys.length > 0 && (
-          <div className="pool-live-monitor">
-            <div className="pool-live-header">
-              <div className="pool-live-title">
-                <span>⚡ {lang === "vi" ? "Giám Sát 10 Key Pool Thời Gian Thực" : "Real-time Key Pool Monitor"}</span>
-                <span className="pool-live-sub">
-                  {liveKeyPool.readyCount}/{liveKeyPool.totalKeys} {lang === "vi" ? "Sẵn sàng" : "Ready"}
-                  {liveKeyPool.cooldownCount > 0 ? (
-                    <span className="pool-live-cooldown-count"> · {liveKeyPool.cooldownCount} {lang === "vi" ? "đang hồi chiêu" : "in cooldown"}</span>
-                  ) : null}
-                </span>
-              </div>
-              <div className="pool-live-badge-group">
-                <span className="pool-live-badge live-ready">● {liveKeyPool.readyCount} Ready</span>
-                {liveKeyPool.cooldownCount > 0 && (
-                  <span className="pool-live-badge live-cooldown">⏳ {liveKeyPool.cooldownCount} Cooldown</span>
-                )}
-              </div>
-            </div>
-            <div className="pool-live-keys-grid">
-              {liveKeyPool.keys.map((k) => (
-                <div key={k.index} className={`pool-live-key-card ${k.ready ? "is-ready" : "is-cooldown"}`}>
-                  <div className="pool-live-key-top">
-                    <span className="pool-live-key-idx">#{k.index + 1}</span>
-                    <span className="pool-live-key-role">{k.role}</span>
-                    <span className={`pool-live-key-status-dot ${k.ready ? "ready" : "cooldown"}`} />
-                  </div>
-                  <div className="pool-live-key-hint">{k.hint}</div>
-                  <div className="pool-live-key-stats">
-                    {k.ready ? (
-                      <span className="key-stat-ready">🟢 {lang === "vi" ? "Sẵn sàng" : "Ready"}</span>
-                    ) : (
-                      <span className="key-stat-cd">🟡 {k.remainingCooldownSec}s</span>
-                    )}
-                    <span className="key-stat-calls">{k.totalCalls} calls</span>
-                    {k.totalRateLimits > 0 && (
-                      <span className="key-stat-limits" title="Số lần chạm hạn mức 429">{k.totalRateLimits} 429s</span>
-                    )}
-                  </div>
+          <details className="pool-live-details">
+            <summary className="pool-live-summary">
+              <div className="pool-live-header">
+                <div className="pool-live-title">
+                  <span>⚡ {lang === "vi" ? "Giám Sát 10 Key Pool Thời Gian Thực" : "Real-time Key Pool Monitor"}</span>
+                  <span className="pool-live-sub">
+                    {liveKeyPool.readyCount}/{liveKeyPool.totalKeys} {lang === "vi" ? "Sẵn sàng" : "Ready"}
+                    {liveKeyPool.cooldownCount > 0 ? (
+                      <span className="pool-live-cooldown-count"> · {liveKeyPool.cooldownCount} {lang === "vi" ? "đang hồi chiêu" : "in cooldown"}</span>
+                    ) : null}
+                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Tuỳ chọn Vision Key riêng biệt (gọn gàng, không phá vỡ bố cục) */}
-        <div className="pool-vision-extra">
-          <details className="pool-vision-details" open={Boolean(draft.GEMINI_VISION_API_KEY)}>
-            <summary>
-              ⚙️ {lang === "vi" ? "Tuỳ chọn nâng cao: Dùng khoá Vision API riêng ngoài Pool (Không bắt buộc)" : "Advanced: Use separate Vision API Key outside Pool (Optional)"}
+                <div className="pool-live-badge-group">
+                  <span className="pool-live-badge live-ready">● {liveKeyPool.readyCount} Ready</span>
+                  {liveKeyPool.cooldownCount > 0 && (
+                    <span className="pool-live-badge live-cooldown">⏳ {liveKeyPool.cooldownCount} Cooldown</span>
+                  )}
+                  <ChevronDown size={14} className="pool-live-summary-chevron" />
+                </div>
+              </div>
             </summary>
-            <div className="pool-vision-body">
-              <label className="setup-field compact">
-                <span>{t.visionKey}</span>
-                <input
-                  type="password"
-                  value={draft.GEMINI_VISION_API_KEY}
-                  placeholder={config.geminiVisionApiKeySet ? `•••• ${config.geminiVisionApiKeyHint} — ${t.visionKeySaved}` : t.visionKeyPlaceholder}
-                  onChange={(event) => set("GEMINI_VISION_API_KEY", event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <small className="setup-note">{t.visionKeyNote}</small>
-              </label>
+            <div className="pool-live-body">
+              <div className="pool-live-keys-grid">
+                {liveKeyPool.keys.map((k) => (
+                  <div key={k.index} className={`pool-live-key-card ${k.ready ? "is-ready" : "is-cooldown"}`}>
+                    <div className="pool-live-key-top">
+                      <span className="pool-live-key-idx">#{k.index}</span>
+                      <span className="pool-live-key-role">{k.role}</span>
+                      <span className={`pool-live-key-status-dot ${k.ready ? "ready" : "cooldown"}`} />
+                    </div>
+                    <div className="pool-live-key-hint">{k.hint}</div>
+                    <div className="pool-live-key-stats">
+                      {k.ready ? (
+                        <span className="key-stat-ready">🟢 {lang === "vi" ? "Sẵn sàng" : "Ready"}</span>
+                      ) : (
+                        <span className="key-stat-cd">🔴 {k.remainingCooldownSec}s {lang === "vi" ? "Hồi chiêu" : "CD"}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </details>
-        </div>
+        )}
       </div>
     </SetupBlock>
   );
@@ -858,20 +842,7 @@ export default function SetupPanel({
       title={t.omniTitle}
       hint={t.omniDesc}
       accent="mint"
-      aside={<OmniStatusBadge phase={omni.phase} label={omniBadgeLabel} />}
-    >
-      <div className="omni-row">
-        <div className="omni-endpoint">
-          <span className="omni-endpoint-label">{t.omniEndpoint}</span>
-          <code className={`omni-tag ${omni.phase}`} title={omniEndpointUrl}>
-            {omniEndpointUrl}
-          </code>
-          {omniRunning && omni.mode ? (
-            <code className="omni-tag mode" title={t.omniMode}>
-              {omni.mode}
-            </code>
-          ) : null}
-        </div>
+      aside={
         <button
           type="button"
           className={`setup-btn omni-toggle ${omniRunning ? "on" : "off"}`}
@@ -882,7 +853,8 @@ export default function SetupPanel({
           {omniBusy ? <Loader2 size={13} className="spin" /> : omniRunning ? <Square size={12} /> : <Play size={13} />}
           {omni.phase === "starting" ? t.omniStarting : omni.phase === "stopping" ? t.omniStopping : omniRunning ? t.omniStop : t.omniStart}
         </button>
-      </div>
+      }
+    >
       {omni.phase === "error" && omni.error ? (
         <p className="setup-error omni-error" role="alert">
           {omni.error}
@@ -1527,7 +1499,7 @@ function SetupBlock({
   hint?: string;
   aside?: ReactNode;
   accent?: "cyan" | "mint";
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   return (
     <section className={`setup-block accent-${accent}`}>
@@ -1541,26 +1513,8 @@ function SetupBlock({
         </div>
         {aside ? <div className="setup-block-aside">{aside}</div> : null}
       </header>
-      <div className="setup-block-body">{children}</div>
+      {children ? <div className="setup-block-body">{children}</div> : null}
     </section>
-  );
-}
-
-/** Badge trạng thái OmniParser: xanh = đang chạy, xám = đang tắt, vàng = đang khởi động/dừng, đỏ = lỗi. */
-function OmniStatusBadge({ phase, label }: { phase: OmniPhase; label: string }) {
-  return (
-    <span className={`omni-badge ${phase}`} role="status" aria-live="polite">
-      {phase === "starting" || phase === "stopping" ? (
-        <Loader2 size={12} className="spin" />
-      ) : phase === "running" ? (
-        <Check size={12} />
-      ) : phase === "error" ? (
-        <X size={12} />
-      ) : (
-        <span className="omni-dot" />
-      )}
-      <span>{label}</span>
-    </span>
   );
 }
 

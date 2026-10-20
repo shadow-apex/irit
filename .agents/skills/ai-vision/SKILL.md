@@ -12,7 +12,7 @@ model as an image frame. The image is saved to disk only when the tool is called
 (`<userData>/screenshots/screenshot_*.jpg`, keeping at most 20 files / 24 h).
 
 ## When you are the Gemini Live assistant
-1. Call `take_ai_screenshot` (add `save: true` only if the user wants to keep it).
+1. Call `take_ai_screenshot` (add `save: true` only if the user wants to keep it). Whenever the user mentions the screen ("màn hình", "nhìn màn hình", "trên màn hình"), you MUST take a new screenshot and inspect the newly taken image — NEVER reuse a previous screenshot or guess from memory.
 2. Describe what you see. The result includes `frame_geometry`; if you then click something you read off the image, call
    `mouse_control` with `space: "frame"` so Iris converts the downscaled coordinates to real screen pixels.
 3. `view_image` only shows *saved* screenshots to the **user** (floating window) — it does not give you the image.

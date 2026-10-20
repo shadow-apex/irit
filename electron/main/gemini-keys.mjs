@@ -19,15 +19,19 @@ let defaultRoundRobinIndex = 0;
 /**
  * Chuẩn hóa tên domain tác vụ:
  * - "live": Gemini Live (trò chuyện thoại realtime qua WebSocket)
- * - "meeting" / "teleprompter": Alt+M (Ghi âm tóm tắt cuộc họp) + Alt+T (Live Teleprompter dịch & nhắc bài)
+ * - "meeting": Alt+M (Ghi âm tóm tắt cuộc họp)
+ * - "teleprompter": Alt+T (Live Teleprompter dịch & nhắc bài)
  * - "vision": Phân tích hình ảnh màn hình, camera bàn, camera điện thoại
  */
 export function normalizePurpose(purpose, preferVision = false) {
   if (preferVision) return "vision";
   const p = String(purpose || "").toLowerCase().trim();
   if (p === "live" || p === "voice" || p === "chat") return "live";
-  if (p === "meeting" || p === "teleprompter" || p === "copilot" || p === "recorder" || p === "transcribe") {
+  if (p === "meeting" || p === "recorder" || p === "record" || p === "recording" || p === "meeting_recording") {
     return "meeting";
+  }
+  if (p === "teleprompter" || p === "copilot" || p === "translate" || p === "qna" || p === "interview") {
+    return "teleprompter";
   }
   if (p === "vision" || p === "screen" || p === "camera" || p === "ocr") {
     return "vision";
@@ -75,10 +79,11 @@ export function parseGeminiKeys(rawString) {
  * 3. Sau 60s cooldown: Tác vụ tự động quay về sử dụng lại key độc lập chính của mình.
  *
  * @returns {{
- *   primary: { live: string, meeting: string, vision: string },
+ *   primary: { live: string, meeting: string, teleprompter: string, vision: string },
  *   standby: string[],
  *   live: string[],
  *   meeting: string[],
+ *   teleprompter: string[],
  *   vision: string[],
  *   all: string[]
  * }}
@@ -88,11 +93,10 @@ export function getGeminiPartitions() {
     process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_LIVE_API_KEYS || ""
   );
   const meetingExplicit = parseGeminiKeys(
-    process.env.GEMINI_MEETING_API_KEY ||
-      process.env.GEMINI_MEETING_API_KEYS ||
-      process.env.GEMINI_TELEPROMPTER_API_KEY ||
-      process.env.GEMINI_TELEPROMPTER_API_KEYS ||
-      ""
+    process.env.GEMINI_MEETING_API_KEY || process.env.GEMINI_MEETING_API_KEYS || ""
+  );
+  const teleprompterExplicit = parseGeminiKeys(
+    process.env.GEMINI_TELEPROMPTER_API_KEY || process.env.GEMINI_TELEPROMPTER_API_KEYS || ""
   );
   const visionExplicit = parseGeminiKeys(
     process.env.GEMINI_VISION_API_KEY || process.env.GEMINI_VISION_API_KEYS || ""
@@ -103,26 +107,28 @@ export function getGeminiPartitions() {
   );
 
   const allKeys = [
-    ...new Set([...generalKeys, ...liveExplicit, ...meetingExplicit, ...visionExplicit]),
+    ...new Set([...generalKeys, ...liveExplicit, ...meetingExplicit, ...teleprompterExplicit, ...visionExplicit]),
   ];
 
   if (allKeys.length === 0) {
     return {
-      primary: { live: "", meeting: "", vision: "" },
+      primary: { live: "", meeting: "", teleprompter: "", vision: "" },
       standby: [],
       live: [],
       meeting: [],
+      teleprompter: [],
       vision: [],
       all: [],
     };
   }
 
-  // 1) Xác định 3 key độc lập chuyên dụng (Primary keys)
+  // 1) Xác định 4 key độc lập chuyên dụng (Primary keys)
   let livePrimary = liveExplicit[0] || null;
   let meetingPrimary = meetingExplicit[0] || null;
+  let teleprompterPrimary = teleprompterExplicit[0] || null;
   let visionPrimary = visionExplicit[0] || null;
 
-  const assignedSet = new Set([livePrimary, meetingPrimary, visionPrimary].filter(Boolean));
+  const assignedSet = new Set([livePrimary, meetingPrimary, teleprompterPrimary, visionPrimary].filter(Boolean));
   const availableGeneral = generalKeys.filter((k) => !assignedSet.has(k));
 
   let cursor = 0;
@@ -132,30 +138,36 @@ export function getGeminiPartitions() {
   if (!meetingPrimary && cursor < availableGeneral.length) {
     meetingPrimary = availableGeneral[cursor++];
   }
+  if (!teleprompterPrimary && cursor < availableGeneral.length) {
+    teleprompterPrimary = availableGeneral[cursor++];
+  }
   if (!visionPrimary && cursor < availableGeneral.length) {
     visionPrimary = availableGeneral[cursor++];
   }
 
-  // Fallback nếu tổng số key trong toàn hệ thống ít hơn 3
+  // Fallback nếu tổng số key trong toàn hệ thống ít hơn 4
   if (!livePrimary) livePrimary = allKeys[0] || "";
   if (!meetingPrimary) meetingPrimary = allKeys[1] || allKeys[0] || "";
-  if (!visionPrimary) visionPrimary = allKeys[2] || allKeys[1] || allKeys[0] || "";
+  if (!teleprompterPrimary) teleprompterPrimary = allKeys[2] || allKeys[1] || allKeys[0] || "";
+  if (!visionPrimary) visionPrimary = allKeys[3] || allKeys[2] || allKeys[1] || allKeys[0] || "";
 
   // 2) Kho dự phòng dùng chung (Shared Standby Pool):
-  // Gồm tất cả các key còn lại sau khi đã phân bổ 3 key độc lập
-  const primaryKeysSet = new Set([livePrimary, meetingPrimary, visionPrimary].filter(Boolean));
+  // Gồm tất cả các key còn lại sau khi đã phân bổ 4 key độc lập
+  const primaryKeysSet = new Set([livePrimary, meetingPrimary, teleprompterPrimary, visionPrimary].filter(Boolean));
   const standby = allKeys.filter((k) => !primaryKeysSet.has(k));
 
   return {
     primary: {
       live: livePrimary,
       meeting: meetingPrimary,
+      teleprompter: teleprompterPrimary,
       vision: visionPrimary,
     },
     standby,
     // Danh sách key ứng với từng nhóm bao gồm: Key độc lập + Kho dự phòng dùng chung
     live: [livePrimary, ...standby].filter(Boolean),
     meeting: [meetingPrimary, ...standby].filter(Boolean),
+    teleprompter: [teleprompterPrimary, ...standby].filter(Boolean),
     vision: [visionPrimary, ...standby].filter(Boolean),
     all: allKeys,
   };
@@ -173,6 +185,7 @@ export function getKeysForPurpose(purpose, { preferVision = false } = {}) {
   const partitions = getGeminiPartitions();
   if (group === "live") return partitions.live;
   if (group === "meeting") return partitions.meeting;
+  if (group === "teleprompter") return partitions.teleprompter;
   if (group === "vision") return partitions.vision;
   return partitions.all;
 }
@@ -251,6 +264,11 @@ function recordKeyRateLimit(key) {
  * @param {string} apiKey
  * @param {number} [cooldownSeconds=60]
  */
+let onKeyPoolChangeCallback = null;
+export function setKeyPoolChangeListener(fn) {
+  onKeyPoolChangeCallback = fn;
+}
+
 export function markKeyRateLimited(apiKey, cooldownSeconds = 60) {
   const cleanKey = String(apiKey || "").trim();
   if (!cleanKey) return;
@@ -258,9 +276,14 @@ export function markKeyRateLimited(apiKey, cooldownSeconds = 60) {
   const seconds = Number.isFinite(cooldownSeconds) ? cooldownSeconds : 60;
   if (seconds <= 0) {
     keyCooldowns.delete(cleanKey);
-    return;
+  } else {
+    keyCooldowns.set(cleanKey, Date.now() + Math.round(seconds * 1000));
   }
-  keyCooldowns.set(cleanKey, Date.now() + Math.round(seconds * 1000));
+  if (typeof onKeyPoolChangeCallback === "function") {
+    try {
+      onKeyPoolChangeCallback();
+    } catch {}
+  }
 }
 
 /**
@@ -313,13 +336,16 @@ export function getKeyPoolLiveStatus() {
     keys.push(mapKeyInfo(partitions.primary.live, "Live Voice", 1, true));
   }
   if (partitions.primary.meeting) {
-    keys.push(mapKeyInfo(partitions.primary.meeting, "Meeting / Teleprompter", 2, true));
+    keys.push(mapKeyInfo(partitions.primary.meeting, "Alt+M Cuộc Họp", 2, true));
+  }
+  if (partitions.primary.teleprompter) {
+    keys.push(mapKeyInfo(partitions.primary.teleprompter, "Alt+T Teleprompter", 3, true));
   }
   if (partitions.primary.vision) {
-    keys.push(mapKeyInfo(partitions.primary.vision, "Vision / Screen", 3, true));
+    keys.push(mapKeyInfo(partitions.primary.vision, "Vision / Screen", 4, true));
   }
   partitions.standby.forEach((k, idx) => {
-    keys.push(mapKeyInfo(k, `Standby Dự Phòng ${idx + 1}`, idx + 4, false));
+    keys.push(mapKeyInfo(k, `Standby Dự Phòng ${idx + 1}`, idx + 5, false));
   });
 
   const readyCount = partitions.all.filter((k) => !isKeyRateLimited(k, now)).length;
@@ -524,12 +550,13 @@ export async function withGeminiFailover(
   taskFn,
   { purpose, maxRetries, cooldownSeconds = 60, preferVision = false, includeVision = true, onFailover } = {}
 ) {
-  const allKeys = getAllGeminiKeys({ purpose, preferVision, includeVision });
-  if (allKeys.length === 0) {
+  const poolKeys = getAllGeminiKeys({ purpose, preferVision, includeVision });
+  const allSystemKeys = getAllGeminiKeys({ includeVision: true });
+  if (poolKeys.length === 0 && allSystemKeys.length === 0) {
     throw new Error("Thiếu GEMINI_API_KEY (chưa cấu hình API key Gemini).");
   }
 
-  const retries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : Math.max(3, allKeys.length);
+  const retries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : Math.max(3, allSystemKeys.length);
   const triedKeys = new Set();
   let lastError = null;
 
@@ -548,7 +575,9 @@ export async function withGeminiFailover(
         markKeyRateLimited(apiKey, cooldownSeconds);
         // Chỉ retry tiếp nếu còn lượt thử VÀ trong pool còn key chưa bị rate-limited ở lượt này
         // (chống lặp vô nghĩa khi người dùng chỉ có 1 key duy nhất hoặc toàn bộ kho key đã kiệt)
-        if (attempt < retries && triedKeys.size < allKeys.length) {
+        if (attempt < retries && triedKeys.size < allSystemKeys.length) {
+          const masked = apiKey.length > 8 ? `...${apiKey.slice(-4)}` : apiKey;
+          console.warn(`[Gemini Failover] Key (${masked}) chạm hạn mức (429/quota). Tự động đổi sang key tiếp theo (lần thử ${attempt + 1}/${retries})...`);
           if (typeof onFailover === "function") {
             try {
               onFailover({ failedKey: apiKey, attempt: attempt + 1, maxRetries: retries, error: err });

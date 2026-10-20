@@ -64,6 +64,11 @@ contextBridge.exposeInMainWorld("iris", {
   askTeleprompter: (question, options) => ipcRenderer.invoke("teleprompter:ask", question, options),
   exportTeleprompterMinutes: () => ipcRenderer.invoke("teleprompter:export-minutes"),
   getKeyPoolStatus: () => ipcRenderer.invoke("gemini-keys:get-status"),
+  onKeyPoolUpdate: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("key-pool:update", handler);
+    return () => ipcRenderer.removeListener("key-pool:update", handler);
+  },
   grabScreenRegion: (cropRect) => ipcRenderer.invoke("vision:grab-region", cropRect),
   toggleLiveTranscriber: () => ipcRenderer.invoke("teleprompter:toggle-transcriber"),
   toggleScreenVision: () => ipcRenderer.invoke("vision:toggle-screen"),

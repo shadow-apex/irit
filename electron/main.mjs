@@ -106,7 +106,7 @@ import { stopWebServer } from "./web-server.mjs";
 import { stopOmniServer, setOmniLogger, ensureOmniServer, getOmniStatus, toggleOmniServer } from "./main/omni-server.mjs";
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
-import { getKeyPoolLiveStatus } from "./main/gemini-keys.mjs";
+import { getKeyPoolLiveStatus, setKeyPoolChangeListener } from "./main/gemini-keys.mjs";
 import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus, grabScreenRegionJpeg } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
 import { toggleMeetingRecording, meetingRecorder, getMeetingState, listMeetingHistory, summarizeMeetingAudio } from "./main/meeting-recording.mjs";
@@ -383,6 +383,9 @@ app.whenReady().then(() => {
   ipcMain.handle("teleprompter:ask", (_event, question, options) => askTeleprompter(question, options));
   ipcMain.handle("teleprompter:export-minutes", () => exportTeleprompterMinutes());
   ipcMain.handle("gemini-keys:get-status", () => getKeyPoolLiveStatus());
+  setKeyPoolChangeListener(() => {
+    emitToRenderer("key-pool:update", getKeyPoolLiveStatus());
+  });
   ipcMain.handle("vision:grab-region", (_event, cropRect) => grabScreenRegionJpeg(cropRect));
   ipcMain.handle("teleprompter:toggle-transcriber", () => toggleLiveTranscriber());
   ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());

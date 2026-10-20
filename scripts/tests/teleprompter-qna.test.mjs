@@ -152,3 +152,8 @@ test("askTeleprompter logic: kiểm tra câu hỏi rỗng và ưu tiên Claude t
   assert.equal(sandbox3.copilotHistory[0].engine, "Gemini");
   assert.equal(sandbox3.copilotHistory[0].answer, "Câu trả lời dạng văn bản từ Gemini");
 });
+
+test("teleprompter.mjs: exportTeleprompterMinutes import os đầy đủ và không gây ReferenceError", async () => {
+  assert.ok(tpSrc.includes('import os from "node:os";') || tpSrc.includes("import os from 'node:os';"), "Phải import node:os để dùng os.homedir()");
+  assert.ok(tpSrc.includes("export async function exportTeleprompterMinutes()"), "Phải có hàm exportTeleprompterMinutes");
+});

@@ -168,7 +168,7 @@ test(
 );
 
 test(
-  "getGeminiPartitions: phân bổ 3 key độc lập (Live: k1, Meeting/Teleprompter: k2, Vision: k3) + 7 keys kho dự phòng chung (k4..k10)",
+  "getGeminiPartitions: phân bổ 4 key độc lập (Live: k1, Meeting: k2, Teleprompter: k3, Vision: k4) + 6 keys kho dự phòng chung (k5..k10)",
   withSavedEnv(() => {
     process.env.GEMINI_API_KEYS = "k1,k2,k3,k4,k5,k6,k7,k8,k9,k10";
     const partitions = getGeminiPartitions();
@@ -176,13 +176,14 @@ test(
     assert.equal(partitions.all.length, 10);
     assert.equal(partitions.primary.live, "k1");
     assert.equal(partitions.primary.meeting, "k2");
-    assert.equal(partitions.primary.vision, "k3");
-    assert.deepEqual(partitions.standby, ["k4", "k5", "k6", "k7", "k8", "k9", "k10"]);
+    assert.equal(partitions.primary.teleprompter, "k3");
+    assert.equal(partitions.primary.vision, "k4");
+    assert.deepEqual(partitions.standby, ["k5", "k6", "k7", "k8", "k9", "k10"]);
   })
 );
 
 test(
-  "getNextGeminiKey: bình thường dùng 3 key độc lập (k1, k2, k3) không đụng nhau; khi 1 key chạm 429 thì lấy từ kho dự phòng 7 keys",
+  "getNextGeminiKey: bình thường dùng 4 key độc lập (k1, k2, k3, k4) không đụng nhau; khi 1 key chạm 429 thì lấy từ kho dự phòng 6 keys",
   withSavedEnv(() => {
     process.env.GEMINI_API_KEYS = "k1,k2,k3,k4,k5,k6,k7,k8,k9,k10";
 
@@ -190,19 +191,20 @@ test(
     assert.equal(getNextGeminiKey({ purpose: "live" }), "k1");
     assert.equal(getNextGeminiKey({ purpose: "live" }), "k1");
     assert.equal(getNextGeminiKey({ purpose: "meeting" }), "k2");
-    assert.equal(getNextGeminiKey({ purpose: "teleprompter" }), "k2");
-    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k3");
-    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k3");
+    assert.equal(getNextGeminiKey({ purpose: "teleprompter" }), "k3");
+    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k4");
+    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k4");
 
     // 2) Khi key độc lập của Live (k1) bị 429 / cooldown 60s:
     markKeyRateLimited("k1", 60);
-    // Live lập tức lấy key từ kho dự phòng dùng chung (k4, k5...)
-    assert.equal(getNextGeminiKey({ purpose: "live" }), "k4");
+    // Live lập tức lấy key từ kho dự phòng dùng chung (k5, k6...)
     assert.equal(getNextGeminiKey({ purpose: "live" }), "k5");
+    assert.equal(getNextGeminiKey({ purpose: "live" }), "k6");
 
-    // Trong lúc đó, Meeting vẫn an toàn dùng k2, Vision vẫn dùng k3!
+    // Trong lúc đó, Meeting vẫn an toàn dùng k2, Teleprompter dùng k3, Vision vẫn dùng k4!
     assert.equal(getNextGeminiKey({ purpose: "meeting" }), "k2");
-    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k3");
+    assert.equal(getNextGeminiKey({ purpose: "teleprompter" }), "k3");
+    assert.equal(getNextGeminiKey({ purpose: "vision" }), "k4");
 
     // 3) Khi k1 hết hạn cooldown (hết 60s): Live tự động quay về sử dụng lại k1 độc lập của mình!
     markKeyRateLimited("k1", 0);
@@ -211,35 +213,37 @@ test(
 );
 
 test(
-  "Standby Exhaustion: khi tất cả 7 keys kho dự phòng cũng cạn, mượn tạm key chính của nhóm khác",
+  "Standby Exhaustion: khi tất cả 6 keys kho dự phòng cũng cạn, mượn tạm key chính của nhóm khác",
   withSavedEnv(() => {
     process.env.GEMINI_API_KEYS = "k1,k2,k3,k4,k5,k6,k7,k8,k9,k10";
 
-    // Cho k1 và cả 7 keys standby (k4..k10) vào cooldown
+    // Cho k1 và cả 6 keys standby (k5..k10) vào cooldown
     markKeyRateLimited("k1", 60);
-    for (const k of ["k4", "k5", "k6", "k7", "k8", "k9", "k10"]) {
+    for (const k of ["k5", "k6", "k7", "k8", "k9", "k10"]) {
       markKeyRateLimited(k, 60);
     }
 
-    // Lần gọi của Live sẽ mượn tạm key k2 hoặc k3 còn rảnh để tác vụ không bị chết
+    // Lần gọi của Live sẽ mượn tạm key k2, k3 hoặc k4 còn rảnh để tác vụ không bị chết
     const fallbackKey = getNextGeminiKey({ purpose: "live" });
-    assert.ok(["k2", "k3"].includes(fallbackKey));
+    assert.ok(["k2", "k3", "k4"].includes(fallbackKey));
   })
 );
 
 test(
-  "Tương thích ngược 1 key duy nhất: cả 3 nhóm đều dùng key đó, và withGeminiFailover không lặp vô nghĩa",
+  "Tương thích ngược 1 key duy nhất: cả 4 nhóm đều dùng key đó, và withGeminiFailover không lặp vô nghĩa",
   withSavedEnv(async () => {
     process.env.GEMINI_API_KEY = "sole_key";
     const partitions = getGeminiPartitions();
 
     assert.equal(partitions.primary.live, "sole_key");
     assert.equal(partitions.primary.meeting, "sole_key");
+    assert.equal(partitions.primary.teleprompter, "sole_key");
     assert.equal(partitions.primary.vision, "sole_key");
     assert.deepEqual(partitions.standby, []);
 
     assert.equal(getNextGeminiKey({ purpose: "live" }), "sole_key");
     assert.equal(getNextGeminiKey({ purpose: "meeting" }), "sole_key");
+    assert.equal(getNextGeminiKey({ purpose: "teleprompter" }), "sole_key");
     assert.equal(getNextGeminiKey({ purpose: "vision" }), "sole_key");
 
     let callCount = 0;

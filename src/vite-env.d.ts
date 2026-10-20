@@ -396,6 +396,7 @@ type IrisApi = {
   ) => Promise<{ status: string; error?: string }>;
   exportTeleprompterMinutes: () => Promise<{ ok: boolean; path?: string; count?: number; message?: string; error?: string }>;
   getKeyPoolStatus: () => Promise<KeyPoolStatus>;
+  onKeyPoolUpdate?: (callback: (data: KeyPoolStatus) => void) => () => void;
   grabScreenRegion: (cropRect?: ScreenCropRect) => Promise<string | null>;
   toggleLiveTranscriber: () => Promise<{ status: string; message?: string; error?: string }>;
   toggleScreenVision: () => Promise<{ status: string; message?: string; error?: string }>;

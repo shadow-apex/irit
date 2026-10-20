@@ -301,8 +301,8 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
             new Set(
               [
                 String(process.env.GEMINI_VISION_MODEL || "").trim(),
-                "gemini-3.8-flash",
                 "gemini-2.5-flash",
+                "gemini-3.8-flash",
                 "gemini-flash-latest",
               ].filter(Boolean)
             )
@@ -322,7 +322,7 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
             } catch (err) {
               lastErr = err;
               if (isRateLimitError(err)) {
-                throw err;
+                continue;
               }
               if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                 continue;

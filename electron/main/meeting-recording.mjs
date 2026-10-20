@@ -17,8 +17,10 @@ const MEETING_CANDIDATE_MODELS = Array.from(
     [
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
       String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
-      "gemini-3.8-flash",
       "gemini-2.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-flash-lite-latest",
+      "gemini-3.8-flash",
       "gemini-flash-latest",
     ].filter(Boolean)
   )
@@ -35,7 +37,8 @@ async function generateMeetingContent(client, payload) {
     } catch (err) {
       lastErr = err;
       if (isRateLimitError(err)) {
-        throw err;
+        // Thử model tiếp theo trong danh sách candidate trước khi chuyển sang key khác
+        continue;
       }
       if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
         continue;
@@ -316,7 +319,17 @@ async function transcribeSingleWavChunk(fallbackAi, chunk, chunkIdx, totalChunks
               }
             }
           },
-          { maxRetries: Math.max(3, getAllGeminiKeys({ purpose: "meeting" }).length), purpose: "meeting" }
+          {
+            maxRetries: Math.max(3, getAllGeminiKeys({ purpose: "meeting" }).length),
+            purpose: "meeting",
+            onFailover: ({ failedKey, attempt, maxRetries }) => {
+              const masked = failedKey.length > 8 ? `...${failedKey.slice(-4)}` : failedKey;
+              sendHudStatus(
+                "Meeting Summarizer",
+                `Key (${masked}) chạm hạn mức (429). Đang chuyển sang key dự phòng ${attempt + 1}/${maxRetries}...`
+              );
+            },
+          }
         ),
       {
         maxAttempts: 4,
@@ -780,7 +793,17 @@ async function summarizeWithGemini(transcript, fallbackAi) {
               ],
             });
           },
-          { maxRetries, purpose: "meeting" }
+          {
+            maxRetries,
+            purpose: "meeting",
+            onFailover: ({ failedKey, attempt, maxRetries: total }) => {
+              const masked = failedKey.length > 8 ? `...${failedKey.slice(-4)}` : failedKey;
+              sendHudStatus(
+                "Meeting Summarizer",
+                `Key (${masked}) chạm hạn mức. Đang chuyển sang key dự phòng ${attempt + 1}/${total}...`
+              );
+            },
+          }
         )
       );
       if (segRes.text) partialNotes.push(`### Tổng hợp phân đoạn ${i + 1}/${segments.length}\n${segRes.text}`);
@@ -797,7 +820,17 @@ async function summarizeWithGemini(transcript, fallbackAi) {
           contents: [prompt],
         });
       },
-      { maxRetries, purpose: "meeting" }
+      {
+        maxRetries,
+        purpose: "meeting",
+        onFailover: ({ failedKey, attempt, maxRetries: total }) => {
+          const masked = failedKey.length > 8 ? `...${failedKey.slice(-4)}` : failedKey;
+          sendHudStatus(
+            "Meeting Summarizer",
+            `Key (${masked}) chạm hạn mức. Đang chuyển sang key dự phòng ${attempt + 1}/${total}...`
+          );
+        },
+      }
     )
   );
   return response.text || "";

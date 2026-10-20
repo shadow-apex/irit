@@ -223,7 +223,7 @@ function buildClaudeToolsRaw() {
         // ---------------------------------------------------------------
         {
           name: "take_ai_screenshot",
-          description: "Instantly capture a single screenshot of the user's PRIMARY screen (captured inside Iris, downscaled to <=1280x720 and sent to you as an image frame) and look at it right now. The screenshot is NOT saved to disk unless save=true. Use this for one-off questions like 'what am I looking at?', 'what error is this?', 'look at my screen'. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
+          description: "Instantly capture a fresh screenshot of the user's PRIMARY screen (captured inside Iris, downscaled to <=1280x720 and sent to you as an image frame) and look at it right now. REQUIRED: Whenever the user mentions the screen ('màn hình', 'nhìn màn hình', 'trên màn hình'), you MUST call this tool to capture and inspect a newly taken screenshot to answer — NEVER reuse a previously captured image or guess from memory. The screenshot is NOT saved to disk unless save=true. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
           parameters: { type: "object", properties: { save: { type: "boolean", description: "Also save the screenshot to disk (only when the user asks to keep it; view_image can show saved ones to the user)." } } },
         },
         {

@@ -11,10 +11,10 @@ import electron from "electron";
 const { app } = electron;
 import { GoogleGenAI } from "@google/genai";
 import { repoRoot } from "./paths.mjs";
-import { liveSession } from "./gemini-live.mjs";
+import { liveSession, setAudioChunkSuppressed, stopLive, startLive } from "./gemini-live.mjs";
 import { emitToRenderer } from "./events.mjs";
 import { parseEnvContent, serializeConfigValue, mergeEnvLines, writeEnvFileSecure } from "./env-file.mjs";
-import { getAllGeminiKeys, getNextGeminiKey, parseGeminiKeys, getGeminiPartitions, resetGeminiKeyPoolState } from "./gemini-keys.mjs";
+import { getAllGeminiKeys, getNextGeminiKey, parseGeminiKeys, getGeminiPartitions, resetGeminiKeyPoolState, markKeyRateLimited, isRateLimitError, isKeyRateLimited } from "./gemini-keys.mjs";
 
 export { serializeConfigValue };
 
@@ -150,6 +150,8 @@ export function getFullConfig() {
 // apply them to process.env so they take effect on the next wake without a
 // full restart. Never logs secret values (design.md D4).
 export function writeUserConfig(rawUpdates) {
+  const oldVoice = process.env.GEMINI_LIVE_VOICE;
+  const oldModel = process.env.GEMINI_LIVE_MODEL;
   const updates = {};
   for (const [key, value] of Object.entries(rawUpdates || {})) {
     if (!ALLOWED_CONFIG_KEYS.has(key)) continue;
@@ -176,6 +178,14 @@ export function writeUserConfig(rawUpdates) {
   );
   if (keysChanged) {
     resetGeminiKeyPoolState();
+  }
+  const voiceOrModelChanged = (updates.GEMINI_LIVE_VOICE && updates.GEMINI_LIVE_VOICE !== oldVoice) ||
+                             (updates.GEMINI_LIVE_MODEL && updates.GEMINI_LIVE_MODEL !== oldModel);
+  if (voiceOrModelChanged && liveSession) {
+    console.log(`[Iris] Cập nhật giọng nói (${oldVoice || "mặc định"} -> ${updates.GEMINI_LIVE_VOICE}). Đang tự động kết nối lại phiên Live...`);
+    stopLive().then(() => startLive()).catch((err) => {
+      console.error("[Iris] Khởi động lại Live với giọng mới thất bại:", err);
+    });
   }
   if (keysChanged || "OMNIPARSER_ENABLED" in updates) {
     import("./omni-server.mjs")
@@ -237,6 +247,19 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
     try {
       const pager = await testAi.models.list();
       for await (const _ of pager) break;
+      try {
+        await Promise.race([
+          testAi.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: "Hi",
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("probe-timeout")), 3500)),
+        ]);
+      } catch (probeErr) {
+        if (isRateLimitError(probeErr)) {
+          markKeyRateLimited(key, 60);
+        }
+      }
     } catch (error) {
       return { ok: false, stage: "list", error: error?.message || String(error), validKeys: [], failedCount: 1 };
     }
@@ -244,7 +267,15 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
     if (!liveRes.ok) {
       return { ...liveRes, validKeys: [], failedCount: 1 };
     }
-    return { ok: true, validKeys: [key], validCount: 1, totalCount: 1, failedCount: 0, message: "Key hoạt động tốt (Live API sẵn sàng)" };
+    const isCd = isKeyRateLimited(key);
+    return {
+      ok: true,
+      validKeys: [key],
+      validCount: 1,
+      totalCount: 1,
+      failedCount: 0,
+      message: isCd ? "Key hợp lệ nhưng hiện đang chạm hạn mức 429 (đang hồi chiêu)" : "Key hoạt động tốt (Live API sẵn sàng)",
+    };
   }
 
   // Khi có nhiều key trong pool: kiểm tra tính hợp lệ của từng key song song
@@ -253,6 +284,19 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
       const testAi = new GoogleGenAI({ apiKey: key });
       const pager = await testAi.models.list();
       for await (const _ of pager) break;
+      try {
+        await Promise.race([
+          testAi.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: "Hi",
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("probe-timeout")), 3500)),
+        ]);
+      } catch (probeErr) {
+        if (isRateLimitError(probeErr)) {
+          markKeyRateLimited(key, 60);
+        }
+      }
       return key;
     })
   );
@@ -287,10 +331,15 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
     return { ...liveRes, validKeys: [], failedCount: candidatePool.length };
   }
 
-  const poolSummary =
-    failedKeys.length === 0
-      ? `Toàn bộ ${validKeys.length}/${candidatePool.length} keys hoạt động tốt (Live & Pool sẵn sàng)`
-      : `Đã giữ lại ${validKeys.length}/${candidatePool.length} keys hợp lệ (Đã tự động loại bỏ ${failedKeys.length} key không đủ điều kiện)`;
+  const cdCount = validKeys.filter((k) => isKeyRateLimited(k)).length;
+  let poolSummary = "";
+  if (failedKeys.length === 0) {
+    poolSummary = cdCount > 0
+      ? `Toàn bộ ${validKeys.length} keys hợp lệ (${cdCount} key đang hồi chiêu 429 - xem bảng bên dưới)`
+      : `Toàn bộ ${validKeys.length}/${candidatePool.length} keys hoạt động tốt (Live & Pool sẵn sàng)`;
+  } else {
+    poolSummary = `Đã giữ lại ${validKeys.length}/${candidatePool.length} keys hợp lệ (Đã tự động loại bỏ ${failedKeys.length} key không đủ điều kiện). ${cdCount > 0 ? `Trong đó có ${cdCount} key đang hồi chiêu 429.` : ""}`;
+  }
 
   return {
     ok: true,
@@ -304,54 +353,95 @@ export async function testGeminiKey(candidateKey, { liveTimeoutMs = 10_000 } = {
 
 export let previewSession = null;
 export async function previewVoice(payload = {}) {
-  if (liveSession) return { ok: false, error: "Sleep Iris before previewing a voice." };
   const candidatePool = payload.key ? parseGeminiKeys(payload.key) : [];
   const apiKey = (candidatePool[0] || getNextGeminiKey({ purpose: "live" }) || "").trim();
-  if (!apiKey) return { ok: false, error: "Save your Gemini key first." };
+  if (!apiKey) return { ok: false, error: "Chưa có API key Gemini. Vui lòng lưu ít nhất 1 key trước khi nghe thử." };
   const voiceName = payload.voice || process.env.GEMINI_LIVE_VOICE || "Zephyr";
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
+
+  try {
+    setAudioChunkSuppressed(true);
+  } catch {}
+
+  let previewTimeout = null;
   try {
     if (previewSession) {
       try { previewSession.close(); } catch { /* ignore */ }
       previewSession = null;
     }
     const previewAi = new GoogleGenAI({ apiKey });
-    previewSession = await previewAi.live.connect({
-      model,
-      config: {
-        responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-        systemInstruction: {
-          parts: [{ text: "You are a short voice sample. Say exactly the line you are asked to say, nothing more." }],
-        },
-      },
-      callbacks: {
-        onmessage(message) {
-          const content = message.serverContent;
-          if (!content) return;
-          for (const part of content.modelTurn?.parts || []) {
-            const inlineData = part.inlineData;
-            if (inlineData?.data && (inlineData.mimeType || "").startsWith("audio/")) {
-              emitToRenderer("live:audio", { data: inlineData.data, mimeType: inlineData.mimeType });
-            }
-          }
-          if (content.turnComplete) {
-            try { previewSession?.close(); } catch { /* ignore */ }
-            previewSession = null;
-          }
-        },
-        onerror() { previewSession = null; },
-        onclose() { previewSession = null; },
-      },
+
+    await new Promise((resolve, reject) => {
+      previewTimeout = setTimeout(() => {
+        try { previewSession?.close(); } catch {}
+        previewSession = null;
+        resolve();
+      }, 12000);
+
+      previewAi.live
+        .connect({
+          model,
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+            systemInstruction: {
+              parts: [{ text: "You are a friendly voice preview for the Iris assistant. Say the requested phrase clearly and naturally." }],
+            },
+          },
+          callbacks: {
+            onmessage(message) {
+              const content = message.serverContent;
+              if (!content) return;
+              for (const part of content.modelTurn?.parts || []) {
+                const inlineData = part.inlineData;
+                if (inlineData?.data && (inlineData.mimeType || "").startsWith("audio/")) {
+                  emitToRenderer("live:audio", { data: inlineData.data, mimeType: inlineData.mimeType });
+                }
+              }
+              if (content.turnComplete) {
+                clearTimeout(previewTimeout);
+                try { previewSession?.close(); } catch { /* ignore */ }
+                previewSession = null;
+                resolve();
+              }
+            },
+            onerror(err) {
+              clearTimeout(previewTimeout);
+              previewSession = null;
+              reject(err);
+            },
+            onclose() {
+              clearTimeout(previewTimeout);
+              previewSession = null;
+              resolve();
+            },
+          },
+        })
+        .then((session) => {
+          previewSession = session;
+          session.sendRealtimeInput({
+            text: `Say exactly: Hi, I'm Iris. This is the ${voiceName} voice.`,
+          });
+        })
+        .catch((connErr) => {
+          clearTimeout(previewTimeout);
+          previewSession = null;
+          reject(connErr);
+        });
     });
-    // Send AFTER connect resolves: onopen can fire before the session variable is
-    // assigned, so triggering inside onopen would no-op (silent preview).
-    previewSession.sendRealtimeInput({
-      text: `Say exactly: Hi, I'm Iris. This is the ${voiceName} voice.`,
-    });
+
     return { ok: true };
   } catch (error) {
+    if (previewTimeout) clearTimeout(previewTimeout);
     previewSession = null;
-    return { ok: false, error: error?.message || String(error) };
+    let errMsg = error?.message || String(error);
+    if (/429|RESOURCE_EXHAUSTED/i.test(errMsg)) {
+      errMsg = "Key Gemini đang bị giới hạn (429). Thử lại sau ít phút hoặc đổi sang key khác.";
+    }
+    return { ok: false, error: errMsg };
+  } finally {
+    try {
+      setAudioChunkSuppressed(false);
+    } catch {}
   }
 }

@@ -7,6 +7,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawnSidecar, stopSidecar, resolvePythonCommand } from "./sidecar-process.mjs";
 import { emitEvent } from "./events.mjs";
 import { mainWindow } from "./window-manager.mjs";
@@ -21,8 +22,10 @@ const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
   new Set(
     [
       String(process.env.GEMINI_TRANSLATE_MODEL || "").trim(),
-      "gemini-3.8-flash",
       "gemini-2.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-flash-lite-latest",
+      "gemini-3.8-flash",
       "gemini-flash-latest",
     ].filter(Boolean)
   )
@@ -77,9 +80,9 @@ export async function getGeminiVisionClient(apiKey) {
 
 export async function callClaudeForTeleprompter(systemPrompt, userText, { maxTokens = 600 } = {}) {
   const apiKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
-  if (!apiKey) {
+  if (!apiKey || !apiKey.startsWith("sk-ant-")) {
     throw new Error(
-      "Thiếu ANTHROPIC_API_KEY trong cấu hình / .env — chưa cấu hình API key Claude."
+      "Thiếu ANTHROPIC_API_KEY hợp lệ (key phải bắt đầu bằng sk-ant-) — chuyển sang Gemini dự phòng."
     );
   }
   const candidateModels = [
@@ -393,7 +396,7 @@ export async function toggleLiveTranscriber() {
                              } catch (err) {
                                streamErr = err;
                                if (isRateLimitError(err)) {
-                                 throw err;
+                                 continue;
                                }
                                if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                  continue;
@@ -518,7 +521,7 @@ export async function toggleLiveTranscriber() {
                              } catch (err) {
                                lastErr = err;
                                if (isRateLimitError(err)) {
-                                 throw err;
+                                 continue;
                                }
                                if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                  continue;
@@ -541,7 +544,7 @@ export async function toggleLiveTranscriber() {
                            } catch (err) {
                              lastErr = err;
                              if (isRateLimitError(err)) {
-                               throw err;
+                               continue;
                              }
                              if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                                continue;
@@ -705,7 +708,7 @@ export async function askTeleprompter(question) {
     const usePoolFailover = typeof withGeminiFailover === "function" && typeof getAllGeminiKeys === "function";
     const geminiClient = usePoolFailover ? null : await getGeminiVisionClient();
     const hasKey = usePoolFailover
-      ? getAllGeminiKeys({ purpose: isVisionQuery ? "vision" : "general", preferVision: isVisionQuery }).length > 0
+      ? getAllGeminiKeys({ purpose: isVisionQuery ? "vision" : "teleprompter", preferVision: isVisionQuery }).length > 0
       : Boolean(geminiClient);
     if (!hasKey) {
       copilotStatus = "";
@@ -717,10 +720,10 @@ export async function askTeleprompter(question) {
       };
     }
 
+    let screenBase64 = imageBase64 || null;
     try {
       // Chỉ chụp màn hình khi có yêu cầu Vision (khoanh vùng hoặc toàn màn hình).
       // Khi ấn Enter hỏi thông thường => KHÔNG chụp màn hình, trả lời trực tiếp bằng text.
-      let screenBase64 = imageBase64 || null;
       if (isVisionQuery && !screenBase64) {
         try {
           const grabbed = await grabPrimaryScreenJpeg(75, { cropRect });
@@ -736,8 +739,10 @@ export async function askTeleprompter(question) {
         new Set(
           [
             String((isVisionQuery ? process.env.GEMINI_VISION_MODEL : process.env.GEMINI_TEXT_MODEL) || "").trim(),
-            "gemini-3.8-flash",
             "gemini-2.5-flash",
+            "gemini-3-flash-preview",
+            "gemini-flash-lite-latest",
+            "gemini-3.8-flash",
             "gemini-flash-latest",
           ].filter(Boolean)
         )
@@ -776,7 +781,7 @@ export async function askTeleprompter(question) {
           } catch (modelErr) {
             lastErr = modelErr;
             if (isRateLimitError(modelErr)) {
-              throw modelErr;
+              continue;
             }
             if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(modelErr?.message || "")) {
               continue;
@@ -796,7 +801,15 @@ export async function askTeleprompter(question) {
               if (!client) throw new Error("Không có Gemini client khả dụng.");
               return invokeVision(client);
             },
-            { purpose: isVisionQuery ? "vision" : "general", preferVision: isVisionQuery }
+            {
+              purpose: isVisionQuery ? "vision" : "teleprompter",
+              preferVision: isVisionQuery,
+              onFailover: ({ failedKey, attempt, maxRetries }) => {
+                const masked = failedKey.length > 8 ? `...${failedKey.slice(-4)}` : failedKey;
+                copilotStatus = `Key (${masked}) chạm hạn mức, đang tự động đổi sang key ${attempt + 1}/${maxRetries}...`;
+                updateTeleprompterHud();
+              },
+            }
           )
         : await invokeVision(geminiClient);
 

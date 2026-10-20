@@ -51,8 +51,10 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
       new Set(
         [
           String(process.env.GEMINI_VISION_MODEL || "").trim(),
-          "gemini-3.8-flash",
           "gemini-2.5-flash",
+          "gemini-3-flash-preview",
+          "gemini-flash-lite-latest",
+          "gemini-3.8-flash",
           "gemini-flash-latest",
         ].filter(Boolean)
       )
@@ -75,7 +77,8 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
             } catch (err) {
               lastErr = err;
               if (isRateLimitError(err)) {
-                throw err;
+                // Thử model dự phòng tiếp theo trên cùng key trước khi failover sang key khác
+                continue;
               }
               if (/no longer available|not found|404|NOT_FOUND|deprecated|is not supported/i.test(err?.message || "")) {
                 continue;
