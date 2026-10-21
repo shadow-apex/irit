@@ -12,7 +12,8 @@ import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { emitEvent } from "./events.mjs";
 import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 
-const MEETING_CANDIDATE_MODELS = Array.from(
+// Đọc env LÚC GỌI (không ở cấp module — P-03): .env/Settings có thể nạp/đổi model sau khi module được import.
+const getMeetingCandidateModels = () => Array.from(
   new Set(
     [
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
@@ -30,7 +31,7 @@ const MEETING_CANDIDATE_MODELS = Array.from(
 
 async function generateMeetingContent(client, payload) {
   let lastErr = null;
-  for (const m of MEETING_CANDIDATE_MODELS) {
+  for (const m of getMeetingCandidateModels()) {
     try {
       return await client.models.generateContent({
         ...payload,

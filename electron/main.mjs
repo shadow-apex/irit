@@ -107,7 +107,7 @@ import { stopOmniServer, setOmniLogger, ensureOmniServer, getOmniStatus, toggleO
 import { cancelAllTimedDrives } from "./main/robot-actions.mjs";
 import { triggerRobotAction } from "./main/robot-actions.mjs";
 import { getKeyPoolLiveStatus, setKeyPoolChangeListener } from "./main/gemini-keys.mjs";
-import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus, grabScreenRegionJpeg } from "./main/vision.mjs";
+import { toggleScreenVision, isVisionEnabled, handleCameraStreamFrame, handleDeskFrame, handleCompanionVisionFrame, setDeskVisionState, setCameraStreamStatus, grabScreenRegionJpeg, toggleVisionSnapMode, getVisionSnapMode } from "./main/vision.mjs";
 import { startSmarthomeRuleEvaluator, stopSmarthomeRuleTimer } from "./main/smarthome-tools.mjs";
 import { toggleMeetingRecording, meetingRecorder, getMeetingState, listMeetingHistory, summarizeMeetingAudio } from "./main/meeting-recording.mjs";
 import {
@@ -391,7 +391,7 @@ app.whenReady().then(() => {
   ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());
   ipcMain.handle("vision:get-screen-state", () => ({ isVisionEnabled }));
   ipcMain.handle("vision:toggle-snap-mode", (_event, force) => toggleVisionSnapMode(force));
-  ipcMain.handle("vision:get-snap-mode", () => ({ enabled: isVisionSnapMode }));
+  ipcMain.handle("vision:get-snap-mode", () => ({ enabled: getVisionSnapMode() }));
   ipcMain.handle("meeting:toggle", () => toggleMeetingRecording());
   ipcMain.handle("meeting:get-state", () => getMeetingState());
   ipcMain.handle("meeting:list-history", () => listMeetingHistory());

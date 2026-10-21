@@ -316,13 +316,22 @@ export async function mouseControlTool(args = {}) {
 
   const cli = [action];
   if (action === "move" || action === "click") {
-    if (x === null || y === null || args.task || args.target) {
+    const describe = [args.task, args.target, args.element]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .find(Boolean);
+    if (x === null || y === null || describe) {
       if (action === "click") {
         // Fallback thông minh: nếu gọi mouse_control click nhưng không có toạ độ x,y hoặc có task/target mô tả
         // => tự động chuyển sang OmniParser để chụp và click chuẩn xác theo thị giác AI
+        // KHÔNG click mù khi không có mô tả mục tiêu nào (OmniParser sẽ đoán bừa một phần tử bất kỳ).
+        if (!describe) {
+          return {
+            status: "error",
+            error: "Thiếu toạ độ x,y và không có mô tả mục tiêu. Hãy gọi computer_use_omniparser{task: \"<tên nút/icon/app cần click>\"}.",
+          };
+        }
         const { startOmniParserTask } = await import("./computer-use-tools.mjs");
-        const targetTask = args.task || args.target || args.element || "click vào mục tiêu trên màn hình";
-        return startOmniParserTask({ task: targetTask });
+        return startOmniParserTask({ task: describe });
       }
       return { status: "error", error: "'x' và 'y' (số) là bắt buộc cho move/click." };
     }

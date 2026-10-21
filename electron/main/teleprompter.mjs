@@ -14,7 +14,7 @@ import { mainWindow } from "./window-manager.mjs";
 import { enterHud } from "./window-manager.mjs";
 import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
-import { grabPrimaryScreenJpeg } from "./vision.mjs";
+import { grabPrimaryScreenJpeg, getVisionSnapMode } from "./vision.mjs";
 import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 import { getMeetingState } from "./meeting-recording.mjs";
 
@@ -241,8 +241,10 @@ export async function exportTeleprompterMinutes() {
   const fileName = `teleprompter-${dateStr}_${timeStr}.md`;
 
   const secondBrainDir = path.join(os.homedir(), "iris-second-brain", "meetings");
-  if (!fs.existsSync(secondBrainDir)) {
+  try {
     fs.mkdirSync(secondBrainDir, { recursive: true });
+  } catch (mkdirErr) {
+    return { ok: false, status: "error", message: `Không thể tạo thư mục lưu biên bản (${mkdirErr.message}).` };
   }
   const filePath = path.join(secondBrainDir, fileName);
 
@@ -260,7 +262,7 @@ export async function exportTeleprompterMinutes() {
       md += `### ${idx + 1}. ${item.question}\n`;
       md += `- **Thời gian:** ${new Date(item.ts).toLocaleTimeString("vi-VN")}\n`;
       if (item.engine) md += `- **Engine:** ${item.engine}\n`;
-      md += `\n> **Gợi ý trả lời:**\n> ${item.answer.replace(/\n/g, "\n> ")}\n\n`;
+      md += `\n> **Gợi ý trả lời:**\n> ${String(item.answer ?? "").replace(/\n/g, "\n> ")}\n\n`;
     });
     md += `---\n\n`;
   }
@@ -673,7 +675,7 @@ export async function toggleLiveTranscriber() {
 
 export async function askTeleprompter(question) {
   const options = arguments.length > 1 && arguments[1] ? arguments[1] : {};
-  const { cropRect, imageBase64, isFullScreen, hideUntilResolved } = (typeof options === "object" && options !== null) ? options : {};
+  const { cropRect, imageBase64, isFullScreen: isFullScreenOpt, hideUntilResolved } = (typeof options === "object" && options !== null) ? options : {};
   if (!question || typeof question !== "string" || !question.trim()) {
     return { status: "error", error: "Câu hỏi không được để trống." };
   }
@@ -694,8 +696,11 @@ export async function askTeleprompter(question) {
     "Dựa vào nội dung cuộc họp hoặc ảnh chụp màn hình hiện tại (nếu có), hãy trả lời câu hỏi của người dùng thật súc tích, chính xác và trực tiếp.\n\n" +
     "Nội dung phiên âm cuộc họp gần nhất:\n" + contextText;
 
-  const { isVisionSnapMode } = await import("./vision.mjs");
-  const isVisionQuery = Boolean(cropRect || imageBase64 || isFullScreen || isVisionSnapMode);
+  // Chế độ Vision (Alt+S): đọc trạng thái qua import tĩnh (không dùng `await import()` — dynamic import làm vỡ test VM sandbox). `typeof` an toàn trong sandbox test.
+  const isVisionSnapMode = typeof getVisionSnapMode === "function" ? Boolean(getVisionSnapMode()) : false;
+  // Alt+S BẬT mà không có vùng khoanh/ảnh sẵn ⇒ chụp TOÀN MÀN HÌNH mới nhất cho mỗi câu hỏi.
+  const isFullScreen = Boolean(isFullScreenOpt || (isVisionSnapMode && !cropRect && !imageBase64));
+  const isVisionQuery = Boolean(cropRect || imageBase64 || isFullScreen);
   const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
 
   copilotStatus = isVisionQuery

@@ -797,12 +797,17 @@ export async function takeCameraSnapshot(args = {}) {
   const target = typeof args?.target === "string" ? args.target.trim() : "";
   const save = args?.save !== false;
 
-  const targetNorm = target.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
+  // Bỏ dấu tiếng Việt + đổi '+', '_', '-' thành khoảng trắng ⇒ "Alt+C" / "alt_c" / "alt-c" đều thành "alt c".
+  const targetNorm = target
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase()
+    .replace(/[+_\-]+/g, " ").replace(/\s+/g, " ").trim();
+  const targetWords = targetNorm.split(" ");
   const isAltC =
-    /^(?:chup|xem|nhin|lay|mo)?\s*(?:anh|hinh|video)?\s*(?:camera\s*|may\s*anh\s*)?(?:alt\s*c|alt_c|companion|companion_phone|phone|dien\s*thoai|dt)(?:\s*camera)?$/i.test(targetNorm) ||
+    /^(?:chup|xem|nhin|lay|mo)?\s*(?:anh|hinh|video)?\s*(?:camera\s*|cam\s*|may\s*anh\s*)?(?:alt\s*c|companion|companion\s*phone|phone|dien\s*thoai|dt)(?:\s*camera)?$/i.test(targetNorm) ||
     targetNorm.includes("alt c") ||
-    targetNorm.includes("alt_c") ||
-    targetNorm.includes("companion");
+    targetNorm.includes("companion") ||
+    targetNorm.includes("dien thoai") ||
+    targetWords.includes("phone");
   if (isAltC) {
     return requestCompanionSnapshot({ timeoutMs: 8000, save });
   }

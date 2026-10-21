@@ -321,6 +321,7 @@ function buildClaudeToolsRaw() {
               click: { type: "boolean", description: "For action 'move' only: click at the destination immediately after arriving, instead of needing a separate 'click' call." },
               linear: { type: "boolean", description: "For move/click: use an instant straight-line move instead of the default smooth curved motion. Only use this if precise, non-human-like positioning is explicitly needed." },
               amount: { type: "integer", description: "Scroll amount: positive scrolls up, negative scrolls down (scroll only)." },
+              task: { type: "string", description: "Optional (click only): description of the visual element to click when you do NOT have explicit numeric x/y (e.g. 'icon Chrome'). The click is then routed automatically to computer_use_omniparser. Prefer calling computer_use_omniparser directly." },
             },
             required: ["action"],
           },

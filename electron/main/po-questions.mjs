@@ -116,22 +116,37 @@ export async function sendContextSupplement(text) {
   const clean = String(text || "").trim();
   if (!clean) return { status: "error", error: "Empty supplement text." };
 
-  let isSnap = false;
+  let isSnap = false; // Alt+S đang BẬT
+  let frameSent = false; // khung hình MỚI đã thực sự tới Gemini Live
   let screenSummary = null;
   try {
-    const { isVisionSnapMode, grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
-    const { sendVideoFrame } = await import("./gemini-live.mjs");
-    if (isVisionSnapMode) {
+    const { getVisionSnapMode, grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
+    if (getVisionSnapMode()) {
       isSnap = true;
+      const { sendVideoFrame } = await import("./gemini-live.mjs");
       const { buffer } = await grabPrimaryScreenJpeg(75);
-      if (buffer) {
+      if (buffer && buffer.length > 0) {
         const b64 = buffer.toString("base64");
-        sendVideoFrame(b64, "image/jpeg");
+        frameSent = sendVideoFrame(b64, "image/jpeg") === true;
         screenSummary = await analyzeImageWithVisionApi(b64, "màn hình máy tính").catch(() => null);
       }
     }
   } catch (snapErr) {
-    console.warn("[sendContextSupplement] Chụp màn hình cho Vision Snap Mode thất bại:", snapErr.message);
+    console.warn("[sendContextSupplement] Chụp màn hình cho Vision Snap Mode thất bại:", snapErr?.message);
+  }
+
+  // Alt+S BẬT nhưng chụp/gửi ảnh thất bại: KHÔNG được nói với Gemini là "đã gửi ảnh mới" —
+  // nếu không model sẽ trả lời theo khung hình CŨ từ lượt trước (đúng lỗi cần chống).
+  if (isSnap && !frameSent && !screenSummary) {
+    const lines = [
+      "SYSTEM_EVENT_USER_MESSAGE",
+      `user_message: ${clean}`,
+      "instructions_to_iris:",
+      "- Chế độ Vision (Alt+S) đang BẬT nhưng KHÔNG chụp/gửi được ảnh màn hình mới cho tin nhắn này.",
+      "- TUYỆT ĐỐI không mô tả màn hình dựa trên ảnh cũ từ lượt trước. Nếu câu hỏi cần nhìn màn hình, hãy gọi take_ai_screenshot; nếu không, trả lời bình thường.",
+    ].join("\n");
+    notifyIris(lines, { bufferIfOffline: false });
+    return { status: "ok", vision_attached: false };
   }
 
   if (isSnap) {
@@ -140,7 +155,9 @@ export async function sendContextSupplement(text) {
       `user_message: ${clean}`,
       screenSummary ? `mô_tả_màn_hình_vừa_chụp: ${screenSummary}` : "",
       "instructions_to_iris:",
-      "- Chế độ Vision (Alt+S) đang BẬT: Khung hình màn hình máy tính MỚI NHẤT VỪA ĐƯỢC CHỤP và gửi trực tiếp qua luồng video.",
+      frameSent
+        ? "- Chế độ Vision (Alt+S) đang BẬT: Khung hình màn hình máy tính MỚI NHẤT VỪA ĐƯỢC CHỤP và gửi trực tiếp qua luồng video."
+        : "- Chế độ Vision (Alt+S) đang BẬT: Không gửi được khung hình qua luồng video, chỉ có mô tả màn hình vừa chụp ở trên — dựa vào mô tả đó, KHÔNG dùng ảnh cũ.",
       "- Hãy nhìn trực tiếp vào bức ảnh màn hình vừa nhận và trả lời câu hỏi/tin nhắn của người dùng một cách chính xác, ngắn gọn, đúng trọng tâm.",
     ].filter(Boolean).join("\n");
     notifyIris(lines, { bufferIfOffline: false });

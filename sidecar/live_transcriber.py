@@ -259,7 +259,8 @@ def transcribe_gemini_audio(mono_float: np.ndarray, sample_rate: int = 16000) ->
                         m_err_str = str(m_err)
                         if "429" in m_err_str or "RESOURCE_EXHAUSTED" in m_err_str:
                             raise m_err
-                        if any(w in m_err_str for w in ["404", "NOT_FOUND", "not found", "is not supported", "deprecated"]):
+                        # 404/400 do model bị gỡ/không hỗ trợ audio ⇒ thử model kế tiếp (đồng bộ với phía Electron)
+                        if any(w in m_err_str for w in ["404", "NOT_FOUND", "not found", "is not supported", "deprecated", "no longer available", "400", "INVALID_ARGUMENT"]):
                             continue
                         raise m_err
                 if resp is None:

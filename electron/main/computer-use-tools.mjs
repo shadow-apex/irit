@@ -134,6 +134,10 @@ export async function startComputerUseTask(args) {
   return { status: "started", message: "I have started taking control of the computer. The actions are running in the background." };
 }
 
+// Bộ đếm jitter 0/1px luân phiên (tất định) — `Date.now() % 2` có thể trùng giá trị ở 2 lần chụp liên tiếp
+// khiến Chromium/DWM trả lại NativeImage cũ trong cache.
+let omniGrabCounter = 0;
+
 export async function startOmniParserTask(args) {
   const { task, fast_mode = false } = args || {};
   if (!task || typeof task !== "string" || !task.trim()) {
@@ -161,7 +165,7 @@ export async function startOmniParserTask(args) {
       const sources = await desktopCapturer.getSources({
         types: ["screen"],
         // Cache-busting 0/1px jitter
-        thumbnailSize: { width: 1366 + (Date.now() % 2), height: 768 },
+        thumbnailSize: { width: 1366 + (omniGrabCounter++ % 2), height: 768 },
       });
       const primarySource =
         (primary ? sources?.find((s) => s.display_id === String(primary.id)) : null) ?? sources?.[0];
