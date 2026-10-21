@@ -41,7 +41,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "computer_use_omniparser",
-          description: "MANDATORY PRIMARY TOOL for clicking any visual element on the user's computer screen (e.g. buttons, icons, links, search bars, tabs, checkboxes, menus, windows). Uses the local OmniParser AI vision model (or Gemini Vision fallback) to take a fresh full-resolution screenshot, detect the target's exact pixel coordinates, and click it accurately. ALWAYS invoke this tool whenever the user asks to click, press, tap, or select ANY named element, icon, or button on the screen (in Vietnamese: 'click vào...', 'bấm vào...', 'chọn icon...', 'nhấp vào nút...', 'bấm ô tìm kiếm...'). NEVER guess or estimate x/y coordinates yourself with mouse_control when the user refers to an element on the screen.",
+          description: "DEFAULT & MANDATORY PRIMARY TOOL FOR ANY CLICK COMMAND ON SCREEN. ALWAYS invoke this tool whenever the user says 'click', 'bấm', 'nhấp', 'chọn', 'tap', or asks to click ANY app, icon, window, button, link, search bar, or UI element on screen (in Vietnamese: 'click vào một app bất kì', 'click vào Chrome', 'click vào icon Zalo', 'bấm nút Play', 'nhấp vào ô tìm kiếm'). CRITICAL: The user does NOT need to mention the word 'omni' — whenever the user says 'click', this tool is the 100% DEFAULT tool to use! It takes a fresh screenshot, uses OmniParser AI vision to find the target's exact pixel coordinates, and clicks it accurately. NEVER use open_url_or_app when the user says 'click'. NEVER guess coordinates with mouse_control.",
           parameters: {
             type: "object",
             properties: {
@@ -104,7 +104,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "open_url_or_app",
-          description: "Open ANY website in the default browser or open ANY local application installed on Windows (via Start Menu, Desktop, Registry, PATH, or Microsoft Store — e.g. 'Zalo', 'Telegram', 'Word', 'Excel', 'Visual Studio Code', 'Chrome', 'Calculator', 'Settings', 'Device Manager', 'Spotify', 'calc.exe', 'notepad.exe'). IMPORTANT: If the user asks to open a website like YouTube or Facebook, set is_url=true and provide the full valid URL (e.g. 'https://www.youtube.com'). If they ask to open a desktop/system app, set is_url=false and pass the app name or executable.",
+          description: "Open ANY website in the default browser or open ANY local application installed on Windows (via Start Menu, Desktop, Registry, PATH, or Microsoft Store — e.g. 'Zalo', 'Telegram', 'Word', 'Excel', 'Visual Studio Code', 'Chrome', 'Calculator', 'Settings', 'Device Manager', 'Spotify', 'calc.exe', 'notepad.exe'). IMPORTANT: If the user asks to open a website like YouTube or Facebook, set is_url=true and provide the full valid URL (e.g. 'https://www.youtube.com'). If they ask to open a desktop/system app, set is_url=false and pass the app name or executable. CRITICAL: DO NOT use this tool if the user explicitly commanded to CLICK ('click vào app...', 'bấm vào icon...') — when the user says CLICK, ALWAYS call computer_use_omniparser instead so it visually clicks the icon/app on screen!",
           parameters: {
             type: "object",
             properties: {
@@ -304,7 +304,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "mouse_control",
-          description: "Control the mouse cursor ONLY by RAW/EXPLICIT numeric coordinates or physical mouse actions: relative movements, scrolling, dragging between two points, or clicking at an EXPLICIT coordinate provided by the user (e.g. 'di chuyển chuột đến toạ độ 500 300', 'click tại 800, 400', 'cuộn chuột xuống', 'kéo chuột từ A đến B'). CRITICAL: DO NOT use mouse_control to click on visual UI elements, icons, or named buttons (e.g. 'click vào nút X', 'bấm vào icon Y') by guessing coordinates from screen vision — ALWAYS use computer_use_omniparser instead, which uses the specialized OmniParser detector to find exact coordinates without guessing. Only use mouse_control when the user explicitly provides numbers/coordinates or asks to scroll/drag.",
+          description: "Control the mouse cursor ONLY by RAW/EXPLICIT numeric coordinates or physical mouse actions: relative movements, scrolling, dragging between two points, or clicking at an EXPLICIT coordinate provided by the user (e.g. 'di chuyển chuột đến toạ độ 500 300', 'click tại 800, 400', 'cuộn chuột xuống', 'kéo chuột từ A đến B'). CRITICAL: NEVER use mouse_control for general click requests, apps, or visual elements (e.g. 'click vào app', 'click vào icon', 'bấm vào nút') without explicit numeric coordinates — ALWAYS invoke computer_use_omniparser instead whenever the user asks to click without numbers!",
           parameters: {
             type: "object",
             properties: {

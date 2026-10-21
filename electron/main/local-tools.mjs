@@ -316,7 +316,16 @@ export async function mouseControlTool(args = {}) {
 
   const cli = [action];
   if (action === "move" || action === "click") {
-    if (x === null || y === null) return { status: "error", error: "'x' và 'y' (số) là bắt buộc cho move/click." };
+    if (x === null || y === null || args.task || args.target) {
+      if (action === "click") {
+        // Fallback thông minh: nếu gọi mouse_control click nhưng không có toạ độ x,y hoặc có task/target mô tả
+        // => tự động chuyển sang OmniParser để chụp và click chuẩn xác theo thị giác AI
+        const { startOmniParserTask } = await import("./computer-use-tools.mjs");
+        const targetTask = args.task || args.target || args.element || "click vào mục tiêu trên màn hình";
+        return startOmniParserTask({ task: targetTask });
+      }
+      return { status: "error", error: "'x' và 'y' (số) là bắt buộc cho move/click." };
+    }
     cli.push(String(x), String(y));
     if (!human_like) cli.push("--fast"); // mặc định NHANH; đường Bezier mềm chỉ khi human_like:true
     if (linear) cli.push("--linear");
