@@ -161,6 +161,28 @@ export function stopAllVisionLoops() {
 export let isVisionEnabled = false;
 export let visionInterval = null; // { id, stop }
 
+/** Chế độ Vision (Alt+S): mỗi tin nhắn/câu hỏi gửi đi sẽ tự động chụp màn hình gửi kèm Gemini để xử lý (1 ảnh / 1 tin nhắn) */
+export let isVisionSnapMode = false;
+
+export function toggleVisionSnapMode(forceState) {
+  isVisionSnapMode = typeof forceState === "boolean" ? forceState : !isVisionSnapMode;
+  emitEvent({ type: "vision_snap_mode", enabled: isVisionSnapMode });
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+    mainWindow.webContents.send("vision:snap-mode-changed", { enabled: isVisionSnapMode });
+    mainWindow.webContents.send("hud:message", {
+      title: "Chế độ Vision (Alt+S)",
+      content: isVisionSnapMode
+        ? "📸 ĐÃ BẬT: Mỗi tin nhắn hỏi AI sẽ tự động chụp 1 ảnh màn hình mới nhất gửi kèm Gemini để xử lý."
+        : " ĐÃ TẮT: Trở về chế độ trò chuyện thông thường (không kèm ảnh chụp màn hình).",
+    });
+  }
+  return { enabled: isVisionSnapMode };
+}
+
+export function getVisionSnapMode() {
+  return isVisionSnapMode;
+}
+
 // Chụp nhỏ + chất lượng thấp cho vòng lặp (~30-80 KB/frame). Full-res dành cho Computer Use.
 /**
  * Hình học của khung vision so với màn hình chính (pixel VẬT LÝ). Gemini chỉ "thấy" khung đã thu nhỏ

@@ -112,9 +112,41 @@ export function askUserQuestionViaVoice(workstreamId, questions, role = "po") {
 // Gemini reacts to it exactly like everything else in the live conversation.
 // Deliberately never buffered: the composer UI disables itself while asleep,
 // so there is nothing worth redelivering on reconnect (design.md decision 6).
-export function sendContextSupplement(text) {
+export async function sendContextSupplement(text) {
   const clean = String(text || "").trim();
   if (!clean) return { status: "error", error: "Empty supplement text." };
+
+  let isSnap = false;
+  let screenSummary = null;
+  try {
+    const { isVisionSnapMode, grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
+    const { sendVideoFrame } = await import("./gemini-live.mjs");
+    if (isVisionSnapMode) {
+      isSnap = true;
+      const { buffer } = await grabPrimaryScreenJpeg(75);
+      if (buffer) {
+        const b64 = buffer.toString("base64");
+        sendVideoFrame(b64, "image/jpeg");
+        screenSummary = await analyzeImageWithVisionApi(b64, "màn hình máy tính").catch(() => null);
+      }
+    }
+  } catch (snapErr) {
+    console.warn("[sendContextSupplement] Chụp màn hình cho Vision Snap Mode thất bại:", snapErr.message);
+  }
+
+  if (isSnap) {
+    const lines = [
+      "SYSTEM_EVENT_USER_MESSAGE_WITH_SCREENSHOT",
+      `user_message: ${clean}`,
+      screenSummary ? `mô_tả_màn_hình_vừa_chụp: ${screenSummary}` : "",
+      "instructions_to_iris:",
+      "- Chế độ Vision (Alt+S) đang BẬT: Khung hình màn hình máy tính MỚI NHẤT VỪA ĐƯỢC CHỤP và gửi trực tiếp qua luồng video.",
+      "- Hãy nhìn trực tiếp vào bức ảnh màn hình vừa nhận và trả lời câu hỏi/tin nhắn của người dùng một cách chính xác, ngắn gọn, đúng trọng tâm.",
+    ].filter(Boolean).join("\n");
+    notifyIris(lines, { bufferIfOffline: false });
+    return { status: "ok", vision_attached: true };
+  }
+
   const lines = [
     "SYSTEM_EVENT_CONTEXT_SUPPLEMENT",
     `supplement: ${clean}`,

@@ -694,7 +694,8 @@ export async function askTeleprompter(question) {
     "Dựa vào nội dung cuộc họp hoặc ảnh chụp màn hình hiện tại (nếu có), hãy trả lời câu hỏi của người dùng thật súc tích, chính xác và trực tiếp.\n\n" +
     "Nội dung phiên âm cuộc họp gần nhất:\n" + contextText;
 
-  const isVisionQuery = Boolean(cropRect || imageBase64 || isFullScreen);
+  const { isVisionSnapMode } = await import("./vision.mjs");
+  const isVisionQuery = Boolean(cropRect || imageBase64 || isFullScreen || isVisionSnapMode);
   const claudeKey = (process.env.ANTHROPIC_API_KEY || process.env.IRIS_TELEPROMPTER_ANTHROPIC_KEY || "").trim();
 
   copilotStatus = isVisionQuery

@@ -286,6 +286,20 @@ export default function HudShell({
   // Export minutes to Second Brain state
   const [isExportingMinutes, setIsExportingMinutes] = useState(false);
   const [minutesExportStatus, setMinutesExportStatus] = useState("");
+  const [visionSnapMode, setVisionSnapMode] = useState(false);
+
+  useEffect(() => {
+    if (window.iris?.getVisionSnapMode) {
+      window.iris.getVisionSnapMode().then((res: any) => {
+        if (res && typeof res.enabled === "boolean") setVisionSnapMode(res.enabled);
+      }).catch(() => {});
+    }
+    if (window.iris?.onVisionSnapModeChanged) {
+      return window.iris.onVisionSnapModeChanged((payload: any) => {
+        setVisionSnapMode(payload.enabled);
+      });
+    }
+  }, []);
 
   // Interactive Snipping Tool & Full Screen Vision state
   const [isSnipping, setIsSnipping] = useState(false);
@@ -797,6 +811,36 @@ export default function HudShell({
                 </button>
               ) : null}
 
+              {/* Nút Chế độ Vision Alt+S */}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (window.iris?.toggleVisionSnapMode) {
+                    const res = await window.iris.toggleVisionSnapMode();
+                    setVisionSnapMode(res.enabled);
+                  }
+                }}
+                title={visionSnapMode ? "Chế độ Vision (Alt+S): ĐANG BẬT (Mỗi tin nhắn tự động chụp 1 ảnh màn hình gửi Gemini) — Click để tắt" : "Chế độ Vision (Alt+S): ĐANG TẮT — Click để bật"}
+                style={{
+                  fontSize: 10,
+                  padding: "3px 7px",
+                  borderRadius: 6,
+                  border: visionSnapMode ? "1px solid rgba(0, 255, 204, 0.6)" : "1px solid #333",
+                  background: visionSnapMode ? "rgba(0, 255, 204, 0.15)" : "#151515",
+                  color: visionSnapMode ? "#00ffcc" : "#888",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 3,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <Eye size={12} color={visionSnapMode ? "#00ffcc" : "#888"} />
+                <span>Alt+S</span>
+                {visionSnapMode && <span style={{ fontSize: 9, opacity: 0.85 }}>ON</span>}
+              </button>
+
               {/* Ai Query Kính Lúp */}
               <div ref={aiQueryWrapRef} style={{ display: "flex", alignItems: "center", position: "relative" }}>
                 <button
@@ -863,7 +907,7 @@ export default function HudShell({
                         setShowAiQuery(false);
                         try {
                           if (window.iris?.askTeleprompter) {
-                            const res = await window.iris.askTeleprompter(text);
+                            const res = await window.iris.askTeleprompter(text, { isFullScreen: visionSnapMode ? true : false, hideUntilResolved: true });
                             if (res && res.status === "error") {
                               setAiQueryError(res.error || "Lỗi khi hỏi AI");
                             }
@@ -896,7 +940,7 @@ export default function HudShell({
                     <input
                       autoFocus
                       type="text"
-                      placeholder="Hỏi AI... (Enter để hỏi ngay)"
+                      placeholder={visionSnapMode ? "📸 [Alt+S ON] Hỏi kèm chụp màn hình..." : "Hỏi AI... (Enter để hỏi ngay)"}
                       value={aiQueryText}
                       onChange={(e) => setAiQueryText(e.target.value)}
                       style={{

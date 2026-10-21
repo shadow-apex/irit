@@ -12,6 +12,7 @@
 export const DEFAULT_HOTKEYS = Object.freeze({
   toggleDeck: "CommandOrControl+I",
   screenVision: "Super+Shift+V",
+  visionSnapMode: "Alt+S",
   resetToBoot: "Super+Shift+R",
   localChat: "Super+Shift+L",
   deskVision: "Super+Shift+C",

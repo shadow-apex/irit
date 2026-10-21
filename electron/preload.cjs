@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld("iris", {
   toggleLiveTranscriber: () => ipcRenderer.invoke("teleprompter:toggle-transcriber"),
   toggleScreenVision: () => ipcRenderer.invoke("vision:toggle-screen"),
   getScreenVisionState: () => ipcRenderer.invoke("vision:get-screen-state"),
+  toggleVisionSnapMode: (force) => ipcRenderer.invoke("vision:toggle-snap-mode", force),
+  getVisionSnapMode: () => ipcRenderer.invoke("vision:get-snap-mode"),
+  onVisionSnapModeChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("vision:snap-mode-changed", handler);
+    return () => ipcRenderer.removeListener("vision:snap-mode-changed", handler);
+  },
   toggleMeetingRecording: () => ipcRenderer.invoke("meeting:toggle"),
   getMeetingRecordingState: () => ipcRenderer.invoke("meeting:get-state"),
   getMeetingHistory: () => ipcRenderer.invoke("meeting:list-history"),

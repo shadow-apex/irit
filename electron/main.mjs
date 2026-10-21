@@ -390,6 +390,8 @@ app.whenReady().then(() => {
   ipcMain.handle("teleprompter:toggle-transcriber", () => toggleLiveTranscriber());
   ipcMain.handle("vision:toggle-screen", () => toggleScreenVision());
   ipcMain.handle("vision:get-screen-state", () => ({ isVisionEnabled }));
+  ipcMain.handle("vision:toggle-snap-mode", (_event, force) => toggleVisionSnapMode(force));
+  ipcMain.handle("vision:get-snap-mode", () => ({ enabled: isVisionSnapMode }));
   ipcMain.handle("meeting:toggle", () => toggleMeetingRecording());
   ipcMain.handle("meeting:get-state", () => getMeetingState());
   ipcMain.handle("meeting:list-history", () => listMeetingHistory());
@@ -584,6 +586,7 @@ app.whenReady().then(() => {
       },
     },
     screenVision: { label: "Screen Vision", run: () => toggleScreenVision() },
+    visionSnapMode: { label: "Toggle Vision Snap Mode (Alt+S)", run: () => toggleVisionSnapMode() },
     resetToBoot: {
       label: "Reset to boot",
       run: () => {

@@ -27,7 +27,7 @@ export default function ContextSupplementInput({
         disabled={disabled}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={disabled ? "Wake Iris to send a link or note" : "Paste a link or note for Claude to research…"}
+        placeholder={disabled ? "Wake Iris to send a link or note" : "Nhập tin nhắn / câu hỏi (khi bật Alt+S sẽ tự động chụp màn hình gửi Gemini)…"}
       />
     </div>
   );

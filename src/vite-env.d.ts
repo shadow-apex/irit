@@ -401,6 +401,9 @@ type IrisApi = {
   toggleLiveTranscriber: () => Promise<{ status: string; message?: string; error?: string }>;
   toggleScreenVision: () => Promise<{ status: string; message?: string; error?: string }>;
   getScreenVisionState: () => Promise<{ isVisionEnabled: boolean }>;
+  toggleVisionSnapMode: (force?: boolean) => Promise<{ enabled: boolean }>;
+  getVisionSnapMode: () => Promise<{ enabled: boolean }>;
+  onVisionSnapModeChanged: (callback: (payload: { enabled: boolean }) => void) => () => void;
   toggleMeetingRecording: () => Promise<{ status: string; message?: string; error?: string }>;
   getMeetingRecordingState: () => Promise<{
     isRecording: boolean;
