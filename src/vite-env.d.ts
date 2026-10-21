@@ -225,6 +225,9 @@ type IrisConfig = {
   filesystemOps?: boolean;
   windowManager?: boolean;
   systemOps?: boolean;
+  uiAutomation?: boolean;
+  cadAutomation?: boolean;
+  visualVerify?: boolean;
   configured: boolean;
   voices: string[];
   models: string[];

@@ -15,6 +15,7 @@
 
 export const DISCRETE_GESTURES = new Set([
   "pinch", "swipe_left", "swipe_right", "zoom_in", "zoom_out", "thumb_up", "thumb_down", "victory",
+  "pinch_click", "right_click", "two_hand_zoom_in", "two_hand_zoom_out", "two_hand_rotate",
 ]);
 
 const isRatio = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
@@ -28,6 +29,12 @@ export function parseHandGesture(payload) {
     if (payload.type === "release") return { kind: "release" };
     if (payload.type === "grab" && isRatio(payload.nx) && isRatio(payload.ny)) {
       return { kind: "grab", nx: payload.nx, ny: payload.ny };
+    }
+    if (payload.type === "air_mouse" && isRatio(payload.nx) && isRatio(payload.ny)) {
+      return { kind: "air_mouse", nx: payload.nx, ny: payload.ny, action: typeof payload.action === "string" ? payload.action : "move" };
+    }
+    if (payload.type === "two_hand" && typeof payload.gesture === "string") {
+      return { kind: "two_hand", gesture: payload.gesture, delta: typeof payload.delta === "number" ? payload.delta : 0, angle: typeof payload.angle === "number" ? payload.angle : 0 };
     }
   }
   return null;
@@ -56,6 +63,25 @@ export function ratioToScreenPoint(nx, ny, bounds, screen) {
 export function createHandGestureHandler(deps) {
   const env = () => (deps.env ? deps.env() : process.env);
   let isGrabbing = false;
+  let smoothX = null;
+  let smoothY = null;
+  const SMOOTH_ALPHA = 0.4;
+  const DEADZONE_PX = 2;
+
+  function filterSmoothing(targetX, targetY) {
+    if (smoothX === null || smoothY === null) {
+      smoothX = targetX;
+      smoothY = targetY;
+      return { x: targetX, y: targetY };
+    }
+    const dist = Math.hypot(targetX - smoothX, targetY - smoothY);
+    if (dist < DEADZONE_PX) {
+      return { x: Math.round(smoothX), y: Math.round(smoothY) };
+    }
+    smoothX = SMOOTH_ALPHA * targetX + (1 - SMOOTH_ALPHA) * smoothX;
+    smoothY = SMOOTH_ALPHA * targetY + (1 - SMOOTH_ALPHA) * smoothY;
+    return { x: Math.round(smoothX), y: Math.round(smoothY) };
+  }
 
   async function releaseGrabIfHeld() {
     if (!isGrabbing) return;
@@ -78,10 +104,11 @@ export function createHandGestureHandler(deps) {
   // Cử chỉ khi KHÔNG bật hệ thống: chỉ tác động UI Iris.
   function irisOnly(name) {
     const win = deps.getMainWindow?.();
-    if (name === "zoom_in" || name === "zoom_out") {
+    if (name === "zoom_in" || name === "zoom_out" || name === "two_hand_zoom_in" || name === "two_hand_zoom_out") {
       if (win && !win.isDestroyed?.()) {
         const wc = win.webContents;
-        const next = Math.min(1.6, Math.max(0.6, wc.getZoomFactor() + (name === "zoom_in" ? 0.1 : -0.1)));
+        const delta = (name === "zoom_in" || name === "two_hand_zoom_in") ? 0.1 : -0.1;
+        const next = Math.min(1.6, Math.max(0.6, wc.getZoomFactor() + delta));
         wc.setZoomFactor(next);
       }
     } else if (name === "victory") {
@@ -114,6 +141,58 @@ export function createHandGestureHandler(deps) {
         }
         return { ok: true };
       }
+      if (g.kind === "air_mouse") {
+        const win = deps.getMainWindow?.();
+        if (!win || win.isDestroyed?.()) return { ok: false, reason: "no-window" };
+        const raw = ratioToScreenPoint(g.nx, g.ny, win.getContentBounds(), deps.screen);
+        const p = filterSmoothing(raw.x, raw.y);
+        const { mouse, Point, Button } = await deps.getNut();
+        await mouse.setPosition(new Point(p.x, p.y));
+        if (g.action === "click" || g.action === "pinch_click") {
+          await mouse.pressButton(Button.LEFT);
+          await mouse.releaseButton(Button.LEFT);
+        } else if (g.action === "right_click") {
+          const rBtn = Button.RIGHT || Button.LEFT;
+          await mouse.pressButton(rBtn);
+          await mouse.releaseButton(rBtn);
+        } else if (g.action === "down") {
+          isGrabbing = true;
+          await mouse.pressButton(Button.LEFT);
+        } else if (g.action === "up") {
+          if (isGrabbing) {
+            isGrabbing = false;
+            await mouse.releaseButton(Button.LEFT);
+          }
+        }
+        return { ok: true, air_mouse: true, x: p.x, y: p.y };
+      }
+      if (g.kind === "two_hand") {
+        if (!systemGesturesEnabled(env())) {
+          if (g.gesture === "zoom") {
+            const name = g.delta > 0 ? "two_hand_zoom_in" : "two_hand_zoom_out";
+            irisOnly(name);
+          }
+          return { ok: true, system: false };
+        }
+        if (g.gesture === "zoom") {
+          if (g.delta > 0) {
+            await press(["LeftControl", "Equal"]);
+          } else {
+            await press(["LeftControl", "Minus"]);
+          }
+          return { ok: true, system: true, action: "zoom" };
+        }
+        if (g.gesture === "rotate") {
+          const { mouse, keyboard, Key, Button } = await deps.getNut();
+          await keyboard.pressKey(Key.LeftShift);
+          const midBtn = Button.MIDDLE || Button.LEFT;
+          await mouse.pressButton(midBtn);
+          await mouse.releaseButton(midBtn);
+          await keyboard.releaseKey(Key.LeftShift);
+          return { ok: true, system: true, action: "rotate" };
+        }
+        return { ok: false, reason: "unknown-two-hand" };
+      }
       // discrete
       if (g.name === "pinch") {
         deps.toggleHud();
@@ -131,6 +210,30 @@ export function createHandGestureHandler(deps) {
         case "thumb_up": await press(["LeftSuper"]); break;
         case "victory": await press(["LeftSuper", "D"]); break;
         case "thumb_down": await press(["LeftAlt", "F4"]); break;
+        case "pinch_click": {
+          const { mouse, Button } = await deps.getNut();
+          await mouse.pressButton(Button.LEFT);
+          await mouse.releaseButton(Button.LEFT);
+          break;
+        }
+        case "right_click": {
+          const { mouse, Button } = await deps.getNut();
+          const rBtn = Button.RIGHT || Button.LEFT;
+          await mouse.pressButton(rBtn);
+          await mouse.releaseButton(rBtn);
+          break;
+        }
+        case "two_hand_zoom_in": await press(["LeftControl", "Equal"]); break;
+        case "two_hand_zoom_out": await press(["LeftControl", "Minus"]); break;
+        case "two_hand_rotate": {
+          const { mouse, keyboard, Key, Button } = await deps.getNut();
+          await keyboard.pressKey(Key.LeftShift);
+          const midBtn = Button.MIDDLE || Button.LEFT;
+          await mouse.pressButton(midBtn);
+          await mouse.releaseButton(midBtn);
+          await keyboard.releaseKey(Key.LeftShift);
+          break;
+        }
         default: return { ok: false, reason: "unknown" };
       }
       return { ok: true, system: true };

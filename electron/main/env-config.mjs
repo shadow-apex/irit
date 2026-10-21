@@ -82,6 +82,9 @@ export const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_FILESYSTEM_OPS",
   "IRIS_WINDOW_MANAGER",
   "IRIS_SYSTEM_OPS",
+  "IRIS_UI_AUTOMATION",
+  "IRIS_CAD_AUTOMATION",
+  "IRIS_VISUAL_VERIFY",
   "OMNIPARSER_ENABLED",
 ]);
 
@@ -139,6 +142,9 @@ export function getFullConfig() {
     filesystemOps: envFlag("IRIS_FILESYSTEM_OPS", true),
     windowManager: envFlag("IRIS_WINDOW_MANAGER", true),
     systemOps: envFlag("IRIS_SYSTEM_OPS", true),
+    uiAutomation: envFlag("IRIS_UI_AUTOMATION", false),
+    cadAutomation: envFlag("IRIS_CAD_AUTOMATION", false),
+    visualVerify: envFlag("IRIS_VISUAL_VERIFY", false),
     configured: geminiKeys.length > 0,
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),

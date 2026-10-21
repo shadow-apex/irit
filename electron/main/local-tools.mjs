@@ -29,6 +29,7 @@ export const WINDOWS_ONLY_TOOLS = new Set([
   "media_control.py", "image_viewer.py", "clipboard_history.py", "process_manager.py", "ocr_region.py",
   "color_picker.py", "file_explorer.py", "iris_showcase.py",
   "universal_app_launcher.py", "terminal_executor.py", "filesystem_ops.py", "window_manager.py", "system_ops.py",
+  "cad_automation.py", "ui_automation.py",
 ]);
 
 export const MAX_STDOUT_BYTES = 1_000_000; // TL: giới hạn stdout ≤ 1 MB
@@ -801,3 +802,55 @@ export async function systemOpsTool(args = {}) {
   return runJsonTool("system_ops.py", cli, { timeoutMs }, `system_ops.py ${action} thất bại.`);
 }
 
+
+export async function cadAutomationTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_CAD_AUTOMATION")) {
+    return {
+      status: "error",
+      error: "Quyền 'Tự động hoá AutoCAD (.SCR & COM)' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
+    };
+  }
+  const action = String(args.action || "status").trim().toLowerCase();
+  const cli = [action];
+  if (args.output) cli.push(optArg("output", String(args.output)));
+  if (args.template) cli.push(optArg("template", String(args.template)));
+  if (args.commands) cli.push(optArg("commands", String(args.commands)));
+  if (args.width !== undefined) {
+    const w = toIntArg(args.width);
+    if (w !== null) cli.push(optArg("width", w));
+  }
+  if (args.height !== undefined) {
+    const h = toIntArg(args.height);
+    if (h !== null) cli.push(optArg("height", h));
+  }
+  if (args.radius !== undefined) {
+    const r = toIntArg(args.radius);
+    if (r !== null) cli.push(optArg("radius", r));
+  }
+  if (args.x !== undefined) {
+    const x = toIntArg(args.x);
+    if (x !== null) cli.push(optArg("x", x));
+  }
+  if (args.y !== undefined) {
+    const y = toIntArg(args.y);
+    if (y !== null) cli.push(optArg("y", y));
+  }
+  if (args.path) cli.push(String(args.path));
+  return runJsonTool("cad_automation.py", cli, { timeoutMs: 30000 }, `cad_automation.py ${action} thất bại.`);
+}
+
+export async function uiAutomationTool(args = {}) {
+  if (!isSuperFeatureEnabled("IRIS_UI_AUTOMATION")) {
+    return {
+      status: "error",
+      error: "Quyền 'Windows UI Automation siêu tốc' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
+    };
+  }
+  const action = String(args.action || "dump").trim().toLowerCase();
+  const cli = [];
+  if (args.target) cli.push(optArg("target", String(args.target)));
+  cli.push(action);
+  if (args.query) cli.push(String(args.query));
+  if (args.text) cli.push(String(args.text));
+  return runJsonTool("ui_automation.py", cli, { timeoutMs: 15000 }, `ui_automation.py ${action} thất bại.`);
+}

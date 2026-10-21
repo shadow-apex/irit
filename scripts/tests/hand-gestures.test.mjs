@@ -87,3 +87,25 @@ test("payload xấu bị bỏ qua, không ném lỗi", async () => {
   for (const bad of [null, "format c:", { type: "grab", nx: 9, ny: 9 }, 42]) assert.equal((await h.handle(bad)).ok, false);
   assert.equal(log.length, 0);
 });
+
+test("air_mouse: di chuyển mượt mà và click/pinch", async () => {
+  const { h, log } = mkHandler({});
+  const res1 = await h.handle({ type: "air_mouse", nx: 0.5, ny: 0.5 });
+  assert.equal(res1.ok, true);
+  assert.equal(res1.air_mouse, true);
+  assert.deepEqual(log[0], ["move", 900, 450]);
+
+  const res2 = await h.handle({ type: "air_mouse", nx: 0.5, ny: 0.5, action: "click" });
+  assert.equal(res2.ok, true);
+  assert.deepEqual(log.slice(-2), [["down"], ["up"]]);
+});
+
+test("two_hand: phóng to thu nhỏ và xoay 3D", async () => {
+  const { h, log } = mkHandler({ IRIS_HAND_SYSTEM_GESTURES: "1" });
+  const resZoom = await h.handle({ type: "two_hand", gesture: "zoom", delta: 1 });
+  assert.equal(resZoom.ok, true);
+  assert.deepEqual(log.filter((e) => e[0] === "press")[0], ["press", "LeftControl", "Equal"]);
+
+  const resRotate = await h.handle({ type: "two_hand", gesture: "rotate", angle: 45 });
+  assert.equal(resRotate.ok, true);
+});

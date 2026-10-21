@@ -39,6 +39,9 @@ type Draft = {
   IRIS_FILESYSTEM_OPS: string;
   IRIS_WINDOW_MANAGER: string;
   IRIS_SYSTEM_OPS: string;
+  IRIS_UI_AUTOMATION: string;
+  IRIS_CAD_AUTOMATION: string;
+  IRIS_VISUAL_VERIFY: string;
   OMNIPARSER_ENABLED: string;
 };
 
@@ -132,6 +135,12 @@ const I18N = {
     windowManagerNote: "List open windows, snap layouts, focus, maximize, and pin Always-On-Top.",
     systemOps: "System, Network, Services & Winget",
     systemOpsNote: "Check ports/IP, manage services, install apps via winget, and clean temp/recycle bin.",
+    uiAutomation: "Windows UI Automation (Ultra-Fast)",
+    uiAutomationNote: "Directly query and control Windows UI elements via UIA API (near 0% CPU/RAM).",
+    cadAutomation: "AutoCAD Automation (.SCR & COM)",
+    cadAutomationNote: "Automatically generate exact .scr scripts / AutoLISP or connect directly via COM.",
+    visualVerify: "Visual Verification Loop",
+    visualVerifyNote: "Automatically capture and verify screen region changes after clicking/typing.",
     advancedTitle: "Advanced & Testing",
     advancedHint: "Demo data lets you explore Iris without real Claude work.",
     hudTopNotch: "HUD Top Notch / Sci-Fi Border",
@@ -236,6 +245,12 @@ const I18N = {
     windowManagerNote: "Liệt kê cửa sổ, chia màn hình (snap), chuyển cửa sổ, ghim nổi trên cùng.",
     systemOps: "Quản Trị Hệ Thống, Mạng, Dịch Vụ & Winget",
     systemOpsNote: "Kiểm tra IP/port, quản lý Services, cài phần mềm qua winget, dọn file tạm & thùng rác.",
+    uiAutomation: "Windows UI Automation Siêu Tốc",
+    uiAutomationNote: "Đọc và tương tác trực tiếp với các phần tử Windows qua UIA API (tức thì, gần như 0% CPU/RAM).",
+    cadAutomation: "Tự Động Hoá AutoCAD (.SCR & COM)",
+    cadAutomationNote: "Tự động sinh kịch bản .scr hoặc điều khiển AutoCAD toạ độ vector chuẩn thay vì kéo chuột pixel.",
+    visualVerify: "Nghiệm Thu Thị Giác Sau Thao Tác",
+    visualVerifyNote: "Tự động crop kiểm tra vùng màn hình sau khi click/gõ phím để đảm bảo giao diện đã thay đổi thành công.",
     advancedTitle: "Dữ Liệu Thử Nghiệm",
     advancedHint: "Dữ liệu mẫu giúp khám phá Iris mà không tốn token thật.",
     hudTopNotch: "Viền Trên Màn Hình HUD (Top Notch)",
@@ -365,6 +380,9 @@ export default function SetupPanel({
     IRIS_FILESYSTEM_OPS: config.filesystemOps !== false ? "true" : "false",
     IRIS_WINDOW_MANAGER: config.windowManager !== false ? "true" : "false",
     IRIS_SYSTEM_OPS: config.systemOps !== false ? "true" : "false",
+    IRIS_UI_AUTOMATION: config.uiAutomation ? "true" : "false",
+    IRIS_CAD_AUTOMATION: config.cadAutomation ? "true" : "false",
+    IRIS_VISUAL_VERIFY: config.visualVerify ? "true" : "false",
     OMNIPARSER_ENABLED: config.omniParserEnabled !== false ? "true" : "false",
   });
   const [step, setStep] = useState(0);
@@ -1091,6 +1109,47 @@ export default function SetupPanel({
             onChange={(value) => set("IRIS_SYSTEM_OPS", value)}
           />
           <small className="setup-note">{t.systemOpsNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.uiAutomation}</span>
+          <ThemedSelect
+            ariaLabel={t.uiAutomation}
+            value={draft.IRIS_UI_AUTOMATION}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_UI_AUTOMATION", value)}
+          />
+          <small className="setup-note">{t.uiAutomationNote}</small>
+        </label>
+      </div>
+      <div className="setup-grid-2" style={{ marginTop: 4 }}>
+        <label className="setup-field compact">
+          <span>{t.cadAutomation}</span>
+          <ThemedSelect
+            ariaLabel={t.cadAutomation}
+            value={draft.IRIS_CAD_AUTOMATION}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_CAD_AUTOMATION", value)}
+          />
+          <small className="setup-note">{t.cadAutomationNote}</small>
+        </label>
+        <label className="setup-field compact">
+          <span>{t.visualVerify}</span>
+          <ThemedSelect
+            ariaLabel={t.visualVerify}
+            value={draft.IRIS_VISUAL_VERIFY}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_VISUAL_VERIFY", value)}
+          />
+          <small className="setup-note">{t.visualVerifyNote}</small>
         </label>
       </div>
     </Section>

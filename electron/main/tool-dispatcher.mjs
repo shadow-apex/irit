@@ -101,6 +101,8 @@ import {
   filesystemOpsTool,
   windowManagerTool,
   systemOpsTool,
+  cadAutomationTool,
+  uiAutomationTool,
   searchEverythingTool,
   readNotificationsTool,
 } from "./local-tools.mjs";
@@ -315,6 +317,10 @@ export async function executeClaudeTool(name, args = {}) {
       return windowManagerTool(args);
     case "system_ops":
       return systemOpsTool(args);
+    case "cad_automation":
+      return cadAutomationTool(args);
+    case "ui_automation":
+      return uiAutomationTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

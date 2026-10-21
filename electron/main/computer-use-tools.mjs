@@ -27,6 +27,7 @@ import { toggleScreenVision, toggleCameraStreamVision, grabPrimaryScreenJpeg, vi
 import { toggleMeetingRecording } from "./meeting-recording.mjs";
 import { toggleCopilotMode, toggleLiveTranscriber } from "./teleprompter.mjs";
 import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+import { envFlag } from "./env-config.mjs";
 
 // Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
 // generates audio and its transcript still lands in Comms), but playback is
@@ -408,11 +409,38 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     await clickMouseNative(screenX, screenY, "left");
   }
 
+  let verification = null;
+  const isVerifyEnabled = envFlag("IRIS_VISUAL_VERIFY", false);
+  if (isVerifyEnabled) {
+    try {
+      await sleep(250);
+      const { grabScreenRegionJpeg } = await import("./vision.mjs");
+      const cropW = 160;
+      const cropH = 120;
+      const cropX = Math.max(0, screenX - Math.round(cropW / 2));
+      const cropY = Math.max(0, screenY - Math.round(cropH / 2));
+      const b64 = await grabScreenRegionJpeg({ x: cropX, y: cropY, width: cropW, height: cropH });
+      verification = {
+        verified: true,
+        region: { x: cropX, y: cropY, width: cropW, height: cropH },
+        has_post_frame: Boolean(b64),
+      };
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: `[VisualVerify] Đã chụp nghiệm thu vùng (${cropX}, ${cropY}, ${cropW}x${cropH}) sau khi click.`,
+      });
+    } catch (vErr) {
+      verification = { verified: false, error: vErr.message };
+    }
+  }
+
   return {
     status: "success",
     x: screenX,
     y: screenY,
-    message: `Đã nhìn màn hình, tìm thấy "${parsed.label || task}" tại toạ độ (${screenX}, ${screenY}) và click thành công.`,
+    ...(verification ? { verification } : {}),
+    message: `Đã nhìn màn hình, tìm thấy "${parsed.label || task}" tại toạ độ (${screenX}, ${screenY}) và click thành công.` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
   };
 }
 

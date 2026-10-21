@@ -1035,6 +1035,40 @@ function buildClaudeToolsRaw() {
             required: ["action"],
           },
         },
+        {
+          name: "cad_automation",
+          description: "AutoCAD automation & .SCR script generator via tools/cad_automation.py. Generates exact vector AutoCAD scripts, checks AutoCAD status, and runs scripts via COM or SCRIPT command.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["status", "generate", "run_script"], description: "Action to perform ('status', 'generate', 'run_script')." },
+              template: { type: "string", description: "Template name ('doraemon', 'room', 'rect', 'circle', 'grid', 'custom')." },
+              output: { type: "string", description: "Output path for the .scr script (e.g. 'desktop/draw.scr')." },
+              commands: { type: "string", description: "Custom raw AutoCAD commands if template='custom'." },
+              width: { type: "number", description: "Width in mm for room/rect/grid." },
+              height: { type: "number", description: "Height in mm for room/rect/grid." },
+              radius: { type: "number", description: "Radius in mm for circle." },
+              x: { type: "number", description: "Base X coordinate." },
+              y: { type: "number", description: "Base Y coordinate." },
+              path: { type: "string", description: "Path to .scr file when action='run_script'." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "ui_automation",
+          description: "Ultra-fast Windows UI Automation via tools/ui_automation.py. Queries and controls Windows native UI controls (Buttons, Edits, Tabs...) directly via Win32/UIA in 5-20ms with near-zero CPU/RAM.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["dump", "find", "click", "set_text"], description: "Action ('dump', 'find', 'click', 'set_text')." },
+              target: { type: "string", description: "Target window title, exe, or 'active' (default)." },
+              query: { type: "string", description: "Element name, label, or type to find/click." },
+              text: { type: "string", description: "Text to input when action='set_text'." },
+            },
+            required: ["action"],
+          },
+        },
       ],
     },
   ];
