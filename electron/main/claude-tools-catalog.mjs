@@ -127,7 +127,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "minimize_app",
-          description: "Minimize an open local application on Windows to the taskbar. Invoke this when the user asks you to minimize (in Vietnamese: 'ẩn tab', 'ẩn đi', 'giấu đi', 'hạ xuống taskbar', 'dấu trừ') an app. DO NOT use this when the user says 'thu nhỏ' (which means resizing the window smaller or Picture-in-Picture mode, NOT hiding it) or 'ẩn màn hình' (which means desktop_manager boss key). It cannot act on Iris itself (use control_ui minimize_iris). Provide the executable name (e.g., 'calc.exe', 'notepad.exe').",
+          description: "Minimize an open local application on Windows to the taskbar. Invoke this ONLY when the user asks you to 'ẩn' (in Vietnamese: 'ẩn', 'ẩn app', 'ẩn tab', 'ẩn đi', 'giấu đi', 'hạ xuống taskbar', 'dấu trừ'). DO NOT use this when the user says 'thu nhỏ' (which ALWAYS means resizing the window smaller or Picture-in-Picture mode, keeping it visible on screen, NOT hiding it) or 'ẩn màn hình' (which means desktop_manager boss key). It cannot act on Iris itself (use control_ui minimize_iris). Provide the executable name or 'active' (e.g., 'calc.exe', 'notepad.exe', 'active').",
           parameters: {
             type: "object",
             properties: {

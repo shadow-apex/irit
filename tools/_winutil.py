@@ -37,8 +37,18 @@ def select_windows(windows, target, self_pid=None):
     t = (target or "").strip().lower()
     if not t:
         return []
-    t_exe = t if t.endswith(".exe") else t + ".exe"
     candidates = [w for w in windows if not is_self_window(w, self_pid)]
+    if t in ("active", "current", "focused", "top", "this", "cửa sổ này", "cua so nay", "cửa sổ hiện tại", "cua so hien tai", "tab này", "tab nay"):
+        try:
+            fg = foreground_window()
+            if fg and not is_self_window(fg, self_pid):
+                matched = [w for w in candidates if w.get("hwnd") == fg.get("hwnd")]
+                if matched:
+                    return matched
+        except Exception:
+            pass
+        return [candidates[0]] if candidates else []
+    t_exe = t if t.endswith(".exe") else t + ".exe"
     by_exe = [w for w in candidates if str(w.get("exe", "")).lower() == t_exe]
     if by_exe:
         return by_exe

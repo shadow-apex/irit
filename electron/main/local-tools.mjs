@@ -542,8 +542,8 @@ export async function viewImageTool(args = {}) {
 // -----------------------------------------------------------------------
 export async function moveWindowPreciseTool(args = {}) {
   const name = args.name || "active";
-  const x = toIntArg(args.x ?? 0) ?? 0;
-  const y = toIntArg(args.y ?? 0) ?? 0;
+  const x = toIntArg(args.x ?? 100) ?? 100;
+  const y = toIntArg(args.y ?? 100) ?? 100;
   const cli = [String(name), String(x), String(y)];
   const w = toIntArg(args.width), h = toIntArg(args.height);
   if (w !== null) cli.push(optArg("width", w));

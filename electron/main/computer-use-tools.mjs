@@ -756,7 +756,8 @@ export async function hideAppTool(args = {}) {
 }
 
 export async function minimizeAppTool(args = {}) {
-  return systemActionTool("minimize", args.target);
+  const target = (args.target && String(args.target).trim()) || "active";
+  return systemActionTool("minimize", target);
 }
 
 export async function restoreAppTool(args = {}) {
