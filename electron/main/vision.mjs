@@ -55,12 +55,9 @@ export async function analyzeImageWithVisionApi(base64Jpeg, sourceLabel = "màn 
           String(process.env.GEMINI_VISION_MODEL || "").trim(),
           cachedWorkingVisionModel,
           "gemini-2.0-flash",
-          "gemini-1.5-flash",
           "gemini-flash-latest",
           "gemini-flash-lite-latest",
           "gemini-2.5-flash",
-          "gemini-3-flash-preview",
-          "gemini-3.8-flash",
         ].filter(Boolean)
       )
     );

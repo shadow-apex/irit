@@ -237,9 +237,9 @@ def transcribe_gemini_audio(mono_float: np.ndarray, sample_rate: int = 16000) ->
                 candidate_models = [
                     os.environ.get("GEMINI_STT_MODEL", "").strip(),
                     "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                    "gemini-2.5-flash",
                     "gemini-flash-latest",
+                    "gemini-flash-lite-latest",
+                    "gemini-2.5-flash",
                 ]
                 candidate_models = [m for m in candidate_models if m]
                 resp = None

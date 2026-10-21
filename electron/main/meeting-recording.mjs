@@ -19,12 +19,9 @@ const getMeetingCandidateModels = () => Array.from(
       String(process.env.GEMINI_SUMMARY_MODEL || "").trim(),
       String(process.env.GEMINI_TRANSCRIBE_MODEL || "").trim(),
       "gemini-2.0-flash",
-      "gemini-1.5-flash",
       "gemini-flash-latest",
       "gemini-flash-lite-latest",
       "gemini-2.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-3.8-flash",
     ].filter(Boolean)
   )
 );
