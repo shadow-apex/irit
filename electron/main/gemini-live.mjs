@@ -339,13 +339,6 @@ async function handleToolCall(toolCall) {
   pendingToolCalls += calls.length || 1;
   const functionResponses = [];
   const executedShowcase = new Set();
-  const watchdogPendingToolCalls = setTimeout(() => {
-    if (pendingToolCalls > 0) {
-      console.warn("[IRIS] Watchdog: tool execution timeout, resetting pendingToolCalls");
-      pendingToolCalls = 0;
-      emitEvent({ type: "audio_state", state: "listening" });
-    }
-  }, 35000);
   try {
     for (const call of calls) {
       // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
@@ -377,7 +370,6 @@ async function handleToolCall(toolCall) {
       liveSession.sendToolResponse({ functionResponses });
     }
   } finally {
-    clearTimeout(watchdogPendingToolCalls);
     pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
   }
 }
