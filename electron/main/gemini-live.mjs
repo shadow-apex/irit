@@ -140,9 +140,9 @@ function buildLiveConfig(resumeHandle) {
         {
           text: [
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-            "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (QUY TẮC IM LẶNG & TRỢ LÝ CHUYÊN NGHIỆP):",
-            "- DO NOT INTERRUPT THIRD-PARTY CONVERSATIONS: When the user is talking with friends, colleagues, family, in a meeting, or on a phone call in the room, STAY COMPLETELY SILENT. NEVER comment, interrupt, chime in, or reply to their conversation. ONLY respond when the user speaks DIRECTLY to you (e.g. addressing you by name 'Iris', 'này Iris', or issuing a clear instruction directed to the assistant). When in doubt whether the user is talking to someone else or to you: ALWAYS DEFAULT TO SILENCE.",
-            "- RESPECT SILENCE & NEVER ASK UNSOLICITED QUESTIONS: When the user is silent, working, thinking, reading, typing, or when there is ambient background noise: REMAIN ABSOLUTELY SILENT. NEVER speak unprompted asking 'Are you there?', 'Do you need help?', 'Bạn có đó không?', 'Bạn đang nghĩ gì thế?'. You are an executive, discreet assistant: always 100% attentive and ready when called, but NEVER noisy or intrusive.",
+            "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (QUY TẮC PHẢN HỒI & TRỢ LÝ THÔNG MINH):",
+            "- CONVERSATION ETIQUETTE: When the user is on a phone call or speaking to someone else in the room (third-party speech), stay quietly attentive. BUT when the user speaks to the computer, asks questions, gives commands, or chats with you (even without explicitly saying 'Iris'), ALWAYS RESPOND promptly, warmly, and helpfully. When in doubt, respond briefly and politely.",
+            "- RESPECT SILENCE: When the room is quiet, the user is thinking/working, or there is only ambient noise, remain silent and do not speak unprompted (never say 'Are you there?', 'Bạn có đó không?'). Be attentive, discreet, and 100% ready to respond when spoken to.",
             process.env.IRIS_ENABLE_GOOGLE_SEARCH === "true"
               ? "Claude is your worker brain for multi-step coding, deep research, deals and background automation. You also have built-in Google Search — use it directly for quick facts and simple lookups that don't need Claude."
               : "Claude is your worker brain for multi-step coding, deep research, deals and background automation. For quick everyday facts, answer directly from your knowledge concisely.",
@@ -169,7 +169,7 @@ function buildLiveConfig(resumeHandle) {
             `start_new_claude_session only on an explicit request (new/fresh session, start over); confirm briefly afterward.`,
             `On SYSTEM_EVENT_SESSION_START, greet ${userDisplayName()} once briefly, then listen quietly.`,
             `On SYSTEM_EVENT_CLAUDE_COMPLETE, proactively announce it briefly: Claude's back, summarize, ask if they want the details before continuing. EXCEPTION: If the user is in a meeting / on a call, or silent mode is on, stay quiet and only send a desktop HUD message via display_hud_message.`,
-            "Answer directly only for greetings, quick chat, or status questions.",
+            "Answer directly for questions, everyday conversation, facts, translations, calculations, and status questions.",
             "Keep voice responses natural and short.",
             "IMPORTANT VIETNAMESE UI MAPPING: (1) 'Ẩn màn hình', 'về desktop' = desktop_manager{action: 'boss'}. (2) 'Thu nhỏ' / 'thu nhỏ màn hình' (Iris = control_ui{action: 'toggle_robot_pip'}; App ngoài = move_window_precise{name: 'active', width: 960, height: 600, x: 100, y: 100}. (3) 'Ẩn' Iris = control_ui{action: 'minimize_iris'}; App ngoài = minimize_app{target: 'active'}. (4) 'Phóng to' Iris = control_ui{action: 'restore_iris'}; App ngoài = window_manager{action: 'maximize'}. NEVER confuse these.",
             canvasCapability.promptFragment(),
@@ -238,6 +238,8 @@ async function connectLive({ isReconnect }) {
       callbacks: {
         onopen() {
           reconnectAttempts = 0;
+          pendingToolCalls = 0; // Luôn reset bộ đếm tool khi vừa mở/nối lại phiên
+          setAudioChunkSuppressed(false);
           liveStatus = { running: true, pid: process.pid, geminiStatus: "connected" };
           emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec", geminiStatus: "connected" } });
           emitEvent({ type: "gemini_status", status: "connected", model });
@@ -337,6 +339,13 @@ async function handleToolCall(toolCall) {
   pendingToolCalls += calls.length || 1;
   const functionResponses = [];
   const executedShowcase = new Set();
+  const watchdogPendingToolCalls = setTimeout(() => {
+    if (pendingToolCalls > 0) {
+      console.warn("[IRIS] Watchdog: tool execution timeout, resetting pendingToolCalls");
+      pendingToolCalls = 0;
+      emitEvent({ type: "audio_state", state: "listening" });
+    }
+  }, 35000);
   try {
     for (const call of calls) {
       // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
@@ -368,6 +377,7 @@ async function handleToolCall(toolCall) {
       liveSession.sendToolResponse({ functionResponses });
     }
   } finally {
+    clearTimeout(watchdogPendingToolCalls);
     pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
   }
 }
@@ -415,11 +425,7 @@ function handleLiveMessage(message) {
     if (!inlineData?.data) continue;
     const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
     if (!mimeType.startsWith("audio/")) continue;
-    // Chống báo hoàn thành ảo / nói trước khi tool thực thi:
-    // Nếu trong packet có toolCall hoặc đang có tool gọi dở dang chưa trả toolResponse (pendingToolCalls > 0),
-    // mọi audio chunk được sinh ra trong lượt này là lời thoại võ đoán trước khi tool chạy xong.
-    // Bỏ qua audio này để chờ lượt kế tiếp (sau sendToolResponse) khi Gemini đã có kết quả thực tế.
-    if (message.toolCall || pendingToolCalls > 0) continue;
+    // Phát âm thanh phản hồi trực tiếp để Iris luôn tương tác tự nhiên, không bị câm lặng khi gọi tool
     emitToRenderer("live:audio", { data: inlineData.data, mimeType });
     emitEvent({ type: "audio_state", state: "speaking" });
   }
