@@ -324,6 +324,7 @@ type IrisApi = {
   sendContextSupplement: (text: string) => Promise<{ status: string; error?: string }>;
   sendPhoneCommand: (text: string) => Promise<{ status: string; error?: string }>;
   toggleHud: () => Promise<{ mode: UiMode }>;
+  getHudMode: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;
   windowControl: (action: "close" | "minimize") => void;
   closeApp?: (id: string) => Promise<{ success: boolean; error?: string }>;

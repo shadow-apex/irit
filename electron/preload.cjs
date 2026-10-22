@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("iris", {
   sendContextSupplement: (text) => ipcRenderer.invoke("context-supplement:send", text),
   sendPhoneCommand: (text) => ipcRenderer.invoke("phone-command:send", text),
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
+  getHudMode: () => ipcRenderer.invoke("hud:get-mode"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
   windowControl: (action) => ipcRenderer.send("win:control", action),
   toggleFullscreen: () => ipcRenderer.invoke("win:toggle-fullscreen"),

@@ -83,6 +83,13 @@ export function createWindow() {
   }
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(devUrl);
+  mainWindow.webContents.on("dom-ready", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("hud:mode", { mode: uiMode });
+    if (uiMode === "deck") {
+      mainWindow.setIgnoreMouseEvents(false);
+    }
+  });
   // Avoid a translucent first-paint flash on the transparent window.
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.on("closed", () => {

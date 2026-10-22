@@ -364,9 +364,13 @@ app.whenReady().then(() => {
     updateTrayMenu();
     return { mode: uiMode };
   });
+  ipcMain.handle("hud:get-mode", () => ({ mode: uiMode }));
   ipcMain.on("hud:interactive", (_event, on) => {
-    if (mainWindow && uiMode === "hud") {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (uiMode === "hud") {
       mainWindow.setIgnoreMouseEvents(!on, { forward: true });
+    } else {
+      mainWindow.setIgnoreMouseEvents(false);
     }
   });
   // FEAT-TELEPROMPTER-INTERVIEW-01: 2 nút trên HUD Alt+T.

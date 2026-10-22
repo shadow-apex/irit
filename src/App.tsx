@@ -471,6 +471,11 @@ export default function App() {
   // the W key so mic capture stays renderer-owned.
   useEffect(() => {
     if (!hasBridge) return;
+    if (window.iris?.getHudMode) {
+      window.iris.getHudMode().then(({ mode }) => {
+        if (mode && mode !== uiMode) setUiMode(mode);
+      }).catch(() => {});
+    }
     const offMode = window.iris.onHudMode(({ mode }) => {
       if (modeTimerRef.current) window.clearTimeout(modeTimerRef.current);
       if (mode === "hud") {
@@ -504,16 +509,30 @@ export default function App() {
   // pointer-events, so it only returns elements that opted in.
   useEffect(() => {
     if (!hasBridge || uiMode !== "hud") return;
-    let interactive = false;
     let raf = 0;
-    window.iris.setHudInteractive(false);
+    const hasActiveModal = Boolean(
+      setup ||
+      meetingHistoryOpen ||
+      showHistory ||
+      taskChooser ||
+      expandedTaskId ||
+      document.querySelector(".setup-backdrop, .meeting-history-modal, .history-backdrop, .match-backdrop, .reader-backdrop")
+    );
+    let interactive = hasActiveModal;
+    window.iris.setHudInteractive(hasActiveModal);
 
     const onMove = (event: MouseEvent) => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
-        raf = 0;
+        const isModalPresent = Boolean(
+          setup ||
+          meetingHistoryOpen ||
+          showHistory ||
+          taskChooser ||
+          expandedTaskId
+        );
         const el = document.elementFromPoint(event.clientX, event.clientY);
-        const next = Boolean(
+        const next = isModalPresent || Boolean(
           el?.closest?.(
             ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot, .meeting-history-modal",
           ),
@@ -531,7 +550,7 @@ export default function App() {
       if (raf) cancelAnimationFrame(raf);
       window.iris.setHudInteractive(false);
     };
-  }, [hasBridge, uiMode]);
+  }, [hasBridge, uiMode, setup, meetingHistoryOpen, showHistory, taskChooser, expandedTaskId]);
 
   // First-run onboarding + settings affordance (design.md D3/D4): load the
   // effective config once, auto-open the wizard if no Gemini key is set yet.
