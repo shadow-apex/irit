@@ -104,6 +104,50 @@ function buildClaudeToolsRaw() {
           }
         },
         {
+          name: "execute_visual_chain",
+          description: "Execute a multi-step autonomous GUI action sequence where EACH step is visually verified with screenshots before proceeding to the next step. Use when the user requests a compound action with multiple steps (e.g. 'mở Notepad rồi gõ Hello', 'vào Settings rồi bấm Network', 'mở Chrome rồi search AI').",
+          parameters: {
+            type: "object",
+            properties: {
+              goal: {
+                type: "string",
+                description: "High-level goal or summary of the visual action sequence."
+              },
+              steps: {
+                type: "array",
+                description: "Ordered list of action steps to execute and verify one by one.",
+                items: {
+                  type: "object",
+                  properties: {
+                    action: {
+                      type: "string",
+                      description: "Action type: 'open_app', 'click', 'type', 'press_key', 'wait', or 'verify'."
+                    },
+                    target: {
+                      type: "string",
+                      description: "Target application name, URL, or UI element label to click."
+                    },
+                    text: {
+                      type: "string",
+                      description: "Text to type if action is 'type'."
+                    },
+                    key: {
+                      type: "string",
+                      description: "Key or key combination to press if action is 'press_key' (e.g. 'enter', 'tab', 'ctrl+s')."
+                    },
+                    duration_ms: {
+                      type: "integer",
+                      description: "Duration in milliseconds to wait if action is 'wait' (e.g. 500)."
+                    }
+                  },
+                  required: ["action"]
+                }
+              }
+            },
+            required: ["steps"]
+          }
+        },
+        {
           name: "open_url_or_app",
           description: "Launch ANY installed Windows application or open a website URL. Use ONLY when the user says 'mở', 'bật', 'chạy', 'open', 'launch' (e.g. 'mở Chrome', 'bật Word', 'chạy Excel'). CRITICAL: NEVER use this tool when the user says 'click', 'bấm', 'nhấp', 'tap' on an icon/app — any click command MUST use computer_use_omniparser instead to visually locate and click it on screen.",
           parameters: {

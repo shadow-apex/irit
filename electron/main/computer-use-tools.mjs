@@ -28,6 +28,7 @@ import { toggleMeetingRecording } from "./meeting-recording.mjs";
 import { toggleCopilotMode, toggleLiveTranscriber } from "./teleprompter.mjs";
 import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 import { envFlag } from "./env-config.mjs";
+import { captureRegionSnapshot, verifyActionWithDiff, smartSettle } from "./visual-verifier.mjs";
 
 // Silent/whisper mode: Iris keeps listening, keeps "speaking" (Gemini still
 // generates audio and its transcript still lands in Comms), but playback is
@@ -145,6 +146,32 @@ export async function startOmniParserTask(args) {
     return { status: "error", message: "Missing or invalid 'task' description for computer_use_omniparser." };
   }
   emitEvent({ type: "log", level: "info", message: `Starting OmniParser Computer Use Task: ${task}${fast_mode ? " [FAST MODE]" : ""}` });
+
+  // Hybrid UIA fast-path: nếu IRIS_UI_AUTOMATION bật, thử tìm và click trực tiếp bằng Win32 UIA (0.01s)
+  if (envFlag("IRIS_UI_AUTOMATION", false)) {
+    try {
+      const { uiAutomationTool } = await import("./local-tools.mjs");
+      const uiaRes = await uiAutomationTool({ action: "click", query: task.trim() });
+      if (uiaRes && uiaRes.success) {
+        emitEvent({
+          type: "log",
+          level: "info",
+          message: `[HybridUIA] ✔ Đã click "${task}" thành công qua Windows UIA native (${uiaRes.time_ms || 10}ms).`,
+        });
+        const verification = await verifyActionWithDiff({
+          label: task,
+        });
+        return {
+          status: "success",
+          method: "uia_native",
+          ...(verification ? { verification } : {}),
+          message: `[UIA Siêu Tốc] Đã tìm thấy và click "${task}" qua Windows UI Automation native.` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
+        };
+      }
+    } catch (uiaErr) {
+      // Fallback sang OmniParser thị giác
+    }
+  }
 
   // NOTE: `desktopCapturer` comes from the ESM `electron` default import at the
   // top of this file — do NOT use require() here.
@@ -264,8 +291,16 @@ export async function startOmniParserTask(args) {
         throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
       }
 
+      const preSnapshot = await captureRegionSnapshot({ x: clickResult.x, y: clickResult.y });
       emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
-      const verification = await verifyClickByCrop(clickResult.x, clickResult.y);
+      const verification = await verifyActionWithDiff({
+        beforeSnapshot: preSnapshot,
+        cropRectOrPoint: { x: clickResult.x, y: clickResult.y },
+        label: task,
+        retryFn: async () => {
+          await clickMouseNative(clickResult.x, clickResult.y, "left");
+        },
+      });
       return {
         status: "success",
         x: clickResult.x,
@@ -290,30 +325,12 @@ export async function startOmniParserTask(args) {
   }
 }
 
-async function verifyClickByCrop(screenX, screenY) {
-  const isVerifyEnabled = envFlag("IRIS_VISUAL_VERIFY", true);
-  if (!isVerifyEnabled || screenX == null || screenY == null) return null;
-  try {
-    await sleep(250);
-    const { grabScreenRegionJpeg } = await import("./vision.mjs");
-    const cropW = 160;
-    const cropH = 120;
-    const cropX = Math.max(0, screenX - Math.round(cropW / 2));
-    const cropY = Math.max(0, screenY - Math.round(cropH / 2));
-    const b64 = await grabScreenRegionJpeg({ x: cropX, y: cropY, width: cropW, height: cropH });
-    emitEvent({
-      type: "log",
-      level: "info",
-      message: `[VisualVerify] Đã chụp nghiệm thu vùng (${cropX}, ${cropY}, ${cropW}x${cropH}) sau khi click.`,
-    });
-    return {
-      verified: true,
-      region: { x: cropX, y: cropY, width: cropW, height: cropH },
-      has_post_frame: Boolean(b64),
-    };
-  } catch (vErr) {
-    return { verified: false, error: vErr.message };
-  }
+async function verifyClickByCrop(screenX, screenY, beforeSnapshot = null, label = "click") {
+  return verifyActionWithDiff({
+    beforeSnapshot,
+    cropRectOrPoint: { x: screenX, y: screenY },
+    label,
+  });
 }
 
 async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = false) {
@@ -430,6 +447,7 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     message: `[GeminiVisionClick] Đã tìm thấy "${parsed.label || task}" tại (${screenX}, ${screenY}) — đang click...`,
   });
 
+  const preSnapshot = await captureRegionSnapshot({ x: screenX, y: screenY });
   const clickRes = await mouseControlTool({
     action: "click",
     x: screenX,
@@ -442,7 +460,14 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     await clickMouseNative(screenX, screenY, "left");
   }
 
-  const verification = await verifyClickByCrop(screenX, screenY);
+  const verification = await verifyActionWithDiff({
+    beforeSnapshot: preSnapshot,
+    cropRectOrPoint: { x: screenX, y: screenY },
+    label: task,
+    retryFn: async () => {
+      await clickMouseNative(screenX, screenY, "left");
+    },
+  });
 
   return {
     status: "success",
@@ -975,4 +1000,118 @@ export function setSilentModeTool({ enabled } = {}) {
 // file; now routed through a setter since irisUiContext lives here).
 export function setUiContext(context) {
   irisUiContext = context;
+}
+
+
+export async function executeVisualChainTool(args = {}) {
+  const steps = Array.isArray(args?.steps) ? args.steps : [];
+  const goal = String(args?.goal || "Chuỗi tác vụ tự hành").trim();
+
+  if (steps.length === 0) {
+    return { status: "error", error: "Thiếu danh sách bước (steps) trong chuỗi hành động." };
+  }
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `[VisualChain] Bắt đầu chuỗi ${steps.length} bước: "${goal}"`,
+  });
+  emitToRenderer("hud:message", {
+    title: "Trợ Lý Tự Hành",
+    content: `Bắt đầu: ${goal} (${steps.length} bước)`,
+  });
+
+  const executedSteps = [];
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const action = String(step.action || "").trim().toLowerCase();
+    const stepLabel = `Bước ${i + 1}/${steps.length} [${action}]`;
+
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `[VisualChain] ${stepLabel}: ${step.target || step.text || step.key || ""}`,
+    });
+
+    let stepResult = { step: i + 1, action, success: false };
+
+    try {
+      if (action === "open_app" || action === "open_url") {
+        const target = step.target || step.text;
+        const isUrl = action === "open_url" || /^https?:\/\//i.test(target);
+        const res = await openUrlOrApp({ target, is_url: isUrl });
+        await smartSettle({ minWaitMs: 350 });
+        stepResult.success = res?.status !== "error";
+        stepResult.details = res;
+      } else if (action === "click") {
+        const target = step.target || step.text;
+        const res = await startOmniParserTask({ task: target });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "type") {
+        const text = step.text || "";
+        const res = await startComputerUseType({ text });
+        await smartSettle({ minWaitMs: 150 });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "press_key") {
+        const key = step.key || step.text || "";
+        const res = await startComputerUseType({ key });
+        await smartSettle({ minWaitMs: 150 });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "wait") {
+        const dur = Math.min(10000, Math.max(100, Number(step.duration_ms || 500)));
+        await sleep(dur);
+        stepResult.success = true;
+      } else if (action === "verify") {
+        const { grabPrimaryScreenJpeg } = await import("./vision.mjs");
+        const { buffer } = await grabPrimaryScreenJpeg(75);
+        stepResult.success = Boolean(buffer && buffer.length > 0);
+        stepResult.has_frame = stepResult.success;
+      } else {
+        stepResult.error = `Hành động không xác định: ${action}`;
+        stepResult.success = false;
+      }
+    } catch (err) {
+      stepResult.error = err.message;
+      stepResult.success = false;
+    }
+
+    executedSteps.push(stepResult);
+
+    if (!stepResult.success) {
+      emitEvent({
+        type: "log",
+        level: "warn",
+        message: `[VisualChain] ${stepLabel} không thành công: ${stepResult.error || "Lỗi bước"}`,
+      });
+      return {
+        status: "partial_failure",
+        goal,
+        failed_step: i + 1,
+        executed_steps: executedSteps,
+        message: `Dừng chuỗi tại bước ${i + 1} (${action}): ${stepResult.error || "Thao tác chưa hoàn thành"}. Hãy nhìn lại màn hình hoặc thử bước khác.`,
+      };
+    }
+  }
+
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `[VisualChain] ✔ Hoàn tất toàn bộ chuỗi: "${goal}"`,
+  });
+  emitToRenderer("hud:message", {
+    title: "Trợ Lý Tự Hành",
+    content: `✔ Đã hoàn thành: ${goal}`,
+  });
+
+  return {
+    status: "success",
+    goal,
+    total_steps: steps.length,
+    executed_steps: executedSteps,
+    message: `Đã thực hiện và nghiệm thu thành công toàn bộ ${steps.length} bước cho: "${goal}".`,
+  };
 }

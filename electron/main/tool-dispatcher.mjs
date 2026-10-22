@@ -46,6 +46,7 @@ import {
   stopActionTool,
   startComputerUseTaskLaned,
   startOmniParserTask,
+  executeVisualChainTool,
   setSilentModeTool,
   browserOpenTool,
   browserClickTool,
@@ -165,6 +166,8 @@ export async function executeClaudeTool(name, args = {}) {
       return startOmniParserTask(args);
     case "computer_use_type":
       return startComputerUseType(args);
+    case "execute_visual_chain":
+      return executeVisualChainTool(args);
     case "get_iris_status":
       return getIrisStatusTool();
     case "get_action_status":
