@@ -18,7 +18,6 @@ import { grabPrimaryScreenJpeg, getVisionSnapMode } from "./vision.mjs";
 import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 import { getMeetingState } from "./meeting-recording.mjs";
 import { envFlag } from "./env-config.mjs";
-import { envFlag } from "./env-config.mjs";
 
 const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
   new Set(
@@ -750,6 +749,7 @@ export async function askTeleprompter(question) {
     }
 
     let screenBase64 = imageBase64 || null;
+    let teleOmniElements = "";
     try {
       // Chỉ chụp màn hình khi có yêu cầu Vision (khoanh vùng hoặc toàn màn hình).
       // Khi ấn Enter hỏi thông thường => KHÔNG chụp màn hình, trả lời trực tiếp bằng text.
@@ -764,6 +764,9 @@ export async function askTeleprompter(question) {
                 const omniRes = await annotateWithOmniParser(screenBase64, grabbed.geometry?.screen_w || 1920, grabbed.geometry?.screen_h || 1080);
                 if (omniRes?.annotated && omniRes?.base64) {
                   screenBase64 = omniRes.base64;
+                  if (omniRes.elementsText) {
+                    teleOmniElements = omniRes.elementsText;
+                  }
                 }
               } catch (oErr) {
                 console.warn("[askTeleprompter] Omni auto-annotate error:", oErr.message);
@@ -790,6 +793,7 @@ export async function askTeleprompter(question) {
       const prompt =
         `${systemPrompt}\n\n` +
         (screenBase64 ? (cropRect ? "Lưu ý: Đã đính kèm ảnh chụp VÙNG CHỌN màn hình người dùng vừa khoanh để bạn quan sát tập trung.\n\n" : "Lưu ý: Đã đính kèm ảnh chụp màn hình hiện tại để bạn quan sát ngữ cảnh ứng dụng/tài liệu đang mở.\n\n") : "") +
+        (teleOmniElements ? `${teleOmniElements}\n\n` : "") +
         `Câu hỏi của người dùng: ${cleanQ}`;
 
       const contents = [];

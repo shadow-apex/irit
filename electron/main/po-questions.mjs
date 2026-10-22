@@ -119,14 +119,32 @@ export async function sendContextSupplement(text) {
   let isSnap = false; // Alt+S đang BẬT
   let frameSent = false; // khung hình MỚI đã thực sự tới Gemini Live
   let screenSummary = null;
+  let omniElementsText = "";
   try {
     const { getVisionSnapMode, grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
     if (getVisionSnapMode()) {
       isSnap = true;
       const { sendVideoFrame } = await import("./gemini-live.mjs");
-      const { buffer } = await grabPrimaryScreenJpeg(75);
+      const { buffer, geometry } = await grabPrimaryScreenJpeg(75);
       if (buffer && buffer.length > 0) {
-        const b64 = buffer.toString("base64");
+        let b64 = buffer.toString("base64");
+        const { envFlag } = await import("./env-config.mjs");
+        if (envFlag("IRIS_OMNI_AUTO_ANNOTATE", false)) {
+          try {
+            const { annotateWithOmniParser } = await import("../computer-session.mjs");
+            const w = geometry?.screen_w || 1920;
+            const h = geometry?.screen_h || 1080;
+            const omniRes = await annotateWithOmniParser(b64, w, h);
+            if (omniRes?.annotated && omniRes?.base64) {
+              b64 = omniRes.base64;
+              if (omniRes.elementsText) {
+                omniElementsText = omniRes.elementsText;
+              }
+            }
+          } catch (oErr) {
+            console.warn("[po-questions] Omni auto-annotate error:", oErr.message);
+          }
+        }
         frameSent = sendVideoFrame(b64, "image/jpeg") === true;
         screenSummary = await analyzeImageWithVisionApi(b64, "màn hình máy tính").catch(() => null);
       }
@@ -154,6 +172,7 @@ export async function sendContextSupplement(text) {
       "SYSTEM_EVENT_USER_MESSAGE_WITH_SCREENSHOT",
       `user_message: ${clean}`,
       screenSummary ? `mô_tả_màn_hình_vừa_chụp: ${screenSummary}` : "",
+      omniElementsText ? `bảng_toạ_độ_nút_bấm_omniparser:\n${omniElementsText}` : "",
       "instructions_to_iris:",
       frameSent
         ? "- Chế độ Vision (Alt+S) đang BẬT: Khung hình màn hình máy tính MỚI NHẤT VỪA ĐƯỢC CHỤP và gửi trực tiếp qua luồng video."

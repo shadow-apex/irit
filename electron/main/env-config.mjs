@@ -92,7 +92,7 @@ export const ALLOWED_CONFIG_KEYS = new Set([
 // Repo .env in dev, ~/.iris/.env in a packaged build — the same location
 // loadEnvFile() already reads from, so a save takes effect without restart.
 export function userConfigPath() {
-  return app.isPackaged ? path.join(os.homedir(), ".iris", ".env") : path.join(repoRoot, ".env");
+  return app?.isPackaged ? path.join(os.homedir(), ".iris", ".env") : path.join(repoRoot, ".env");
 }
 
 export function ensureIncludes(list, value) {
