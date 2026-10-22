@@ -43,6 +43,7 @@ type Draft = {
   IRIS_CAD_AUTOMATION: string;
   IRIS_VISUAL_VERIFY: string;
   OMNIPARSER_ENABLED: string;
+  IRIS_OMNI_AUTO_ANNOTATE: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
@@ -81,6 +82,8 @@ const I18N = {
     omniDesc: "Local screen UI parser for precise icon and text clicking. When stopped, Iris falls back to Gemini Vision automatically.",
     omniEndpoint: "Local Endpoint",
     omniMode: "Mode",
+    omniAutoAnnotate: "Auto-Annotate Screenshots",
+    omniAutoAnnotateNote: "Pre-labels coordinates on images sent to AI (screen stays clean).",
     claudeTitle: "Claude Brain",
     claudeHint: "Worker brain — PO/DEV pipeline runs on Claude Code CLI.",
     claudeBrain: "Claude Brain",
@@ -191,6 +194,8 @@ const I18N = {
     omniDesc: "Bộ nhận diện giao diện màn hình cục bộ để click chính xác icon và văn bản. Khi tắt, Iris tự chuyển sang Gemini Vision.",
     omniEndpoint: "Liên kết cục bộ",
     omniMode: "Chế độ",
+    omniAutoAnnotate: "Tự gắn toạ độ vào ảnh chụp",
+    omniAutoAnnotateNote: "Tự động đánh dấu toạ độ ngầm lên ảnh gửi AI (màn hình thật không bị vẽ).",
     claudeTitle: "Bộ Não Claude",
     claudeHint: "Não xử lý tác vụ — luồng PO/DEV chạy qua Claude Code CLI.",
     claudeBrain: "Chế Độ Claude Brain",
@@ -384,6 +389,7 @@ export default function SetupPanel({
     IRIS_CAD_AUTOMATION: config.cadAutomation ? "true" : "false",
     IRIS_VISUAL_VERIFY: config.visualVerify ? "true" : "false",
     OMNIPARSER_ENABLED: config.omniParserEnabled !== false ? "true" : "false",
+    IRIS_OMNI_AUTO_ANNOTATE: config.omniAutoAnnotate ? "true" : "false",
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
@@ -873,6 +879,21 @@ export default function SetupPanel({
         </button>
       }
     >
+      <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+        <label className="setup-field compact" style={{ margin: 0 }}>
+          <span>{t.omniAutoAnnotate}</span>
+          <ThemedSelect
+            ariaLabel={t.omniAutoAnnotate}
+            value={draft.IRIS_OMNI_AUTO_ANNOTATE}
+            options={[
+              { value: "false", label: t.off },
+              { value: "true", label: t.on },
+            ]}
+            onChange={(value) => set("IRIS_OMNI_AUTO_ANNOTATE", value)}
+          />
+          <small className="setup-note">{t.omniAutoAnnotateNote}</small>
+        </label>
+      </div>
       {omni.phase === "error" && omni.error ? (
         <p className="setup-error omni-error" role="alert">
           {omni.error}

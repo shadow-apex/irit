@@ -17,6 +17,8 @@ import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { grabPrimaryScreenJpeg, getVisionSnapMode } from "./vision.mjs";
 import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 import { getMeetingState } from "./meeting-recording.mjs";
+import { envFlag } from "./env-config.mjs";
+import { envFlag } from "./env-config.mjs";
 
 const TELEPROMPTER_CANDIDATE_MODELS = Array.from(
   new Set(
@@ -756,6 +758,17 @@ export async function askTeleprompter(question) {
           const grabbed = await grabPrimaryScreenJpeg(75, { cropRect });
           if (grabbed?.buffer && Buffer.isBuffer(grabbed.buffer)) {
             screenBase64 = grabbed.buffer.toString("base64");
+            if (!cropRect && envFlag("IRIS_OMNI_AUTO_ANNOTATE", false)) {
+              try {
+                const { annotateWithOmniParser } = await import("../computer-session.mjs");
+                const omniRes = await annotateWithOmniParser(screenBase64, grabbed.geometry?.screen_w || 1920, grabbed.geometry?.screen_h || 1080);
+                if (omniRes?.annotated && omniRes?.base64) {
+                  screenBase64 = omniRes.base64;
+                }
+              } catch (oErr) {
+                console.warn("[askTeleprompter] Omni auto-annotate error:", oErr.message);
+              }
+            }
           }
         } catch (grabErr) {
           console.warn("[askTeleprompter] Không thể chụp màn hình cho Gemini Vision:", grabErr.message);

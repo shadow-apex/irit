@@ -168,7 +168,23 @@ export async function takeAiScreenshotTool(args = {}) {
     const { grabPrimaryScreenJpeg, analyzeImageWithVisionApi } = await import("./vision.mjs");
     const { sendVideoFrame } = await import("./gemini-live.mjs"); // import trễ: tránh vòng tròn với dispatcher
     const { buffer, geometry } = await grabPrimaryScreenJpeg(75);
-    const b64 = buffer.toString("base64");
+    let b64 = buffer.toString("base64");
+    let elementsText = "";
+
+    const { envFlag } = await import("./env-config.mjs");
+    if (envFlag("IRIS_OMNI_AUTO_ANNOTATE", false)) {
+      try {
+        const { annotateWithOmniParser } = await import("../computer-session.mjs");
+        const omniRes = await annotateWithOmniParser(b64, geometry.screen_w, geometry.screen_h);
+        if (omniRes?.annotated && omniRes?.base64) {
+          b64 = omniRes.base64;
+          elementsText = omniRes.elementsText || "";
+        }
+      } catch (omniErr) {
+        console.warn("[takeAiScreenshot] Omni auto-annotate failed, using raw screenshot:", omniErr.message);
+      }
+    }
+
     const sent = sendVideoFrame(b64, "image/jpeg");
     let screenshot_path;
     if (save) screenshot_path = saveScreenshot(join(userDataDir(), "screenshots"), buffer);
@@ -193,6 +209,7 @@ export async function takeAiScreenshotTool(args = {}) {
       frame_geometry: geometry,
       instructions:
         "Ảnh chụp màn hình MỚI NHẤT VỪA CHỤP NGAY BÂY GIỜ đã được gửi cho bạn dưới dạng một khung hình. " +
+        (elementsText ? "\n" + elementsText + "\n" : "") +
         (activeWinDesc ? `Cửa sổ đang mở trên cùng hiện tại: "${activeWinDesc}". ` : "") +
         (vision_summary ? `Kết quả phân tích hình ảnh AI trực tiếp: "${vision_summary}". ` : "") +
         "Hãy nhìn trực tiếp vào ảnh vừa nhận kết hợp thông tin cửa sổ hiện tại và mô tả NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm những gì đang mở trên màn hình (TUYỆT ĐỐI không nói rông dài, không dùng ảnh cũ từ lượt trước, không đoán mò từ lịch sử hội thoại cũ). " +

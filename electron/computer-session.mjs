@@ -282,7 +282,7 @@ const omniTimeoutMs = () => Number(process.env.OMNIPARSER_TIMEOUT_MS || 90000);
  * tục hoạt động bình thường như trước khi có OmniParser — không bao giờ làm
  * cả tác vụ thất bại chỉ vì OmniParser offline.
  */
-async function annotateWithOmniParser(screenshotBase64, width, height, onStream) {
+export async function annotateWithOmniParser(screenshotBase64, width, height, onStream) {
   if (!omniEnabled()) {
     return { base64: screenshotBase64, elementsText: "", annotated: false };
   }

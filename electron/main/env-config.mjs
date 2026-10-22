@@ -85,6 +85,7 @@ export const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_UI_AUTOMATION",
   "IRIS_CAD_AUTOMATION",
   "IRIS_VISUAL_VERIFY",
+  "IRIS_OMNI_AUTO_ANNOTATE",
   "OMNIPARSER_ENABLED",
 ]);
 
@@ -145,6 +146,7 @@ export function getFullConfig() {
     uiAutomation: envFlag("IRIS_UI_AUTOMATION", false),
     cadAutomation: envFlag("IRIS_CAD_AUTOMATION", false),
     visualVerify: envFlag("IRIS_VISUAL_VERIFY", false),
+    omniAutoAnnotate: envFlag("IRIS_OMNI_AUTO_ANNOTATE", false),
     configured: geminiKeys.length > 0,
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),

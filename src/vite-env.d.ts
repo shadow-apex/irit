@@ -228,6 +228,7 @@ type IrisConfig = {
   uiAutomation?: boolean;
   cadAutomation?: boolean;
   visualVerify?: boolean;
+  omniAutoAnnotate?: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
