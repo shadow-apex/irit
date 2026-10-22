@@ -46,6 +46,19 @@ class TestUiAutomation(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match["automation_id"], "SubmitBtn")
 
+    def test_find_control_with_natural_language_prefixes(self):
+        controls = [
+            {"name": "Save Changes", "type": "Button", "class": "Button"},
+            {"name": "Google Chrome", "type": "Pane", "class": "BrowserRootView"},
+        ]
+        match1 = ui_automation.find_control(controls, "bấm nút Save")
+        self.assertIsNotNone(match1)
+        self.assertEqual(match1["name"], "Save Changes")
+
+        match2 = ui_automation.find_control(controls, "click vào icon Chrome")
+        self.assertIsNotNone(match2)
+        self.assertEqual(match2["name"], "Google Chrome")
+
     def test_control_types_mapping(self):
         self.assertEqual(ui_automation.UIA_CONTROL_TYPES.get(50000), "Button")
         self.assertEqual(ui_automation.UIA_CONTROL_TYPES.get(50004), "Edit")

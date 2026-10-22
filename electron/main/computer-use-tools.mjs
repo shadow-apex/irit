@@ -141,22 +141,23 @@ export async function startComputerUseTask(args) {
 let omniGrabCounter = 0;
 
 export async function startOmniParserTask(args) {
-  const { task, fast_mode = false } = args || {};
+  const { task, fast_mode = true } = args || {};
   if (!task || typeof task !== "string" || !task.trim()) {
     return { status: "error", message: "Missing or invalid 'task' description for computer_use_omniparser." };
   }
   emitEvent({ type: "log", level: "info", message: `Starting OmniParser Computer Use Task: ${task}${fast_mode ? " [FAST MODE]" : ""}` });
 
-  // Hybrid UIA fast-path: nếu IRIS_UI_AUTOMATION bật, thử tìm và click trực tiếp bằng Win32 UIA (0.01s)
-  if (envFlag("IRIS_UI_AUTOMATION", false)) {
+  // Hybrid UIA fast-path: Ưu tiên tìm và click trực tiếp bằng Win32 UIA native (20ms - 50ms, siêu tốc không tốn GPU/RAM)
+  if (envFlag("IRIS_UI_AUTOMATION", true)) {
     try {
+      const cleanQuery = task.trim().replace(/^(?:click|bấm|nhấp|tap|chọn|mở)?\s*(?:vào|icon|nút|ô|thanh|mục|chỗ)?\s*/i, "").trim() || task.trim();
       const { uiAutomationTool } = await import("./local-tools.mjs");
-      const uiaRes = await uiAutomationTool({ action: "click", query: task.trim() });
+      const uiaRes = await uiAutomationTool({ action: "click", query: cleanQuery });
       if (uiaRes && uiaRes.success) {
         emitEvent({
           type: "log",
           level: "info",
-          message: `[HybridUIA] ✔ Đã click "${task}" thành công qua Windows UIA native (${uiaRes.time_ms || 10}ms).`,
+          message: `[HybridUIA] ✔ Đã click "${cleanQuery}" siêu tốc qua Windows UIA native (${uiaRes.time_ms || 10}ms).`,
         });
         const verification = await verifyActionWithDiff({
           label: task,
@@ -165,7 +166,7 @@ export async function startOmniParserTask(args) {
           status: "success",
           method: "uia_native",
           ...(verification ? { verification } : {}),
-          message: `[UIA Siêu Tốc] Đã tìm thấy và click "${task}" qua Windows UI Automation native.` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
+          message: `[UIA Siêu Tốc] Đã click "${cleanQuery}" qua Windows UI Automation native.` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
         };
       }
     } catch (uiaErr) {
@@ -215,7 +216,7 @@ export async function startOmniParserTask(args) {
 
     // 2. Gửi screenshot lên OmniParser Local API (nếu sẵn sàng), hoặc fallback trực tiếp sang Gemini Vision + mouse_control.
     const omniUrl = process.env.OMNIPARSER_API_URL || "http://127.0.0.1:8000/parse";
-    const omniReady = await ensureOmniServer({ timeoutMs: 8000 }).catch(() => false);
+    const omniReady = await ensureOmniServer({ timeoutMs: 1500 }).catch(() => false);
 
     if (!omniReady) {
       emitEvent({
@@ -333,7 +334,7 @@ async function verifyClickByCrop(screenX, screenY, beforeSnapshot = null, label 
   });
 }
 
-async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = false) {
+async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = true) {
   if (getAllGeminiKeys({ purpose: "vision", preferVision: true }).length === 0) {
     return { status: "error", message: "Chưa cấu hình GEMINI_VISION_API_KEY hoặc GEMINI_API_KEY." };
   }

@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 import time
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
@@ -380,38 +381,61 @@ def enumerate_controls(hwnd, include_offscreen=False):
     return controls
 
 
+def clean_control_query(query: str) -> str:
+    if not query:
+        return ""
+    q = query.strip()
+    words = ['click', 'bấm', 'nhấp', 'chọn', 'tap', 'mở', 'vào', 'icon', 'nút', 'ô', 'thanh', 'mục', 'chỗ']
+    pattern = re.compile(r'^(?:' + '|'.join(words) + r')\b\s*', re.IGNORECASE)
+    while True:
+        new_q = pattern.sub('', q).strip()
+        if new_q == q or not new_q:
+            break
+        q = new_q
+    return q or query.strip()
+
+
 def find_control(controls, query):
-    """Tìm control khớp nhất theo query: Tên chính xác -> Chuỗi con -> Loại Type/Class -> AutomationId.
+    """Tìm control khớp nhất theo query: Tên chính xác -> Chuỗi con -> Khớp đảo ngược -> Loại Type/Class -> AutomationId.
 
     Hàm thuần — được kiểm thử độc lập bởi tools/tests/test_ui_automation.py.
     """
-    q = (query or "").strip().lower()
-    if not q:
+    raw_q = (query or "").strip().lower()
+    if not raw_q:
         return None
+    cleaned = clean_control_query(query).lower()
+    queries = [raw_q] if raw_q == cleaned else [raw_q, cleaned]
 
-    # 1. Khớp chính xác tên (case-insensitive)
-    for c in controls:
-        if c.get("name", "").strip().lower() == q:
-            return c
+    for q in queries:
+        # 1. Khớp chính xác tên (case-insensitive)
+        for c in controls:
+            if c.get("name", "").strip().lower() == q:
+                return c
 
-    # 2. Khớp chuỗi con trong tên
-    for c in controls:
-        name_lower = c.get("name", "").strip().lower()
-        if name_lower and q in name_lower:
-            return c
+        # 2. Khớp chuỗi con trong tên
+        for c in controls:
+            name_lower = c.get("name", "").strip().lower()
+            if name_lower and q in name_lower:
+                return c
 
-    # 3. Khớp Type/Class
-    for c in controls:
-        c_type = str(c.get("type", "")).strip().lower()
-        c_cls = str(c.get("class", "")).strip().lower()
-        if q == c_type or (c_cls and q == c_cls):
-            return c
+        # 2.5 Khớp đảo ngược (tên control nằm trong query, vd: name="chrome" trong query="icon chrome")
+        for c in controls:
+            name_lower = c.get("name", "").strip().lower()
+            if name_lower and len(name_lower) >= 3 and name_lower in q:
+                return c
 
-    # 4. Khớp AutomationId
-    for c in controls:
-        aid = str(c.get("automation_id", "")).strip().lower()
-        if aid and q == aid:
-            return c
+        # 3. Khớp Type/Class
+        for c in controls:
+            c_type = str(c.get("type", "")).strip().lower()
+            c_cls = str(c.get("class", "")).strip().lower()
+            if q == c_type or (c_cls and q == c_cls):
+                return c
+
+        # 4. Khớp AutomationId
+        for c in controls:
+            aid = str(c.get("automation_id", "")).strip().lower()
+            if aid and q == aid:
+                return c
 
     return None
 

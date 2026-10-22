@@ -385,7 +385,7 @@ export default function SetupPanel({
     IRIS_FILESYSTEM_OPS: config.filesystemOps !== false ? "true" : "false",
     IRIS_WINDOW_MANAGER: config.windowManager !== false ? "true" : "false",
     IRIS_SYSTEM_OPS: config.systemOps !== false ? "true" : "false",
-    IRIS_UI_AUTOMATION: config.uiAutomation ? "true" : "false",
+    IRIS_UI_AUTOMATION: config.uiAutomation !== false ? "true" : "false",
     IRIS_CAD_AUTOMATION: config.cadAutomation ? "true" : "false",
     IRIS_VISUAL_VERIFY: config.visualVerify ? "true" : "false",
     OMNIPARSER_ENABLED: config.omniParserEnabled !== false ? "true" : "false",

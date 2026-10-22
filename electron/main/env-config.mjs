@@ -143,7 +143,7 @@ export function getFullConfig() {
     filesystemOps: envFlag("IRIS_FILESYSTEM_OPS", true),
     windowManager: envFlag("IRIS_WINDOW_MANAGER", true),
     systemOps: envFlag("IRIS_SYSTEM_OPS", true),
-    uiAutomation: envFlag("IRIS_UI_AUTOMATION", false),
+    uiAutomation: envFlag("IRIS_UI_AUTOMATION", true),
     cadAutomation: envFlag("IRIS_CAD_AUTOMATION", false),
     visualVerify: envFlag("IRIS_VISUAL_VERIFY", false),
     omniAutoAnnotate: envFlag("IRIS_OMNI_AUTO_ANNOTATE", false),
