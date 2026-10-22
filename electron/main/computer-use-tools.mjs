@@ -265,7 +265,14 @@ export async function startOmniParserTask(args) {
       }
 
       emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
-      return { status: "success", message: `Found the target on screen and clicked it successfully for: ${task}` };
+      const verification = await verifyClickByCrop(clickResult.x, clickResult.y);
+      return {
+        status: "success",
+        x: clickResult.x,
+        y: clickResult.y,
+        ...(verification ? { verification } : {}),
+        message: `Found the target on screen and clicked it successfully for: ${task}` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
+      };
     } catch (omniErr) {
       omniFailReason = omniErr?.message || String(omniErr);
     }
@@ -280,6 +287,32 @@ export async function startOmniParserTask(args) {
   } catch (err) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
     return { status: "error", message: `Error performing computer task: ${err.message}` };
+  }
+}
+
+async function verifyClickByCrop(screenX, screenY) {
+  const isVerifyEnabled = envFlag("IRIS_VISUAL_VERIFY", true);
+  if (!isVerifyEnabled || screenX == null || screenY == null) return null;
+  try {
+    await sleep(250);
+    const { grabScreenRegionJpeg } = await import("./vision.mjs");
+    const cropW = 160;
+    const cropH = 120;
+    const cropX = Math.max(0, screenX - Math.round(cropW / 2));
+    const cropY = Math.max(0, screenY - Math.round(cropH / 2));
+    const b64 = await grabScreenRegionJpeg({ x: cropX, y: cropY, width: cropW, height: cropH });
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `[VisualVerify] Đã chụp nghiệm thu vùng (${cropX}, ${cropY}, ${cropW}x${cropH}) sau khi click.`,
+    });
+    return {
+      verified: true,
+      region: { x: cropX, y: cropY, width: cropW, height: cropH },
+      has_post_frame: Boolean(b64),
+    };
+  } catch (vErr) {
+    return { verified: false, error: vErr.message };
   }
 }
 
@@ -409,31 +442,7 @@ async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode 
     await clickMouseNative(screenX, screenY, "left");
   }
 
-  let verification = null;
-  const isVerifyEnabled = envFlag("IRIS_VISUAL_VERIFY", false);
-  if (isVerifyEnabled) {
-    try {
-      await sleep(250);
-      const { grabScreenRegionJpeg } = await import("./vision.mjs");
-      const cropW = 160;
-      const cropH = 120;
-      const cropX = Math.max(0, screenX - Math.round(cropW / 2));
-      const cropY = Math.max(0, screenY - Math.round(cropH / 2));
-      const b64 = await grabScreenRegionJpeg({ x: cropX, y: cropY, width: cropW, height: cropH });
-      verification = {
-        verified: true,
-        region: { x: cropX, y: cropY, width: cropW, height: cropH },
-        has_post_frame: Boolean(b64),
-      };
-      emitEvent({
-        type: "log",
-        level: "info",
-        message: `[VisualVerify] Đã chụp nghiệm thu vùng (${cropX}, ${cropY}, ${cropW}x${cropH}) sau khi click.`,
-      });
-    } catch (vErr) {
-      verification = { verified: false, error: vErr.message };
-    }
-  }
+  const verification = await verifyClickByCrop(screenX, screenY);
 
   return {
     status: "success",
@@ -712,6 +721,22 @@ export async function openUrlOrApp(args) {
   const { target, is_url } = args || {};
   if (!target || typeof target !== "string") {
     return { status: "error", error: "Thiếu 'target' để mở URL hoặc ứng dụng." };
+  }
+
+  // Tự động bảo vệ chống AI đoán nhầm: nếu câu lệnh chứa từ khóa click thị giác
+  // (ví dụ: "click vào Chrome", "bấm nút Play", "click icon Zalo")
+  // -> tự động chuyển hướng sang OmniParser để chụp ảnh màn hình và click chuẩn xác bằng AI thị giác!
+  const trimmedTarget = target.trim();
+  const isClickIntent =
+    /^(?:click|bấm|nhấp|tap|chọn\s+vào)\s+/i.test(trimmedTarget) ||
+    /^(?:click|bấm|nhấp|tap)\b/i.test(trimmedTarget);
+  if (isClickIntent && !is_url) {
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `[AutoRoute] Lệnh "${trimmedTarget}" có chứa từ khóa click thị giác → tự động chuyển sang computer_use_omniparser để chụp ảnh và click chuẩn xác.`,
+    });
+    return startOmniParserTask({ task: trimmedTarget });
   }
 
   // --- URL branch ---

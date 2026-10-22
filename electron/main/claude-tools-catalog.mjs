@@ -27,7 +27,8 @@ function buildClaudeToolsRaw() {
       functionDeclarations: [
         {
           name: "start_computer_use_task",
-          description: "Take control of the user's computer screen, mouse, and keyboard to complete a GUI task autonomously using Claude's Computer Use API. Invoke this when the user asks you to open an application, click on something, or interact with the screen.",
+          description: "Take control of the screen, mouse, and keyboard for a complex, multi-step autonomous GUI workflow across applications using Claude's Computer Use API (e.g. 'open Excel, create a budget sheet, and save it as PDF'). CRITICAL: NEVER invoke this for a single click (use computer_use_omniparser) or for simply opening an application (use open_url_or_app).",
+
           parameters: {
             type: "object",
             properties: {
@@ -104,7 +105,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "open_url_or_app",
-          description: "Open ANY website in the default browser or open ANY local application installed on Windows (via Start Menu, Desktop, Registry, PATH, or Microsoft Store — e.g. 'Zalo', 'Telegram', 'Word', 'Excel', 'Visual Studio Code', 'Chrome', 'Calculator', 'Settings', 'Device Manager', 'Spotify', 'calc.exe', 'notepad.exe'). IMPORTANT: If the user asks to open a website like YouTube or Facebook, set is_url=true and provide the full valid URL (e.g. 'https://www.youtube.com'). If they ask to open a desktop/system app, set is_url=false and pass the app name or executable. CRITICAL: DO NOT use this tool if the user explicitly commanded to CLICK ('click vào app...', 'bấm vào icon...') — when the user says CLICK, ALWAYS call computer_use_omniparser instead so it visually clicks the icon/app on screen!",
+          description: "Launch ANY installed Windows application or open a website URL. Use ONLY when the user says 'mở', 'bật', 'chạy', 'open', 'launch' (e.g. 'mở Chrome', 'bật Word', 'chạy Excel'). CRITICAL: NEVER use this tool when the user says 'click', 'bấm', 'nhấp', 'tap' on an icon/app — any click command MUST use computer_use_omniparser instead to visually locate and click it on screen.",
           parameters: {
             type: "object",
             properties: {
@@ -149,7 +150,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "restore_app",
-          description: "Restore or maximize a minimized local application on Windows, bringing it back to the screen. Invoke this when the user asks you to open, restore, or maximize an app that is currently hidden or minimized. Provide the executable name (e.g., 'calc.exe', 'notepad.exe', 'Code.exe'). Not for Iris itself (use control_ui restore_iris).",
+          description: "Restore or maximize an application that is currently minimized or hidden on the taskbar. Use when the user asks to 'mở lại', 'hiện lại', 'khôi phục' a minimized app (e.g. 'mở lại Chrome'). Provide the executable name or 'active'. Not for Iris itself (use control_ui restore_iris).",
           parameters: {
             type: "object",
             properties: {
@@ -223,7 +224,7 @@ function buildClaudeToolsRaw() {
         // ---------------------------------------------------------------
         {
           name: "take_ai_screenshot",
-          description: "Instantly capture a fresh screenshot of the user's PRIMARY screen (captured inside Iris, downscaled to <=1280x720 and sent to you as an image frame) and look at it right now. REQUIRED: Whenever the user mentions the screen ('màn hình', 'nhìn màn hình', 'trên màn hình'), you MUST call this tool to capture and inspect a newly taken screenshot to answer — NEVER reuse a previously captured image or guess from memory. The screenshot is NOT saved to disk unless save=true. Unlike toggle_screen_vision, this does not start a continuous stream — it is a single instant snapshot.",
+          description: "Capture a fresh screenshot of the primary monitor to inspect visual screen contents. Invoke ONLY when the user asks to see/look at what is on screen ('nhìn màn hình', 'trên màn hình có gì', 'bạn có thấy màn hình không') AND no image frame was already attached to the current turn (e.g. in Alt+S mode). DO NOT invoke for non-visual commands like 'độ sáng màn hình' (system_control) or 'ẩn màn hình' (desktop_manager). NEVER guess from stale images.",
           parameters: { type: "object", properties: { save: { type: "boolean", description: "Also save the screenshot to disk (only when the user asks to keep it; view_image can show saved ones to the user)." } } },
         },
         {
@@ -458,7 +459,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "take_camera_snapshot",
-          description: "Take a single photo/snapshot from a specific robot camera, the Companion/Alt+C phone camera, a smart home camera, or the desktop computer screen, and save it to disk. Invoke this when the user asks via voice or chat to take a picture/photo/snapshot of a camera, robot, or computer screen (in Vietnamese: 'chụp ảnh camera robot 1', 'chụp ảnh camera alt c', 'chụp camera điện thoại', 'chụp ảnh robot thám hiểm', 'chụp camera số 1', 'chụp ảnh camera mock', 'chụp hình camera robot', 'chụp màn hình máy tính').",
+          description: "Take a single photo/snapshot from a camera (Companion phone camera via Alt+C, robot camera, or smart home camera) and save it to disk. Invoke when the user asks for a photo/snapshot of a camera or device (e.g. 'chụp ảnh camera điện thoại', 'chụp ảnh camera alt c', 'chụp camera robot 1'). For inspecting the PC monitor, use take_ai_screenshot instead.",
           parameters: {
             type: "object",
             properties: {
@@ -721,7 +722,7 @@ function buildClaudeToolsRaw() {
         {
           name: "submit_claude_task",
           description:
-            "Immediately hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail.",
+            "Hand complex multi-step engineering, deep research, coding, or background automation tasks to Claude. DO NOT invoke for single-step local actions like running one command (run_terminal_command), managing files (filesystem_ops), opening apps, or clicking buttons — use the respective local tools directly.",
           parameters: {
             type: "object",
             properties: {
@@ -842,7 +843,7 @@ function buildClaudeToolsRaw() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_smarthome_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision, open_companion_live_view, minimize_iris, restore_iris. Use toggle_* to turn features on/off when requested by the user. Window words (Vietnamese): 'thu nhỏ', 'thu nhỏ tab', 'cho nhỏ lại' = shrink Iris to Picture-in-Picture -> toggle_robot_pip. 'ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ' about Iris itself = minimize_iris (drops the Iris window to the taskbar; minimize_app cannot act on Iris). 'phóng to', 'mở rộng', 'mở lại', 'hiện lại' = restore_iris if Iris is on the taskbar, or toggle_robot_pip again if it is in Picture-in-Picture.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps, toggle_teleprompter, toggle_copilot, toggle_meeting_recorder, toggle_robot_pip, toggle_companion_pip, toggle_smarthome_pip, toggle_screen_vision, toggle_desk_vision, toggle_camera_stream_vision, open_companion_live_view, minimize_iris, restore_iris. Use toggle_* to turn features on/off when requested by the user. Window words (Vietnamese): 'thu nhỏ', 'thu nhỏ tab', 'cho nhỏ lại' about Iris = shrink Iris to Picture-in-Picture -> toggle_robot_pip (for external apps use move_window_precise). 'ẩn tab', 'ẩn đi', 'giấu đi', 'dấu trừ' about Iris itself = minimize_iris (drops the Iris window to the taskbar; minimize_app cannot act on Iris). 'phóng to', 'mở rộng', 'mở lại', 'hiện lại' = restore_iris if Iris is on the taskbar, or toggle_robot_pip again if it is in Picture-in-Picture.",
               },
               target_id: {
                 type: "string",
@@ -878,7 +879,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "iris_showcase",
-          description: "Run an interactive live capability demonstration of Iris directly on the user's screen via tools/iris_showcase.py. Opens Notepad, Iris first introduces herself briefly, then introduces each feature in one short sentence and directly executes it on the machine, in this order: (1) Brightness Down, (2) Brightness Up, (3) Volume Down, (4) Volume Up, (5) Open Browser, (6) Open Folder, (7) Close Folder and Browser, (8) Smooth Mouse Cursor Movement, (9) Maximize, (10) Minimize and (11) Move the Notepad window. Takes about a minute. Invoke this whenever the user asks Iris to showcase/demonstrate what she can do (in Vietnamese: 'giới thiệu những thứ bạn có thể làm', 'demo tính năng', 'trình diễn khả năng', 'bạn làm được những gì', 'showcase').",
+          description: "Run an interactive capability demonstration of Iris on the screen via tools/iris_showcase.py (adjusts brightness/volume, opens/closes windows, smooth mouse motion, etc.). Invoke when the user asks to showcase or demo Iris ('giới thiệu những thứ bạn có thể làm', 'demo tính năng', 'showcase'). Do not call again while already running.",
           parameters: { type: "object", properties: {} },
         },
         {

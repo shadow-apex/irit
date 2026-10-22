@@ -196,7 +196,7 @@ export async function takeAiScreenshotTool(args = {}) {
         (activeWinDesc ? `Cửa sổ đang mở trên cùng hiện tại: "${activeWinDesc}". ` : "") +
         (vision_summary ? `Kết quả phân tích hình ảnh AI trực tiếp: "${vision_summary}". ` : "") +
         "Hãy nhìn trực tiếp vào ảnh vừa nhận kết hợp thông tin cửa sổ hiện tại và mô tả NGẮN GỌN, CHÍNH XÁC trong 1-2 câu đúng trọng tâm những gì đang mở trên màn hình (TUYỆT ĐỐI không nói rông dài, không dùng ảnh cũ từ lượt trước, không đoán mò từ lịch sử hội thoại cũ). " +
-        "Nếu cần click vào một điểm trong ảnh, gọi mouse_control với space:\"frame\".",
+        "Nếu cần click hoặc bấm vào một phần tử trên màn hình, BẮT BUỘC gọi computer_use_omniparser{task: \"<tên/mô tả phần tử cần click>\"} — TUYỆT ĐỐI KHÔNG tự đoán toạ độ rồi gọi mouse_control.",
     };
   } catch (err) {
     return { status: "error", error: `Không chụp được màn hình: ${err.message}` };
