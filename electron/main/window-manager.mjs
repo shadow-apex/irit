@@ -163,7 +163,12 @@ export function exitHud() {
     mainWindow.setVisibleOnAllWorkspaces(false);
     mainWindow.setHasShadow(true);
     mainWindow.setMinimumSize(780, 520);
-    if (deckBounds) mainWindow.setBounds(deckBounds);
+    if (deckBounds) {
+      mainWindow.setBounds(deckBounds);
+    } else {
+      mainWindow.setSize(980, 640);
+      mainWindow.center();
+    }
     mainWindow.show();
     mainWindow.focus();
   }, 170);
