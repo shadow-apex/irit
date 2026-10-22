@@ -425,7 +425,11 @@ function handleLiveMessage(message) {
     if (!inlineData?.data) continue;
     const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
     if (!mimeType.startsWith("audio/")) continue;
-    // Phát âm thanh phản hồi trực tiếp để Iris luôn tương tác tự nhiên, không bị câm lặng khi gọi tool
+    // Chống báo hoàn thành ảo / nói trước khi tool thực thi:
+    // Nếu trong packet có toolCall hoặc đang có tool gọi dở dang chưa trả toolResponse (pendingToolCalls > 0),
+    // mọi audio chunk được sinh ra trong lượt này là lời thoại võ đoán trước khi tool chạy xong.
+    // Bỏ qua audio này để chờ lượt kế tiếp (sau sendToolResponse) khi Gemini đã có kết quả thực tế.
+    if (message.toolCall || pendingToolCalls > 0) continue;
     emitToRenderer("live:audio", { data: inlineData.data, mimeType });
     emitEvent({ type: "audio_state", state: "speaking" });
   }
