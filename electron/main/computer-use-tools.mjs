@@ -174,6 +174,52 @@ export async function startOmniParserTask(args) {
     }
   }
 
+  // 2. Native OCR Fast-Path: Dùng Windows Native OCR tìm chữ trên màn hình (20ms - 50ms)
+  // Nếu người dùng yêu cầu click vào một nhãn chữ/văn bản/nút có chữ mà UIA không tìm thấy
+  try {
+    const cleanQuery = task.trim().replace(/^(?:click|bấm|nhấp|tap|chọn|mở)?\s*(?:vào|icon|nút|ô|thanh|mục|chỗ|chữ)?\s*/i, "").trim() || task.trim();
+    if (cleanQuery.length >= 2) {
+      const { ocrRegionTool } = await import("./local-tools.mjs");
+      const ocrRes = await ocrRegionTool({ find: cleanQuery });
+      if (ocrRes && ocrRes.found && Array.isArray(ocrRes.center)) {
+        const [screenX, screenY] = ocrRes.center;
+        emitEvent({
+          type: "log",
+          level: "info",
+          message: `[NativeOCR] ✔ Tìm thấy chữ "${ocrRes.matched_text || cleanQuery}" tại (${screenX}, ${screenY}) qua Windows Native OCR — đang click...`,
+        });
+        const preSnapshot = await captureRegionSnapshot({ x: screenX, y: screenY });
+        const clickRes = await mouseControlTool({
+          action: "click",
+          x: screenX,
+          y: screenY,
+          button: "left",
+        });
+        if (!clickRes || clickRes.status === "error") {
+          await clickMouseNative(screenX, screenY, "left");
+        }
+        const verification = await verifyActionWithDiff({
+          beforeSnapshot: preSnapshot,
+          cropRectOrPoint: { x: screenX, y: screenY },
+          label: task,
+          retryFn: async () => {
+            await clickMouseNative(screenX, screenY, "left");
+          },
+        });
+        return {
+          status: "success",
+          method: "windows_native_ocr",
+          x: screenX,
+          y: screenY,
+          ...(verification ? { verification } : {}),
+          message: `[Windows OCR Siêu Tốc] Đã tìm thấy chữ "${ocrRes.matched_text || cleanQuery}" trên màn hình và click thành công.` + (verification?.verified ? " [Đã nghiệm thu thị giác OK]" : ""),
+        };
+      }
+    }
+  } catch (ocrErr) {
+    // Fallback sang OmniParser thị giác
+  }
+
   // NOTE: `desktopCapturer` comes from the ESM `electron` default import at the
   // top of this file — do NOT use require() here.
   const { desktopCapturer } = electron;

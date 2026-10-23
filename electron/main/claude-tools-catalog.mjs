@@ -378,7 +378,7 @@ function buildClaudeToolsRaw() {
         },
         {
           name: "ocr_region",
-          description: "Reads text out of a screen region (or the whole screen) via OCR using tools/ocr_region.py, without needing to send an image frame to you. Requires the separate Tesseract-OCR engine to be installed on the machine (not just a pip package) — report that clearly if the tool returns that error.",
+          description: "Reads text and word bounding boxes out of a screen region (or the whole screen) via Windows Native OCR (~30ms, 0 external dependencies) with automatic fallback to Tesseract. Provide 'find' to locate text and get exact center coordinates for clicking.",
           parameters: {
             type: "object",
             properties: {
@@ -387,6 +387,7 @@ function buildClaudeToolsRaw() {
               width: { type: "integer", description: "Width of the region to OCR." },
               height: { type: "integer", description: "Height of the region to OCR." },
               lang: { type: "string", description: "Tesseract language code, e.g. 'eng', 'vie' or 'vie+eng'. Omit to auto-pick (IRIS_OCR_LANG, else vie+eng when the Vietnamese pack is installed, else eng with a warning)." },
+              find: { type: "string", description: "Optional text query to locate on screen and return exact click coordinates." },
             },
           },
         },

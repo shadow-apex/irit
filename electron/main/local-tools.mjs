@@ -388,8 +388,11 @@ export async function ocrRegionTool(args = {}) {
   const vals = [args.left, args.top, args.width, args.height].map(toIntArg);
   const cli = [];
   if (vals.every((v) => v !== null)) cli.push("--region", ...vals.map(String)); // nargs=4: bốn giá trị rời
-  // lang: bỏ trống ⇒ để script tự chọn (IRIS_OCR_LANG hoặc vie+eng nếu có gói) — TL-15
+  // lang: bỏ trống ⇒ để script tự chọn (mặc định Windows Native OCR tự động nhận diện) — TL-15
   if (args.lang) cli.push(optArg("lang", args.lang));
+  const findText = args.find || args.find_text || args.query;
+  if (findText && String(findText).trim()) cli.push("--find", String(findText).trim());
+  if (args.image) cli.push("--image", String(args.image).trim());
   return runJsonTool("ocr_region.py", cli, { timeoutMs: 30000 }, "ocr_region.py thất bại.");
 }
 
