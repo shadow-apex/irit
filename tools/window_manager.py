@@ -16,6 +16,7 @@ import ctypes
 from ctypes import wintypes
 import os
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
@@ -28,6 +29,14 @@ HWND_NOTOPMOST = -2
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_SHOWWINDOW = 0x0040
+
+
+def _strip_accents(s):
+    if not s:
+        return ""
+    s = str(s).replace("đ", "d").replace("Đ", "D")
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in nfkd if not unicodedata.combining(ch)).lower()
 
 
 def get_work_area():
@@ -56,10 +65,15 @@ def resolve_target_window(target):
 
     matched = _winutil.select_windows(all_wins, t)
     if not matched:
-        # Thử khớp ngắn hơn (< 4 ký tự) nếu người dùng gọi tên ngắn
+        # Thử khớp ngắn hơn (< 4 ký tự) hoặc khớp không dấu tiếng Việt
         low = t.lower()
+        t_norm = _strip_accents(t)
         matched = [
-            w for w in all_wins if low in w.get("title", "").lower() or low in w.get("exe", "").lower()
+            w
+            for w in all_wins
+            if low in w.get("title", "").lower()
+            or low in w.get("exe", "").lower()
+            or (t_norm and (t_norm in _strip_accents(w.get("title", "")) or t_norm in _strip_accents(w.get("exe", ""))))
         ]
     if not matched:
         _common.fail(f"Không tìm thấy cửa sổ nào khớp với '{t}'.")
@@ -116,6 +130,49 @@ def maximize_window(target="active"):
     return {"action": "maximize", "window": w, "message": f"Đã phóng to tối đa cửa sổ '{w['title']}'."}
 
 
+def side_by_side_windows(target_left="active", target_right=""):
+    """Chia đôi màn hình 50/50 giữa hai cửa sổ."""
+    w_left = resolve_target_window(target_left)
+    all_wins = [
+        w
+        for w in _winutil.enum_windows(visible_only=True)
+        if not _winutil.is_self_window(w) and w["hwnd"] != w_left["hwnd"]
+    ]
+    w_right = None
+    if target_right and target_right.strip().lower() not in ("", "auto", "side-by-side", "split"):
+        matched = _winutil.select_windows(all_wins, target_right)
+        if matched:
+            w_right = matched[0]
+    if w_right is None and all_wins:
+        w_right = all_wins[0]
+
+    wx, wy, ww, wh = get_work_area()
+    half_w = ww // 2
+
+    _winutil.show_window(w_left["hwnd"], SW_RESTORE)
+    _winutil.move_resize(w_left["hwnd"], wx, wy, half_w, wh)
+
+    if w_right:
+        _winutil.show_window(w_right["hwnd"], SW_RESTORE)
+        _winutil.move_resize(w_right["hwnd"], wx + half_w, wy, ww - half_w, wh)
+        _winutil.foreground(w_right["hwnd"])
+        _winutil.foreground(w_left["hwnd"])
+        return {
+            "action": "side-by-side",
+            "left_window": w_left,
+            "right_window": w_right,
+            "message": f"Đã chia đôi màn hình: '{w_left['title']}' (trái) và '{w_right['title']}' (phải).",
+        }
+
+    _winutil.foreground(w_left["hwnd"])
+    return {
+        "action": "side-by-side",
+        "left_window": w_left,
+        "right_window": None,
+        "message": f"Đã căn '{w_left['title']}' sang nửa trái màn hình.",
+    }
+
+
 def snap_window(position, target="active"):
     w = resolve_target_window(target)
     hwnd = w["hwnd"]
@@ -123,6 +180,8 @@ def snap_window(position, target="active"):
 
     if pos in ("maximize", "fullscreen", "full"):
         return maximize_window(target)
+    if pos in ("side-by-side", "split"):
+        return side_by_side_windows(target, "")
 
     # Khôi phục khỏi trạng thái Maximized trước khi đặt toạ độ mới
     _winutil.show_window(hwnd, SW_RESTORE)
@@ -143,7 +202,7 @@ def snap_window(position, target="active"):
     }
     if pos not in coords:
         _common.fail(
-            f"Vị trí snap '{position}' không hợp lệ. Hỗ trợ: {', '.join(coords.keys())}, maximize."
+            f"Vị trí snap '{position}' không hợp lệ. Hỗ trợ: {', '.join(coords.keys())}, side-by-side, maximize."
         )
 
     x, y, width, height = coords[pos]
@@ -182,9 +241,9 @@ def set_topmost(state, target="active"):
 
 def build_parser():
     p = _common.ArgParser(description="Quản lý cửa sổ nâng cao trên Windows.")
-    p.add_argument("action", choices=["list", "focus", "maximize", "snap", "topmost"])
+    p.add_argument("action", choices=["list", "focus", "maximize", "snap", "topmost", "side-by-side"])
     p.add_argument("--target", default="active", help="Tên app/exe hoặc tiêu đề cửa sổ, hoặc 'active'.")
-    p.add_argument("--position", default="left", help="Vị trí cho action=snap (left, right, top, bottom, center, ...).")
+    p.add_argument("--position", default="left", help="Vị trí cho action=snap (left, right, top, bottom, center, side-by-side...).")
     p.add_argument("--state", default="on", help="on/off cho action=topmost.")
     return p
 
@@ -201,6 +260,8 @@ if __name__ == "__main__":
         res = maximize_window(args.target)
     elif args.action == "snap":
         res = snap_window(args.position, args.target)
+    elif args.action == "side-by-side":
+        res = side_by_side_windows(args.target, args.position)
     elif args.action == "topmost":
         res = set_topmost(args.state, args.target)
     else:

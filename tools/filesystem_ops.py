@@ -113,6 +113,86 @@ def list_dir(raw_path, limit=100):
     }
 
 
+def extract_docx_text(file_path):
+    """Trích xuất văn bản sạch từ file Word (.docx) bằng thư viện chuẩn (zipfile + xml), không cần cài python-docx."""
+    import xml.etree.ElementTree as ET
+
+    paragraphs = []
+    with zipfile.ZipFile(file_path, "r") as zf:
+        if "word/document.xml" not in zf.namelist():
+            return ""
+        xml_bytes = zf.read("word/document.xml")
+    root = ET.fromstring(xml_bytes)
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag == "p":
+            texts = [
+                sub.text
+                for sub in elem.iter()
+                if (sub.tag.split("}")[-1] if "}" in sub.tag else sub.tag) in ("t", "tab") and sub.text
+            ]
+            line = "".join(texts).strip()
+            if line:
+                paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
+def extract_xlsx_text(file_path, max_rows=200):
+    """Trích xuất dữ liệu bảng tính từ file Excel (.xlsx) bằng thư viện chuẩn (zipfile + xml), không cần cài openpyxl."""
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(file_path, "r") as zf:
+        names = set(zf.namelist())
+        shared_strings = []
+        if "xl/sharedStrings.xml" in names:
+            ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in ss_root:
+                s_tag = si.tag.split("}")[-1] if "}" in si.tag else si.tag
+                if s_tag == "si":
+                    parts = [
+                        t.text
+                        for t in si.iter()
+                        if (t.tag.split("}")[-1] if "}" in t.tag else t.tag) == "t" and t.text
+                    ]
+                    shared_strings.append("".join(parts))
+
+        sheet_files = sorted(n for n in names if n.startswith("xl/worksheets/sheet") and n.endswith(".xml"))
+        lines = []
+        for sf in sheet_files[:5]:
+            sheet_name = os.path.splitext(os.path.basename(sf))[0]
+            lines.append(f"### [{sheet_name}]")
+            sh_root = ET.fromstring(zf.read(sf))
+            row_count = 0
+            for elem in sh_root.iter():
+                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                if tag == "row":
+                    row_vals = []
+                    for c in elem:
+                        c_tag = c.tag.split("}")[-1] if "}" in c.tag else c.tag
+                        if c_tag != "c":
+                            continue
+                        c_type = c.attrib.get("t", "")
+                        val_text = ""
+                        for child in c:
+                            ch_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                            if ch_tag == "v" and child.text is not None:
+                                if c_type == "s":
+                                    idx = int(child.text)
+                                    val_text = shared_strings[idx] if 0 <= idx < len(shared_strings) else child.text
+                                else:
+                                    val_text = child.text
+                            elif ch_tag == "is":
+                                val_text = "".join(t.text for t in child.iter() if t.text)
+                        row_vals.append(str(val_text).strip())
+                    if any(row_vals):
+                        lines.append(" | ".join(row_vals))
+                        row_count += 1
+                        if row_count >= max_rows:
+                            lines.append(f"... [đã cắt bớt sau {max_rows} dòng]")
+                            break
+        return "\n".join(lines)
+
+
 def read_file(raw_path, max_bytes=100000):
     p = resolve_target_path(raw_path)
     if not os.path.exists(p):
@@ -121,8 +201,33 @@ def read_file(raw_path, max_bytes=100000):
         _common.fail(f"'{p}' là thư mục, hãy dùng action='list' để xem danh sách bên trong.")
 
     max_b = max(1024, min(int(max_bytes or 100000), 500000))
+    ext = os.path.splitext(p)[1].lower()
     try:
         size = os.path.getsize(p)
+        if ext == ".docx" and zipfile.is_zipfile(p):
+            content = extract_docx_text(p)
+            truncated = len(content) > max_b
+            return {
+                "action": "read",
+                "path": p,
+                "format": "docx",
+                "size_bytes": size,
+                "truncated": truncated,
+                "content": content[:max_b],
+                "message": f"Đã trích xuất nội dung văn bản từ file Word '{os.path.basename(p)}' ({len(content)} ký tự).",
+            }
+        if ext == ".xlsx" and zipfile.is_zipfile(p):
+            content = extract_xlsx_text(p)
+            truncated = len(content) > max_b
+            return {
+                "action": "read",
+                "path": p,
+                "format": "xlsx",
+                "size_bytes": size,
+                "truncated": truncated,
+                "content": content[:max_b],
+                "message": f"Đã trích xuất bảng tính từ file Excel '{os.path.basename(p)}' ({len(content)} ký tự).",
+            }
         with open(p, "rb") as f:
             raw = f.read(max_b)
     except (PermissionError, OSError) as e:
@@ -341,11 +446,98 @@ def unzip_item(raw_src, raw_dest):
         _common.fail(_format_fs_error(e, src))
 
 
+def grep_files(raw_path, pattern, limit=50):
+    """Tìm kiếm chuỗi văn bản bên trong file hoặc thư mục (hỗ trợ cả file văn bản lẫn .docx/.xlsx)."""
+    p = resolve_target_path(raw_path)
+    q = str(pattern or "").strip()
+    if not q:
+        _common.fail("Thiếu từ khoá '--content' (hoặc '--dest') để tìm kiếm nội dung trong file.")
+    if not os.path.exists(p):
+        _common.fail(f"Đường dẫn không tồn tại: {p}")
+
+    q_low = q.lower()
+    max_matches = max(1, min(int(limit or 50), 200))
+    matches = []
+    text_exts = {
+        ".txt", ".md", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm",
+        ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".css", ".ini", ".cfg", ".log",
+        ".bat", ".ps1", ".sh", ".sql", ".env.example", ".docx", ".xlsx",
+    }
+    skip_dirs = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", "appdata"}
+
+    def _scan_single_file(fp):
+        if len(matches) >= max_matches:
+            return
+        ext = os.path.splitext(fp)[1].lower()
+        if os.path.isdir(p) and ext not in text_exts:
+            return
+        try:
+            sz = os.path.getsize(fp)
+            if sz > 5 * 1024 * 1024:
+                return
+            if ext == ".docx" and zipfile.is_zipfile(fp):
+                text = extract_docx_text(fp)
+            elif ext == ".xlsx" and zipfile.is_zipfile(fp):
+                text = extract_xlsx_text(fp)
+            else:
+                with open(fp, "rb") as f:
+                    text = _common.decode_bytes(f.read(512 * 1024))
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if q_low in line.lower():
+                    matches.append(
+                        {
+                            "file": fp,
+                            "line": line_no,
+                            "snippet": line.strip()[:240],
+                        }
+                    )
+                    if len(matches) >= max_matches:
+                        break
+        except Exception:
+            pass
+
+    if os.path.isfile(p):
+        _scan_single_file(p)
+    else:
+        for root_dir, dirnames, filenames in os.walk(p):
+            dirnames[:] = [d for d in dirnames if d.lower() not in skip_dirs and not d.startswith(".")]
+            for fn in filenames:
+                _scan_single_file(os.path.join(root_dir, fn))
+                if len(matches) >= max_matches:
+                    break
+            if len(matches) >= max_matches:
+                break
+
+    return {
+        "action": "grep",
+        "path": p,
+        "query": q,
+        "count": len(matches),
+        "matches": matches,
+        "first_path": matches[0]["file"] if matches else None,
+        "message": f"Tìm thấy {len(matches)} dòng khớp '{q}' trong '{p}'.",
+    }
+
+
 def build_parser():
     p = _common.ArgParser(description="Quản lý File & Thư mục toàn diện.")
     p.add_argument(
         "action",
-        choices=["list", "read", "write", "append", "mkdir", "copy", "move", "rename", "delete", "info", "zip", "unzip"],
+        choices=[
+            "list",
+            "read",
+            "write",
+            "append",
+            "mkdir",
+            "copy",
+            "move",
+            "rename",
+            "delete",
+            "info",
+            "zip",
+            "unzip",
+            "grep",
+        ],
     )
     p.add_argument("path", help="Đường dẫn mục tiêu (hoặc nguồn).")
     p.add_argument("--dest", default="", help="Đường dẫn đích (cho copy, move, rename, zip, unzip).")
@@ -389,6 +581,9 @@ if __name__ == "__main__":
             res = zip_item(args.path, args.dest)
         elif act == "unzip":
             res = unzip_item(args.path, args.dest)
+        elif act == "grep":
+            query_str = (sys.stdin.read() if args.stdin else args.content) or args.dest
+            res = grep_files(args.path, query_str, limit=args.limit)
         else:
             _common.fail(f"Hành động không hỗ trợ: {act}")
         _common.emit(True, **res)

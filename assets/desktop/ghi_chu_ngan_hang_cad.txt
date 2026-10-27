@@ -1,6 +1,0 @@
-* Internet Banking:
-- VietinBank/TPBank: Đăng ký online qua app/website hoặc tại quầy.
-- MB Bank: Đăng nhập app, vào số tài khoản đang dùng, tìm ô cộng (+) thêm số tài khoản số đẹp.
-* AutoCAD:
-- Chia đoạn thẳng: Dùng lệnh 'DIVIDE' (chia đều) hoặc 'MEASURE' (chia theo độ dài).
-- Copy: Dùng lệnh 'COPY' kết hợp 'ARRAY' để copy thành nhiều đối tượng.

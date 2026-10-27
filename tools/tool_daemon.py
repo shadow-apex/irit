@@ -9,6 +9,7 @@ import io
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
@@ -33,11 +34,24 @@ def _prewarm_modules():
         "move_window",
         "ui_automation",
         "multi_monitor_info",
+        "sys_monitor",
+        "clipboard_manager",
+        "filesystem_ops",
+        "window_manager",
+        "search_everything",
+        "idle_time",
+        "color_picker",
     ):
         try:
             __import__(mod_name)
         except Exception:
             pass
+    try:
+        import psutil
+
+        psutil.cpu_percent(None)
+    except Exception:
+        pass
 
 
 def _run_direct_module(script, args):
@@ -66,6 +80,45 @@ def _run_direct_module(script, args):
             _common.emit(True, **info)
         return True
 
+    if script == "sys_monitor.py":
+        import psutil
+        import sys_monitor
+
+        try:
+            _common.emit(True, **sys_monitor.collect(psutil, fast=True))
+        except Exception as e:
+            _common.fail(f"Không đọc được thông số hệ thống: {e}")
+        return True
+
+    if script == "idle_time.py":
+        import idle_time
+
+        secs = idle_time.get_idle_seconds()
+        if secs is None:
+            _common.fail("GetLastInputInfo() thất bại.")
+        _common.emit(True, idle_seconds=secs)
+        return True
+
+    if script == "multi_monitor_info.py":
+        import multi_monitor_info
+
+        try:
+            _common.emit(True, **multi_monitor_info.get_monitors())
+        except Exception as e:
+            _common.fail(f"Không liệt kê được màn hình: {e}")
+        return True
+
+    if script == "search_everything.py":
+        import search_everything
+
+        a = search_everything.build_parser().parse_args(args)
+        try:
+            payload = search_everything.run_search(a.query, a.max)
+            _common.emit(True, **payload)
+        except Exception as e:
+            _common.fail(str(e))
+        return True
+
     if script == "mouse_control.py":
         import mouse_control
 
@@ -79,8 +132,8 @@ def _run_direct_module(script, args):
         res = ocr_region.ocr_region(
             a.region,
             a.lang,
-            find_text=a.find,
-            image_path=a.image,
+            find_text=a.find_text,
+            image_path=a.image_path,
             use_cache=not getattr(a, "no_cache", False),
         )
         _common.emit(True, **res)
@@ -109,7 +162,8 @@ def _run_direct_module(script, args):
 
 
 def execute_tool_in_memory(script, args=None, stdin_text=None):
-    """Thực thi một script trong tools/ ngay trong bộ nhớ và trả về dict {ok, code, stdout, stderr}."""
+    """Thực thi một script trong tools/ ngay trong bộ nhớ và trả về dict {ok, code, stdout, stderr, duration_ms}."""
+    t0 = time.perf_counter()
     args_list = [str(x) for x in (args or [])]
     script_name = os.path.basename(str(script or ""))
     script_path = os.path.join(_TOOLS_DIR, script_name)
@@ -120,11 +174,14 @@ def execute_tool_in_memory(script, args=None, stdin_text=None):
             "code": 1,
             "stdout": "",
             "stderr": f"Không tìm thấy script: {script_name}",
+            "duration_ms": 0.0,
         }
 
     out_buf = io.StringIO()
     err_buf = io.StringIO()
-    in_buf = io.StringIO(stdin_text if isinstance(stdin_text, str) else "")
+    raw_stdin = stdin_text if isinstance(stdin_text, str) else ""
+    in_bytes = io.BytesIO(raw_stdin.encode("utf-8", errors="replace"))
+    in_buf = io.TextIOWrapper(in_bytes, encoding="utf-8", errors="replace")
 
     old_stdout, old_stderr, old_stdin, old_argv = sys.stdout, sys.stderr, sys.stdin, sys.argv
     sys.stdout = out_buf
@@ -171,6 +228,7 @@ def execute_tool_in_memory(script, args=None, stdin_text=None):
         sys.stdin = old_stdin
         sys.argv = old_argv
 
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     stdout_str = out_buf.getvalue().strip()
     stderr_str = err_buf.getvalue().strip()
     return {
@@ -178,6 +236,7 @@ def execute_tool_in_memory(script, args=None, stdin_text=None):
         "code": code,
         "stdout": stdout_str,
         "stderr": stderr_str,
+        "duration_ms": elapsed_ms,
     }
 
 

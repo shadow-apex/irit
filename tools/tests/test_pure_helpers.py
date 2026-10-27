@@ -319,5 +319,57 @@ class IrisShowcasePureHelpers(unittest.TestCase):
         self.assertEqual(isc.slide_positions(120, 60, 30), [120, 90, 60])
 
 
+import universal_app_launcher as ual  # noqa: E402
+import zipfile  # noqa: E402
+
+
+class EnterpriseUpgradesTests(unittest.TestCase):
+    def test_vietnamese_accent_insensitive_search(self):
+        self.assertEqual(se.strip_accents("Báo cáo Đề án Q3.xlsx"), "bao cao de an q3.xlsx")
+        sc = se.score_filename_match("Báo_cáo_tài_chính_2026.xlsx", "bao cao", ["bao", "cao"])
+        self.assertGreaterEqual(sc, 75)
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "Báo_cáo_Quý_4.txt")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write("Doanh thu tăng trưởng 150%")
+            found = se.search_native_fallback("bao cao quy 4", max_results=5, roots=[d])
+            self.assertEqual(found, [target])
+
+    def test_docx_and_grep_extraction(self):
+        with tempfile.TemporaryDirectory() as d:
+            docx_path = os.path.join(d, "hop_dong.docx")
+            with zipfile.ZipFile(docx_path, "w") as zf:
+                zf.writestr(
+                    "word/document.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    "<w:body><w:p><w:r><w:t>Điều khoản bảo mật cấp Enterprise</w:t></w:r></w:p></w:body>"
+                    "</w:document>",
+                )
+            read_res = fops.read_file(docx_path)
+            self.assertEqual(read_res["format"], "docx")
+            self.assertIn("Điều khoản bảo mật cấp Enterprise", read_res["content"])
+
+            grep_res = fops.grep_files(d, "Enterprise")
+            self.assertEqual(grep_res["count"], 1)
+            self.assertEqual(grep_res["first_path"], docx_path)
+
+    def test_universal_app_launcher_accent_matching(self):
+        self.assertGreaterEqual(ual.match_score("Trình quản lý tác vụ", "trinh quan ly"), 75)
+        self.assertEqual(ual.match_score("Cốc Cốc", "coc coc"), 100)
+
+    def test_daemon_fast_sys_monitor_and_idle(self):
+        r_mon = tool_daemon.execute_tool_in_memory("sys_monitor.py")
+        self.assertTrue(r_mon["ok"])
+        data = json.loads(r_mon["stdout"])
+        self.assertTrue(data["success"])
+        self.assertIn("cpu_percent", data)
+        self.assertIn("top_processes", data)
+
+        r_idle = tool_daemon.execute_tool_in_memory("idle_time.py")
+        self.assertTrue(r_idle["ok"])
+        self.assertIn("idle_seconds", json.loads(r_idle["stdout"]))
+
+
 if __name__ == "__main__":
     unittest.main()

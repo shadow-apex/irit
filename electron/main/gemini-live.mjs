@@ -71,6 +71,13 @@ export const GreetGate = {
     // Chào một câu ngắn gọn, ấm áp sau 1.2s khi vừa kết nối phiên lúc khởi động
     this.timer = setTimeout(() => this.fire(), 1200);
   },
+  disarm() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.done = true;
+  },
   fire() {
     if (this.done) return;
     this.done = true;
@@ -252,7 +259,11 @@ function sendWelcomeGreeting() {
     `"Hi ${userDisplayName()}, welcome back. Iris is online and all channels are connected, so we're good to go. What do you have in mind?" ` +
     `CRITICAL: Speak this English greeting ONCE right now. After this greeting, stay quietly attentive and do NOT repeat it or ask unsolicited questions.`;
 
-  liveSession.sendRealtimeInput({ text: greeting });
+  try {
+    liveSession.sendRealtimeInput({ text: greeting });
+  } catch (err) {
+    console.warn("[IRIS] sendWelcomeGreeting failed:", err.message);
+  }
 }
 
 export async function startLive() {
@@ -295,7 +306,7 @@ async function connectLive({ isReconnect }) {
   try { await refreshActiveWindowContext(); } catch { /* ignore */ }
 
   try {
-    liveSession = await ai.live.connect({
+    const session = await ai.live.connect({
       model,
       config: buildLiveConfig(resumptionHandle),
       callbacks: {
@@ -347,6 +358,12 @@ async function connectLive({ isReconnect }) {
         },
       },
     });
+    if (userStopped) {
+      try { session.close(); } catch { /* ignore */ }
+      liveSession = null;
+      return;
+    }
+    liveSession = session;
   } catch (err) {
     if (isRateLimitError(err)) {
       markKeyRateLimited(apiKey);
@@ -364,6 +381,7 @@ async function connectLive({ isReconnect }) {
 }
 
 function scheduleReconnect(reason, { isRateLimit = false } = {}) {
+  if (userStopped) return;
   if (reconnectTimer) return;
   reconnectAttempts += 1;
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
@@ -475,7 +493,11 @@ async function handleToolCall(toolCall) {
       }
     }
     if (functionResponses.length && liveSession) {
-      liveSession.sendToolResponse({ functionResponses });
+      try {
+        liveSession.sendToolResponse({ functionResponses });
+      } catch (e) {
+        console.warn("[IRIS] sendToolResponse failed:", e.message);
+      }
     }
   } finally {
     pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
@@ -504,6 +526,7 @@ function handleLiveMessage(message) {
   }
 
   if (message.toolCall) {
+    GreetGate.disarm();
     handleToolCall(message.toolCall).catch((error) => {
       emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
     });
@@ -519,7 +542,10 @@ function handleLiveMessage(message) {
     return;
   }
 
-  if (content.inputTranscription?.text) userTranscriptBuffer += content.inputTranscription.text;
+  if (content.inputTranscription?.text) {
+    GreetGate.disarm();
+    userTranscriptBuffer += content.inputTranscription.text;
+  }
   if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
 
   // Nếu đầu vào hiện tại chỉ là tiếng thở dài, tiếng cười, âm thanh nhiễu hoặc từ đệm vô nghĩa ("ờ", "ừm", "hmm", "..."),
@@ -555,6 +581,7 @@ export async function stopLive() {
   pendingToolCalls = 0;
   hasGreetedStartup = false;
   setAudioChunkSuppressed(false);
+  GreetGate.disarm();
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -619,15 +646,25 @@ export function sendAudioChunk(arrayBuffer) {
   if (!liveSession || !arrayBuffer) return;
   const buffer = Buffer.from(new Uint8Array(arrayBuffer));
   if (!buffer.byteLength) return;
-  liveSession.sendRealtimeInput({
-    audio: { data: buffer.toString("base64"), mimeType: "audio/pcm;rate=16000" },
-  });
+  try {
+    liveSession.sendRealtimeInput({
+      audio: { data: buffer.toString("base64"), mimeType: "audio/pcm;rate=16000" },
+    });
+  } catch (err) {
+    console.warn("[IRIS][audio] sendRealtimeInput chunk dropped:", err.message);
+  }
 }
 
 export function sendCommand(command) {
   if (command?.type === "text" && command.text) {
     if (!liveSession) throw new Error("Gemini Live is not running");
-    liveSession.sendRealtimeInput({ text: command.text });
+    GreetGate.disarm();
+    try {
+      liveSession.sendRealtimeInput({ text: command.text });
+    } catch (err) {
+      console.error("[IRIS] sendCommand failed:", err.message);
+      throw err;
+    }
   }
   if (command?.type === "submit_claude_task" && command.task) {
     submitClaudeTask({ task: command.task, agent: command.agent }).catch((error) => {

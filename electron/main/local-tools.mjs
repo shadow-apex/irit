@@ -77,6 +77,11 @@ export const DAEMON_ELIGIBLE_TOOLS = new Set([
   "window_manager.py",
   "multi_monitor_info.py",
   "system_actions.py",
+  "sys_monitor.py",
+  "clipboard_manager.py",
+  "filesystem_ops.py",
+  "search_everything.py",
+  "file_explorer.py",
 ]);
 
 let daemonProc = null;
@@ -1229,12 +1234,16 @@ export async function filesystemOpsTool(args = {}) {
       const lim = toIntArg(args.limit);
       if (lim !== null) cli.push(optArg("limit", lim));
     }
-    const isWrite = action === "write" || action === "append";
-    if (isWrite) cli.push("--stdin");
+    const usesStdin = action === "write" || action === "append" || action === "grep";
+    if (usesStdin) cli.push("--stdin");
+    const stdinPayload =
+      action === "grep"
+        ? String(args?.content ?? args?.query ?? args?.dest ?? "")
+        : String(args?.content ?? "");
     return await runJsonTool(
       "filesystem_ops.py",
       cli,
-      { timeoutMs: 30000, stdin: isWrite ? String(args?.content ?? "") : undefined },
+      { timeoutMs: 30000, stdin: usesStdin ? stdinPayload : undefined },
       `filesystem_ops.py ${action} thất bại.`,
     );
   } catch (err) {

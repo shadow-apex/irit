@@ -24,9 +24,22 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common  # noqa: E402
+
+_APPS_CACHE = {"ts": 0.0, "apps": []}
+_APPS_CACHE_TTL_SEC = 45.0
+
+
+def _strip_accents(s):
+    if not s:
+        return ""
+    s = str(s).replace("đ", "d").replace("Đ", "D")
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in nfkd if not unicodedata.combining(ch)).lower()
 
 # Bảng ánh xạ nhanh cho tên gọi tiếng Việt / tiếng Anh phổ biến -> executable hoặc URI hoặc tên tìm kiếm
 SMART_ALIASES = {
@@ -183,8 +196,11 @@ def _scan_registry_app_paths():
     return entries
 
 
-def discover_all_apps():
-    """Trả về danh sách hợp nhất các ứng dụng trên máy."""
+def discover_all_apps(use_cache=True):
+    """Trả về danh sách hợp nhất các ứng dụng trên máy (có bộ nhớ đệm 45s trong RAM)."""
+    now = time.time()
+    if use_cache and _APPS_CACHE["apps"] and (now - _APPS_CACHE["ts"]) <= _APPS_CACHE_TTL_SEC:
+        return _APPS_CACHE["apps"]
     items = _scan_shortcut_dirs() + _scan_registry_app_paths()
     # Khử trùng lặp theo tên hiển thị ưu tiên .lnk và registry
     dedup = {}
@@ -194,13 +210,16 @@ def discover_all_apps():
             continue
         if k not in dedup:
             dedup[k] = it
-    return sorted(dedup.values(), key=lambda x: x["name"].lower())
+    out = sorted(dedup.values(), key=lambda x: x["name"].lower())
+    _APPS_CACHE["ts"] = now
+    _APPS_CACHE["apps"] = out
+    return out
 
 
 def match_score(app_name, query):
-    """Chấm điểm độ khớp giữa tên ứng dụng và câu truy vấn."""
-    a = app_name.lower().strip()
-    q = query.lower().strip()
+    """Chấm điểm độ khớp giữa tên ứng dụng và câu truy vấn (hỗ trợ cả tiếng Việt không dấu)."""
+    a = _strip_accents(app_name).strip()
+    q = _strip_accents(query).strip()
     if q.endswith(".exe"):
         q_bare = q[:-4]
     else:
