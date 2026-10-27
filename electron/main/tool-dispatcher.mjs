@@ -63,6 +63,9 @@ import {
   minimizeAppTool,
   restoreAppTool,
   writeNoteTool,
+  interpolatePipelineArgs,
+  recordToolExecution,
+  getToolMemoryState,
 } from "./computer-use-tools.mjs";
 import {
   createSmarthomeRuleTool,
@@ -108,19 +111,80 @@ import {
   readNotificationsTool,
 } from "./local-tools.mjs";
 
+const TOOL_STATUS_LABELS = {
+  computer_use_omniparser: "Đang định vị & click trên màn hình",
+  computer_use_type: "Đang nhập văn bản / phím tắt",
+  execute_visual_chain: "Đang chạy chuỗi hành động tự hành",
+  open_url_or_app: "Đang mở ứng dụng / đường dẫn",
+  universal_app_launcher: "Đang tìm & khởi chạy ứng dụng",
+  ui_automation: "Đang thao tác giao diện Windows (UIA)",
+  ocr_region: "Đang quét văn bản màn hình (Native OCR)",
+  take_ai_screenshot: "Đang chụp & phân tích màn hình",
+  mouse_control: "Đang điều khiển chuột",
+  system_control: "Đang điều chỉnh hệ thống",
+  window_manager: "Đang sắp xếp cửa sổ",
+  move_window_precise: "Đang di chuyển / đổi cỡ cửa sổ",
+  move_window_magic: "Đang di chuyển cửa sổ",
+  desktop_manager: "Đang chuyển đổi màn hình nền",
+  filesystem_ops: "Đang xử lý tệp & thư mục",
+  run_terminal_command: "Đang chạy lệnh hệ thống",
+  system_ops: "Đang kiểm tra hệ thống / mạng",
+  search_local_files: "Đang tìm kiếm tệp trên máy",
+  file_explorer: "Đang mở File Explorer",
+  close_app: "Đang đóng ứng dụng",
+  minimize_app: "Đang hạ ứng dụng xuống thanh tác vụ",
+  restore_app: "Đang khôi phục cửa sổ ứng dụng",
+  hide_app: "Đang ẩn cửa sổ ứng dụng",
+  write_note: "Đang ghi chú vào Notepad",
+  read_clipboard: "Đang đọc bộ nhớ tạm",
+  write_clipboard: "Đang sao chép vào bộ nhớ tạm",
+  get_system_stats: "Đang đo thông số CPU / RAM / Pin",
+  power_manager: "Đang thực thi lệnh nguồn máy tính",
+  media_control: "Đang điều khiển phát nhạc / video",
+  cad_automation: "Đang xử lý bản vẽ AutoCAD",
+  submit_claude_task: "Đang giao tác vụ cho Claude Code",
+  iris_showcase: "Đang chạy màn trình diễn tính năng",
+};
+
+/**
+ * Tạo nhãn trạng thái ngắn gọn, tức thì để hiển thị lên UI khi Iris thực thi công cụ.
+ */
+export function getToolStatusLabel(name, args = {}) {
+  const base = TOOL_STATUS_LABELS[name] || `Đang thực thi: ${name}`;
+  const detail =
+    args?.task ||
+    args?.target ||
+    args?.query ||
+    args?.goal ||
+    args?.action ||
+    args?.path ||
+    args?.find ||
+    "";
+  const cleanDetail = String(detail).trim().slice(0, 42);
+  return cleanDetail ? `${base} (${cleanDetail})` : base;
+}
+
 // S-11: xác nhận hai bước cho tool nguy hiểm (shutdown/kill/tắt wifi...). Hiện cảnh báo lên HUD/log.
 const confirmGate = createConfirmGate({
   onPending: ({ what }) =>
     emitEvent({ type: "log", level: "warn", message: `⚠ Đang chờ xác nhận thao tác nguy hiểm: ${what}` }),
 });
 
-export async function executeClaudeTool(name, args = {}) {
+export { getToolMemoryState };
+
+export async function executeClaudeTool(name, rawArgs = {}) {
+  let args = rawArgs && typeof rawArgs === "object" ? interpolatePipelineArgs(rawArgs) : {};
   const blocked = confirmGate.check(name, args);
   if (blocked) return blocked;
   if (args && "confirm_token" in args) {
     const { confirm_token: _t, ...rest } = args;
     args = rest;
   }
+  const result = await dispatchClaudeToolInternal(name, args);
+  return recordToolExecution(name, args, result);
+}
+
+async function dispatchClaudeToolInternal(name, args = {}) {
   switch (name) {
     case "search_local_files":
       return searchEverythingTool(args);

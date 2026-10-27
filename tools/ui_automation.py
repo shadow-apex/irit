@@ -85,11 +85,22 @@ def attach_input_desktop():
         pass
 
 
+_CACHED_UIA_PTR = None
+
+
+def _get_cached_uia():
+    global _CACHED_UIA_PTR
+    return _CACHED_UIA_PTR
+
+
 def _init_uia():
     """Khởi tạo COM và COM Object UIAutomation."""
     import ctypes
     from ctypes import wintypes
 
+    global _CACHED_UIA_PTR
+    if _CACHED_UIA_PTR is not None and _CACHED_UIA_PTR.value:
+        return _CACHED_UIA_PTR
     ole32 = ctypes.windll.ole32
     ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
 
@@ -120,6 +131,7 @@ def _init_uia():
     hr = ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(p_uia))
     if hr != 0 or not p_uia.value:
         raise RuntimeError(f"Không thể tạo IUIAutomation COM (HRESULT={hex(hr)})")
+    _CACHED_UIA_PTR = p_uia
     return p_uia
 
 
@@ -608,7 +620,7 @@ def set_control_text(ctrl, text, window=None):
         return {"action": "set_value", "success": False, "error": str(e)}
 
 
-def main():
+def main(argv=None):
     _common.ensure_utf8()
     _common.dpi_aware()
 
@@ -649,7 +661,7 @@ def main():
     p_find = sub.add_parser("find", parents=[common_p], help="Tìm kiếm control phù hợp")
     p_find.add_argument("query", help="Tên hoặc nhãn cần tìm")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     action = args.action.lower()
     t_start = time.perf_counter()

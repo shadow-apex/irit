@@ -30,6 +30,31 @@ export function toolsDir() {
   return override || path.join(unpackedRepoRoot(), "tools");
 }
 
+/** Thư mục chứa các tài nguyên phụ trợ đã gom về assets/. */
+export function assetsDir() {
+  return path.join(unpackedRepoRoot(), "assets");
+}
+
+/** Thư mục chứa các sidecar Python (live_transcriber.py, meeting_recorder.py, screen_capture.py). */
+export function sidecarDir() {
+  return path.join(assetsDir(), "sidecar");
+}
+
+/** Thư mục chứa OmniParser server (assets/reponew/toado). */
+export function omniServerDir() {
+  return path.join(assetsDir(), "reponew", "toado");
+}
+
+/** Thư mục chứa resources (personas, skills). */
+export function resourcesDir() {
+  return path.join(repoRoot, "assets", "resources");
+}
+
+/** Thư mục chứa PHONE_CAMERA. */
+export function phoneCameraDir() {
+  return path.join(repoRoot, "assets", "PHONE_CAMERA");
+}
+
 /** Lệnh Python: IRIS_PYTHON_BIN → dò python/py/python3 (resolvePythonCommand). */
 export function pythonBin() {
   return resolvePythonCommand();

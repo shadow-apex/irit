@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { unpackedRepoRoot, pythonBin } from "./paths.mjs";
 import { killTree } from "./process-utils.mjs";
@@ -30,7 +31,7 @@ export function omniToken() {
   if (envTok.length >= 16) return envTok;
   if (stableToken) return stableToken;
 
-  const tokenPath = path.join(unpackedRepoRoot(), ".omni_token");
+  const tokenPath = path.join(os.tmpdir(), ".iris_omni_token");
   try {
     if (fs.existsSync(tokenPath)) {
       const saved = fs.readFileSync(tokenPath, "utf8").trim();
@@ -52,7 +53,7 @@ export function killPortOccupant(port) {
   const targetPort = String(port).trim();
   if (process.platform === "win32") {
     try {
-      const res = spawnSync("netstat", ["-ano", "-p", "tcp"], { windowsHide: true });
+      const res = spawnSync("netstat", ["-ano", "-p", "tcp"], { windowsHide: true, timeout: 5000 });
       if (res.stdout) {
         const text = res.stdout.toString();
         for (const line of text.split(/\r?\n/)) {
@@ -100,8 +101,17 @@ async function healthy(origin) {
   }
 }
 
+function cleanupServerPipes(proc) {
+  if (!proc) return;
+  for (const s of [proc.stdin, proc.stdout, proc.stderr]) {
+    if (!s) continue;
+    try { s.removeAllListeners(); } catch {}
+    try { if (!s.destroyed) s.destroy(); } catch {}
+  }
+}
+
 function spawnServer(url) {
-  const dir = path.join(unpackedRepoRoot(), "reponew", "toado");
+  const dir = path.join(unpackedRepoRoot(), "assets", "reponew", "toado");
   const port = url.port || "8000";
   logger("info", `đang khởi động OmniParser (127.0.0.1:${port})…`);
   const proc = spawn(pythonBin(), [path.join(dir, "api_server.py")], {
@@ -112,12 +122,15 @@ function spawnServer(url) {
       IRIS_OMNI_HOST: "127.0.0.1",
       IRIS_OMNI_PORT: String(port),
       PYTHONUNBUFFERED: "1",
+      PYTHONUTF8: "1",
       PYTHONIOENCODING: "utf-8",
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32", // để killTree dừng được cả nhóm trên POSIX
   });
+  proc.stdout.setEncoding("utf8");
+  proc.stderr.setEncoding("utf8");
   const tail = (d) => {
     const line = String(d).trim().split("\n").pop();
     if (line) logger("info", line.slice(0, 200));
@@ -126,14 +139,29 @@ function spawnServer(url) {
   proc.stderr.on("data", tail);
   proc.on("error", (e) => {
     logger("error", `không chạy được api_server.py: ${e.message}`);
+    cleanupServerPipes(proc);
     if (child === proc) child = null;
   });
   proc.on("exit", (code) => {
-    if (code) logger("error", `OmniParser thoát (code ${code}). Kiểm tra thư viện Python trong reponew/toado/requirements.txt.`);
+    if (code) logger("error", `OmniParser thoát (code ${code}). Kiểm tra thư viện Python trong assets/reponew/toado/requirements.txt.`);
+    cleanupServerPipes(proc);
     if (child === proc) child = null;
   });
+  try { proc.unref(); } catch {}
+  try { proc.stdout?.unref?.(); } catch {}
+  try { proc.stderr?.unref?.(); } catch {}
   return proc;
 }
+
+// Đảm bảo không bao giờ để lại tiến trình zombie api_server.py khi tiến trình cha thoát
+process.once("exit", () => {
+  if (child) {
+    const c = child;
+    child = null;
+    try { killTree(c); } catch {}
+    cleanupServerPipes(c);
+  }
+});
 
 /**
  * Đảm bảo OmniParser đang chạy & trả lời /health.
@@ -161,6 +189,12 @@ export function ensureOmniServer({ timeoutMs = 90_000 } = {}) {
         await new Promise((r) => setTimeout(r, 1500));
       }
       logger("error", `OmniParser chưa sẵn sàng sau ${Math.round(timeoutMs / 1000)}s`);
+      if (child) {
+        const c = child;
+        child = null;
+        try { killTree(c); } catch {}
+        cleanupServerPipes(c);
+      }
       return false;
     } finally {
       startPromise = null;
@@ -174,6 +208,7 @@ export function stopOmniServer() {
     const c = child;
     child = null;
     killTree(c);
+    cleanupServerPipes(c);
   }
   const url = baseUrl();
   killPortOccupant(url.port || "8000");

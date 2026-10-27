@@ -5,12 +5,13 @@ export default defineConfig({
   // Relative base so the built index.html resolves assets when Electron loads it
   // from the filesystem (file://) in production / packaged builds.
   base: "./",
+  publicDir: "assets/public",
   plugins: [react()],
   server: {
     host: "127.0.0.1",
     port: 5173,
     watch: {
-      ignored: ["**/.env*", "**/tools/**", "**/reponew/**", "**/build/**"],
+      ignored: ["**/.env*", "**/tools/**", "**/reponew/**", "**/assets/reponew/**", "**/build/**"],
     },
   },
 });

@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 // LAN IP (http://<lan-ip>:8080), Safari coi đó là insecure origin và chặn
 // camera của điện thoại khi dùng thẻ WebRTC (Alt+C / Alt+Q). Cặp cert/key đã
 // được tạo sẵn bằng mkcert (self-signed, trust local) tại PHONE_CAMERA/cert/.
-const CERT_DIR = path.join(__dirname, '..', 'PHONE_CAMERA', 'cert');
+const CERT_DIR = path.join(__dirname, '..', 'assets', 'PHONE_CAMERA', 'cert');
 const CERT_PATH = path.join(CERT_DIR, 'cert.pem');
 const KEY_PATH = path.join(CERT_DIR, 'key.pem');
 const HTTPS_PORT = 8444;
@@ -87,7 +87,6 @@ export function getIceServers(env = process.env) {
   }
   return servers;
 }
-let hasStartedNgrokBefore = false;
 
 // `ngrok` is an optional dependency — only required if the user actually
 // wants remote (non-LAN) streaming. Import lazily so a machine without it
@@ -325,7 +324,7 @@ export function startCompanionServer(emitEvent, sendAudioChunk, mainWindow, send
   // IP as an insecure context and silently blocks camera access.
   if (!fs.existsSync(CERT_PATH) || !fs.existsSync(KEY_PATH)) {
     try {
-      const genScript = path.join(__dirname, '..', 'scripts', 'generate-companion-cert.py');
+      const genScript = path.join(__dirname, '..', 'assets', 'scripts', 'generate-companion-cert.py');
       if (fs.existsSync(genScript)) {
         spawnSync(pythonBin(), [genScript], { stdio: "ignore", windowsHide: true });
       }

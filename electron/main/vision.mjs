@@ -21,10 +21,13 @@ import { getRobotsConfig, getSmartHomeCamerasConfig } from "./device-config.mjs"
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { resolvePythonCommand } from "./sidecar-process.mjs";
+import { killTree } from "./process-utils.mjs";
 import { unpackedRepoRoot, userDataDir } from "./paths.mjs";
 import { saveScreenshot } from "./screenshot-store.mjs";
 import { grabJpeg, createFrameLoop } from "./vision-capture.mjs";
 import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+import { computeBufferDiffRatio } from "./visual-verifier.mjs";
+import { activeWindowInfoTool, getCachedActiveWindow } from "./local-tools.mjs";
 
 const MAX_IPC_FRAME_CHARS = 5_600_000; // ≈ 4 MB nhị phân sau base64
 
@@ -206,15 +209,26 @@ export function visionFrameGeometry() {
 function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const pythonCmd = resolvePythonCommand();
-    const scriptPath = path.join(unpackedRepoRoot(), "sidecar", "screen_capture.py");
+    const scriptPath = path.join(unpackedRepoRoot(), "assets", "sidecar", "screen_capture.py");
     let proc;
     let timer;
     let settled = false;
+
+    const cleanup = () => {
+      if (!proc) return;
+      for (const s of [proc.stdin, proc.stdout, proc.stderr]) {
+        if (!s) continue;
+        try { s.removeAllListeners(); } catch { /* ignore */ }
+        try { if (!s.destroyed) s.destroy(); } catch { /* ignore */ }
+      }
+      try { proc.removeAllListeners(); } catch { /* ignore */ }
+    };
 
     const finish = (fn, val) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      cleanup();
       fn(val);
     };
 
@@ -222,20 +236,22 @@ function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
       proc = spawn(pythonCmd, [scriptPath, String(geometry.frame_w), String(geometry.frame_h), String(quality)], {
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
       });
     } catch (e) {
       return reject(e);
     }
 
     timer = setTimeout(() => {
-      try { proc.kill(); } catch { /* ignore */ }
+      try { killTree(proc); } catch { /* ignore */ }
       finish(reject, new Error(`Quá thời gian chờ chụp màn hình dự phòng (${timeoutMs}ms)`));
     }, timeoutMs);
 
     const chunks = [];
     let errOutput = "";
+    proc.stderr.setEncoding("utf8");
     proc.stdout.on("data", (chunk) => chunks.push(chunk));
-    proc.stderr.on("data", (err) => { errOutput += err.toString(); });
+    proc.stderr.on("data", (err) => { errOutput += err; });
     proc.on("error", (err) => finish(reject, err));
     proc.on("close", (code) => {
       if (code === 0 && chunks.length > 0) {
@@ -248,9 +264,29 @@ function captureScreenFallback(geometry, quality = 50, timeoutMs = 5000) {
 }
 
 let screenGrabCounter = 0;
+let lastScreenVisionBuffer = null;
+let lastCameraStreamBuffer = null;
+let lastDeskFrameBuffer = null;
 
-/** Chụp màn hình chính → { buffer: JPEG, geometry }. Hỗ trợ tuỳ chọn cropRect để khoanh vùng (Snipping Tool). */
-export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
+/** Ngưỡng khác biệt tối thiểu (0.8%) để coi là màn hình/camera thực sự có chuyển động (Smart Screen Diff). */
+export function getVisionDiffThreshold() {
+  const raw = Number(process.env.IRIS_VISION_DIFF_THRESHOLD);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 0.5 ? raw : 0.008;
+}
+
+/** Kiểm tra hai frame có khác biệt thực chất vượt ngưỡng nhiễu nén JPEG hay không. Hỗ trợ cả Buffer lẫn chuỗi base64. */
+export function isFrameMeaningfullyDifferent(prevInput, nextInput, minDiff = getVisionDiffThreshold()) {
+  const prevBuf = typeof prevInput === "string" ? Buffer.from(prevInput, "base64") : prevInput;
+  const nextBuf = typeof nextInput === "string" ? Buffer.from(nextInput, "base64") : nextInput;
+  if (!prevBuf || !Buffer.isBuffer(prevBuf) || prevBuf.length === 0) return true;
+  if (!nextBuf || !Buffer.isBuffer(nextBuf) || nextBuf.length === 0) return false;
+  if (prevBuf.equals(nextBuf)) return false;
+  if (minDiff <= 0) return true;
+  return computeBufferDiffRatio(prevBuf, nextBuf) >= minDiff;
+}
+
+/** Chụp màn hình chính → { buffer: JPEG, geometry }. Hỗ trợ tuỳ chọn cropRect hoặc activeWindowOnly (chỉ chụp cửa sổ đang active để tiết kiệm CPU & token). */
+export async function grabPrimaryScreenJpeg(quality = 50, { cropRect, activeWindowOnly = false } = {}) {
   const { desktopCapturer, systemPreferences } = electron;
   if (process.platform === "darwin" && systemPreferences?.getMediaAccessStatus) {
     const st = systemPreferences.getMediaAccessStatus("screen");
@@ -262,6 +298,26 @@ export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
   const geometry = visionFrameGeometry();
   let buffer = null;
 
+  // Nếu bật chế độ chụp theo cửa sổ active (Active-Window Vision Optimization) và chưa truyền cropRect thủ công
+  let effectiveCrop = cropRect || null;
+  if (!effectiveCrop && (activeWindowOnly || process.env.IRIS_VISION_ACTIVE_WINDOW_ONLY === "1")) {
+    try {
+      const winInfo = getCachedActiveWindow() || (await activeWindowInfoTool().catch(() => null));
+      const r = winInfo?.rect || winInfo?.bounds;
+      if (Array.isArray(r) && r.length === 4) {
+        const [wx, wy, ww, wh] = r.map(Number);
+        if (ww >= 200 && wh >= 150 && geometry.screen_w > 0 && geometry.screen_h > 0) {
+          effectiveCrop = {
+            xRatio: Math.max(0, (wx - geometry.origin_x) / geometry.screen_w),
+            yRatio: Math.max(0, (wy - geometry.origin_y) / geometry.screen_h),
+            widthRatio: Math.min(1, ww / geometry.screen_w),
+            heightRatio: Math.min(1, wh / geometry.screen_h),
+          };
+        }
+      }
+    } catch {}
+  }
+
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
@@ -272,15 +328,22 @@ export async function grabPrimaryScreenJpeg(quality = 50, { cropRect } = {}) {
     const src = sources.find((s) => s.display_id === String(primary.id)) ?? sources[0];
     if (src && !src.thumbnail.isEmpty()) {
       let img = src.thumbnail;
-      if (cropRect) {
+      const imgSize = img.getSize();
+      // Chuẩn hoá lại đúng kích thước geometry.frame_w (bỏ 1px jitter chống cache) để Smart Screen Diff & SHA-1 dedupe chính xác
+      if (!effectiveCrop && imgSize.width > geometry.frame_w && geometry.frame_w >= 10) {
         try {
-          const imgSize = img.getSize();
-          const cropX = Math.max(0, Math.min(imgSize.width - 10, Math.round(cropRect.xRatio != null ? cropRect.xRatio * imgSize.width : cropRect.x || 0)));
-          const cropY = Math.max(0, Math.min(imgSize.height - 10, Math.round(cropRect.yRatio != null ? cropRect.yRatio * imgSize.height : cropRect.y || 0)));
-          const maxW = imgSize.width - cropX;
-          const maxH = imgSize.height - cropY;
-          const rawW = Math.round(cropRect.widthRatio != null ? cropRect.widthRatio * imgSize.width : cropRect.width || maxW);
-          const rawH = Math.round(cropRect.heightRatio != null ? cropRect.heightRatio * imgSize.height : cropRect.height || maxH);
+          img = img.crop({ x: 0, y: 0, width: geometry.frame_w, height: Math.min(imgSize.height, geometry.frame_h) });
+        } catch {}
+      }
+      if (effectiveCrop) {
+        try {
+          const curSize = img.getSize();
+          const cropX = Math.max(0, Math.min(curSize.width - 10, Math.round(effectiveCrop.xRatio != null ? effectiveCrop.xRatio * curSize.width : effectiveCrop.x || 0)));
+          const cropY = Math.max(0, Math.min(curSize.height - 10, Math.round(effectiveCrop.yRatio != null ? effectiveCrop.yRatio * curSize.height : effectiveCrop.y || 0)));
+          const maxW = curSize.width - cropX;
+          const maxH = curSize.height - cropY;
+          const rawW = Math.round(effectiveCrop.widthRatio != null ? effectiveCrop.widthRatio * curSize.width : effectiveCrop.width || maxW);
+          const rawH = Math.round(effectiveCrop.heightRatio != null ? effectiveCrop.heightRatio * curSize.height : effectiveCrop.height || maxH);
           const cropW = Math.max(10, Math.min(maxW, rawW));
           const cropH = Math.max(10, Math.min(maxH, rawH));
 
@@ -323,7 +386,14 @@ export async function grabScreenRegionJpeg(cropRect, quality = 80) {
 }
 
 export async function captureScreenForVision() {
-  return (await grabPrimaryScreenJpeg(75)).buffer;
+  const { buffer } = await grabPrimaryScreenJpeg(75);
+  // Smart Screen Diff: Nếu màn hình thay đổi dưới ngưỡng nhiễu (< 0.8%), trả lại buffer cũ
+  // để createFrameLoop tự động dedupe (SHA-1 trùng), không gửi lại frame tĩnh lên Gemini!
+  if (lastScreenVisionBuffer && !isFrameMeaningfullyDifferent(lastScreenVisionBuffer, buffer)) {
+    return lastScreenVisionBuffer;
+  }
+  lastScreenVisionBuffer = buffer;
+  return buffer;
 }
 
 export function stopVisionLoop() {
@@ -331,6 +401,7 @@ export function stopVisionLoop() {
   visionInterval?.stop();
   visionInterval = null;
   isVisionEnabled = false;
+  lastScreenVisionBuffer = null;
   if (wasOn) emitEvent({ type: "vision_state", enabled: false });
 }
 
@@ -583,15 +654,22 @@ export async function toggleCameraStreamVision() {
   };
 }
 
-// IPC "vision:camera-stream-frame": validate kiểu + kích thước, dedupe SHA-1.
+// IPC "vision:camera-stream-frame": validate kiểu + kích thước, dedupe SHA-1 + Smart Screen Diff.
 export function handleCameraStreamFrame(base64DataUrl) {
   if (!liveSession || !isCameraStreamVisionEnabled) return false;
   const base64 = base64Of(base64DataUrl);
   if (!base64) return false;
   const hash = crypto.createHash("sha1").update(base64).digest("hex");
   if (hash === lastCameraStreamFrameHash) return false;
+  const nextBuf = Buffer.from(base64, "base64");
+  if (lastCameraStreamBuffer && !isFrameMeaningfullyDifferent(lastCameraStreamBuffer, nextBuf)) {
+    return false;
+  }
   const ok = sendVideoFrame(base64, "image/jpeg");
-  if (ok) lastCameraStreamFrameHash = hash;
+  if (ok) {
+    lastCameraStreamFrameHash = hash;
+    lastCameraStreamBuffer = nextBuf;
+  }
   return ok;
 }
 
@@ -637,8 +715,15 @@ export function handleDeskFrame(base64DataUrl) {
   if (!snapPending && !isDeskVisionEnabled) return false; // không có ai yêu cầu
   const hash = crypto.createHash("sha1").update(base64).digest("hex");
   if (!snapPending && hash === lastDeskFrameHash) return false;
+  const nextBuf = Buffer.from(base64, "base64");
+  if (!snapPending && lastDeskFrameBuffer && !isFrameMeaningfullyDifferent(lastDeskFrameBuffer, nextBuf)) {
+    return false;
+  }
   const ok = sendVideoFrame(base64, "image/jpeg");
-  if (ok) lastDeskFrameHash = hash;
+  if (ok) {
+    lastDeskFrameHash = hash;
+    lastDeskFrameBuffer = nextBuf;
+  }
   if (snapPending) {
     clearTimeout(pendingDeskSnap.timer);
     const { resolve } = pendingDeskSnap;
@@ -1019,4 +1104,3 @@ export async function takeCameraSnapshot(args = {}) {
       "; hãy thông báo ngắn gọn 1 câu cho người dùng và mô tả NGẮN GỌN trong 1-2 câu những gì thấy trong camera nếu được hỏi (không nói rông dài hay đoán mò).",
   };
 }
-

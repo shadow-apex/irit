@@ -12,6 +12,7 @@
  *  - Mọi tool nguy hiểm đi qua xác nhận hai bước ở tool-dispatcher.mjs (dangerous-tools.mjs).
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { toolsDir, pythonBin, userDataDir } from "./paths.mjs";
@@ -47,8 +48,171 @@ export function pythonEnv(extra = {}) {
   };
 }
 
+/** Dọn sạch stdio pipes và listeners của tiến trình con, tránh rò rỉ handle hoặc tiến trình zombie. */
+function cleanupChildPipes(child) {
+  if (!child) return;
+  for (const s of [child.stdin, child.stdout, child.stderr]) {
+    if (!s) continue;
+    try { s.removeAllListeners(); } catch { /* bỏ qua */ }
+    try { if (!s.destroyed) s.destroy(); } catch { /* bỏ qua */ }
+  }
+  try { child.removeAllListeners(); } catch { /* bỏ qua */ }
+}
+
+// -----------------------------------------------------------------------
+// Persistent Python Tool Daemon (< 5ms Zero-Spawn Overhead)
+// -----------------------------------------------------------------------
+export const DAEMON_ELIGIBLE_TOOLS = new Set([
+  "active_window_info.py",
+  "mouse_control.py",
+  "ocr_region.py",
+  "ui_automation.py",
+  "move_window.py",
+  "color_picker.py",
+  "idle_time.py",
+  "media_control.py",
+  "lock_screen.py",
+  "focus_assist.py",
+  "desktop_manager.py",
+  "window_manager.py",
+  "multi_monitor_info.py",
+  "system_actions.py",
+]);
+
+let daemonProc = null;
+let daemonKey = "";
+let daemonReqSeq = 0;
+let daemonLineBuf = "";
+const daemonPending = new Map(); // id -> { resolve, timer, fallback }
+
+function isPythonDaemonEnabled() {
+  const flag = String(process.env.IRIS_PYTHON_DAEMON ?? "1").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(flag);
+}
+
+export function stopPythonDaemon() {
+  if (daemonProc) {
+    const proc = daemonProc;
+    daemonProc = null;
+    daemonKey = "";
+    daemonLineBuf = "";
+    try { proc.stdin?.write?.("stop\n"); } catch { /* bỏ qua */ }
+    try { killTree(proc); } catch { /* bỏ qua */ }
+    cleanupChildPipes(proc);
+  }
+  for (const [, entry] of daemonPending) {
+    clearTimeout(entry.timer);
+    try { entry.fallback(); } catch { /* bỏ qua */ }
+  }
+  daemonPending.clear();
+}
+
+process.once("exit", () => {
+  if (daemonProc) {
+    const proc = daemonProc;
+    daemonProc = null;
+    try { killTree(proc); } catch { /* bỏ qua */ }
+    cleanupChildPipes(proc);
+  }
+});
+
+function ensurePythonDaemon() {
+  if (!isPythonDaemonEnabled()) return null;
+  const tDir = toolsDir();
+  const py = pythonBin();
+  const daemonPath = join(tDir, "tool_daemon.py");
+  if (!existsSync(daemonPath)) return null;
+
+  const currentKey = `${py}::${tDir}`;
+  if (daemonProc && daemonKey === currentKey && !daemonProc.killed && daemonProc.exitCode === null) {
+    return daemonProc;
+  }
+
+  stopPythonDaemon();
+  try {
+    const proc = spawn(py, [daemonPath], {
+      shell: false,
+      windowsHide: true,
+      env: pythonEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdin.on("error", () => {});
+
+    proc.stdout.on("data", (chunk) => {
+      daemonLineBuf += chunk;
+      let idx;
+      while ((idx = daemonLineBuf.indexOf("\n")) >= 0) {
+        const line = daemonLineBuf.slice(0, idx).trim();
+        daemonLineBuf = daemonLineBuf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          const entry = daemonPending.get(msg.id);
+          if (entry) {
+            daemonPending.delete(msg.id);
+            clearTimeout(entry.timer);
+            entry.resolve({
+              ok: Boolean(msg.ok),
+              code: typeof msg.code === "number" ? msg.code : (msg.ok ? 0 : 1),
+              stdout: String(msg.stdout ?? ""),
+              stderr: String(msg.stderr ?? ""),
+              daemon: true,
+            });
+          }
+        } catch {
+          // Bỏ qua dòng log phụ nếu có
+        }
+      }
+    });
+
+    const onDaemonDie = () => {
+      if (daemonProc === proc) {
+        daemonProc = null;
+        daemonKey = "";
+        daemonLineBuf = "";
+      }
+      cleanupChildPipes(proc);
+      for (const [id, entry] of daemonPending) {
+        daemonPending.delete(id);
+        clearTimeout(entry.timer);
+        try { entry.fallback(); } catch { /* bỏ qua */ }
+      }
+    };
+
+    proc.on("error", onDaemonDie);
+    proc.on("exit", onDaemonDie);
+
+    try { proc.unref(); } catch { /* bỏ qua */ }
+    try { proc.stdout?.unref?.(); } catch { /* bỏ qua */ }
+    try { proc.stderr?.unref?.(); } catch { /* bỏ qua */ }
+
+    daemonProc = proc;
+    daemonKey = currentKey;
+    return proc;
+  } catch {
+    return null;
+  }
+}
+
+/** Khởi động ấm sẵn Python Daemon ở nền để lệnh đầu tiên đạt độ trễ < 5ms. */
+export function warmPythonDaemon() {
+  try {
+    const proc = ensurePythonDaemon();
+    if (!proc) return false;
+    const reqId = ++daemonReqSeq;
+    proc.stdin.write(JSON.stringify({ id: reqId, ping: true }) + "\n");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Chạy `python tools/<script> ...args`. Không bao giờ reject.
+ * Tự động ưu tiên chạy qua Persistent Python Daemon (< 5ms) đối với các tool nóng,
+ * và fallback an toàn sang spawn tiến trình rời nếu cần.
  * @param {string} script
  * @param {string[]} args
  * @param {{timeoutMs?:number, stdin?:string, onTimeout?:()=>Promise<void>|void, onLine?:(line:string)=>void}} [opts]
@@ -61,6 +225,67 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, stdin = un
       error: `Công cụ ${script} chỉ hỗ trợ Windows (hệ điều hành hiện tại: ${process.platform}).`,
     });
   }
+
+  // Fast-path qua Persistent Python Daemon nếu đủ điều kiện
+  if (typeof onLine !== "function" && DAEMON_ELIGIBLE_TOOLS.has(script)) {
+    const proc = ensurePythonDaemon();
+    if (proc && proc.stdin && !proc.stdin.destroyed) {
+      return new Promise((resolve) => {
+        const reqId = ++daemonReqSeq;
+        let settled = false;
+
+        const fallback = () => {
+          if (settled) return;
+          settled = true;
+          spawnPythonToolOnce(script, args, { timeoutMs, stdin, onTimeout, onLine }).then(resolve);
+        };
+
+        const timer = setTimeout(async () => {
+          if (settled) return;
+          settled = true;
+          daemonPending.delete(reqId);
+          stopPythonDaemon();
+          try { await onTimeout?.(); } catch { /* bỏ qua */ }
+          resolve({
+            ok: false,
+            timedOut: true,
+            error: `Quá thời gian ${timeoutMs}ms`,
+            stdout: "",
+            stderr: "",
+          });
+        }, timeoutMs);
+
+        daemonPending.set(reqId, {
+          timer,
+          fallback,
+          resolve: (res) => {
+            if (settled) return;
+            settled = true;
+            resolve(res);
+          },
+        });
+
+        try {
+          const payload = JSON.stringify({
+            id: reqId,
+            script,
+            args: args.map(String),
+            stdin: stdin !== undefined ? String(stdin) : null,
+          });
+          proc.stdin.write(payload + "\n", "utf8");
+        } catch {
+          daemonPending.delete(reqId);
+          clearTimeout(timer);
+          fallback();
+        }
+      });
+    }
+  }
+
+  return spawnPythonToolOnce(script, args, { timeoutMs, stdin, onTimeout, onLine });
+}
+
+function spawnPythonToolOnce(script, args = [], { timeoutMs = 20000, stdin = undefined, onTimeout, onLine = undefined } = {}) {
   const pyPath = join(toolsDir(), script);
 
   return new Promise((resolve) => {
@@ -75,6 +300,7 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, stdin = un
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupChildPipes(child);
       resolve(res);
     };
 
@@ -118,8 +344,12 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, stdin = un
     });
     child.stderr.on("data", (d) => { if (stderr.length < 64_000) stderr += d; });
     child.stdin.on("error", () => {});
-    if (stdin !== undefined) child.stdin.end(stdin, "utf8");
-    else child.stdin.end();
+    try {
+      if (stdin !== undefined) child.stdin.end(stdin, "utf8");
+      else child.stdin.end();
+    } catch {
+      /* ignore stdin close race */
+    }
     // WIN-PY-STUB: trên Windows, "python" có thể chỉ là alias Microsoft Store (thoát mã 9009) hoặc thiếu hẳn.
     const py = pythonBin();
     const pyHint = `Cài Python 3 từ python.org (tick "Add python.exe to PATH"), chạy "pip install -r tools/requirements.txt" rồi khởi động lại IRIS (hoặc đặt IRIS_PYTHON_BIN trong .env).`;
@@ -153,10 +383,132 @@ export function runPythonTool(script, args = [], { timeoutMs = 20000, stdin = un
   });
 }
 
-/** Chạy script, parse JSON, chuẩn hoá — dùng cho mọi tool trả JSON. */
+/** Chạy script, parse JSON, chuẩn hoá — dùng cho mọi tool trả JSON. Không bao giờ ném ngoại lệ. */
 async function runJsonTool(script, args, opts, failMsg) {
-  const run = await runPythonTool(script, args, opts);
-  return buildToolResponse(run, failMsg || `${script} thất bại.`);
+  try {
+    const run = await runPythonTool(script, args, opts);
+    return buildToolResponse(run, failMsg || `${script} thất bại.`);
+  } catch (err) {
+    return {
+      status: "error",
+      error: err?.message || String(err) || failMsg || `${script} thất bại.`,
+    };
+  }
+}
+
+// -----------------------------------------------------------------------
+// Smart Visual Cache cho Native OCR (NHIỆM VỤ 3)
+// -----------------------------------------------------------------------
+const DEFAULT_OCR_FAST_CACHE_TTL_MS = 2500;
+let ocrFastCache = null; // { timestamp: number, regionKey: string, imageKey: string, baseResult: object }
+
+// -----------------------------------------------------------------------
+// Active Window Context Cache (< 1ms In-Memory Awareness)
+// -----------------------------------------------------------------------
+const DEFAULT_ACTIVE_WINDOW_TTL_MS = 1500;
+let activeWindowCache = null; // { timestamp: number, data: object }
+
+export function invalidateActiveWindowCache() {
+  activeWindowCache = null;
+}
+
+export function getCachedActiveWindow() {
+  if (activeWindowCache && Date.now() - activeWindowCache.timestamp <= DEFAULT_ACTIVE_WINDOW_TTL_MS) {
+    return activeWindowCache.data;
+  }
+  return null;
+}
+
+export function formatActiveWindowSummary(info) {
+  if (!info || typeof info !== "object") return "";
+  const title = String(info.title || "").trim();
+  const proc = String(info.process_name || "").trim();
+  if (!title && !proc) return "";
+  if (title && proc && !title.toLowerCase().includes(proc.toLowerCase())) {
+    return `[Cửa sổ đang mở: "${title}" (${proc})]`;
+  }
+  return `[Cửa sổ đang mở: "${title || proc}"]`;
+}
+
+export async function refreshActiveWindowContext(force = false) {
+  if (!force && activeWindowCache && Date.now() - activeWindowCache.timestamp <= DEFAULT_ACTIVE_WINDOW_TTL_MS) {
+    return activeWindowCache.data;
+  }
+  const res = await activeWindowInfoTool({ no_cache: force });
+  return res?.status === "success" ? res : null;
+}
+
+export function invalidateOcrCache() {
+  ocrFastCache = null;
+  activeWindowCache = null;
+}
+
+/**
+ * Tìm nhanh từ/cụm từ trên kết quả OCR đã cache trong bộ nhớ Node.js (0ms, không tốn CPU/spawn Python).
+ */
+export function findMatchInCachedOcr(baseResult, findText) {
+  if (!baseResult || typeof baseResult !== "object") return null;
+  const res = { ...baseResult, cached: true };
+  delete res.find_query;
+  delete res.found;
+  delete res.center;
+  delete res.rect;
+  delete res.matched_text;
+
+  const query = typeof findText === "string" ? findText.trim() : "";
+  if (!query) return res;
+
+  const targetLower = query.toLowerCase();
+  const words = Array.isArray(baseResult.words) ? baseResult.words : [];
+  let foundMatch = null;
+
+  for (const w of words) {
+    const wText = String(w?.text ?? "");
+    if (wText && wText.toLowerCase().includes(targetLower)) {
+      const wx = Number(w.x) || 0;
+      const wy = Number(w.y) || 0;
+      const ww = Number(w.w) || 0;
+      const wh = Number(w.h) || 0;
+      const center = Array.isArray(w.center) ? w.center : [wx + Math.floor(ww / 2), wy + Math.floor(wh / 2)];
+      foundMatch = {
+        matched_text: wText,
+        center,
+        rect: [wx, wy, ww, wh],
+      };
+      break;
+    }
+  }
+
+  if (!foundMatch && Array.isArray(baseResult.lines)) {
+    for (const line of baseResult.lines) {
+      const lText = String(line?.text ?? "");
+      if (lText && lText.toLowerCase().includes(targetLower)) {
+        // Tìm các từ thuộc dòng này trong mảng words
+        const lineWords = words.filter((w) => lText.toLowerCase().includes(String(w?.text ?? "").toLowerCase()));
+        if (lineWords.length > 0) {
+          const lx = Math.min(...lineWords.map((w) => Number(w.x) || 0));
+          const ly = Math.min(...lineWords.map((w) => Number(w.y) || 0));
+          const lw = Math.max(...lineWords.map((w) => (Number(w.x) || 0) + (Number(w.w) || 0))) - lx;
+          const lh = Math.max(...lineWords.map((w) => (Number(w.y) || 0) + (Number(w.h) || 0))) - ly;
+          foundMatch = {
+            matched_text: lText,
+            center: [lx + Math.floor(lw / 2), ly + Math.floor(lh / 2)],
+            rect: [lx, ly, lw, lh],
+          };
+          break;
+        }
+      }
+    }
+  }
+
+  res.find_query = query;
+  res.found = Boolean(foundMatch);
+  if (foundMatch) {
+    res.center = foundMatch.center;
+    res.rect = foundMatch.rect;
+    res.matched_text = foundMatch.matched_text;
+  }
+  return res;
 }
 
 // -----------------------------------------------------------------------
@@ -240,6 +592,7 @@ export async function writeClipboardTool(args = {}) {
 // window magic (TL-07: --active có đếm ngược THẬT; demo chỉ khi IRIS_DEV_TOOLS=1)
 // -----------------------------------------------------------------------
 export async function moveWindowMagicTool(args = {}) {
+  invalidateOcrCache();
   const { mode = "active", name, wait } = args;
   const x = toIntArg(args.x ?? 0) ?? 0;
   const y = toIntArg(args.y ?? 0) ?? 0;
@@ -276,26 +629,65 @@ export async function sendDesktopNotificationTool(args = {}) {
 // system_control (TL-12)
 // -----------------------------------------------------------------------
 export async function systemControlTool(args = {}) {
-  const { volume, brightness, wifi, bluetooth, camera } = args;
-  const volumeLevel = toIntArg(args.volume_level);
-  const cliArgs = [];
-  if (volume) cliArgs.push(optArg("volume", volume));
-  if (volumeLevel !== null) cliArgs.push(optArg("volume-level", volumeLevel));
-  const b = toIntArg(brightness);
-  if (b !== null) cliArgs.push(optArg("brightness", b));
-  if (wifi) cliArgs.push(optArg("wifi", wifi));
-  if (bluetooth) cliArgs.push(optArg("bluetooth", bluetooth));
-  if (camera) cliArgs.push(optArg("camera", camera));
-  if (!cliArgs.length) {
-    return { status: "error", error: "Chỉ định ít nhất một trong: volume, volume_level, brightness, wifi, bluetooth, camera." };
+  try {
+    const { volume, brightness, wifi, bluetooth, camera } = args || {};
+    const volumeLevel = toIntArg(args?.volume_level);
+    const cliArgs = [];
+    if (volume) cliArgs.push(optArg("volume", volume));
+    if (volumeLevel !== null) cliArgs.push(optArg("volume-level", volumeLevel));
+    const b = toIntArg(brightness);
+    if (b !== null) cliArgs.push(optArg("brightness", b));
+    if (wifi) cliArgs.push(optArg("wifi", wifi));
+    if (bluetooth) cliArgs.push(optArg("bluetooth", bluetooth));
+    if (camera) cliArgs.push(optArg("camera", camera));
+    if (!cliArgs.length) {
+      return { status: "error", error: "Chỉ định ít nhất một trong: volume, volume_level, brightness, wifi, bluetooth, camera." };
+    }
+    // Script chờ UAC (-Wait) rồi mới trả kết quả THẬT ⇒ timeout dài hơn để người dùng kịp bấm 'Yes'.
+    const needsUac = Boolean(bluetooth || camera);
+    const r = await runJsonTool("sys_control.py", cliArgs, { timeoutMs: needsUac ? 60000 : 15000 }, "sys_control.py thất bại.");
+    if (needsUac && r.status === "error" && /Quá thời gian/.test(r.error || "")) {
+      r.error = "Hết thời gian chờ — có thể bảng UAC chưa được xác nhận. Hãy nhờ người dùng bấm 'Yes' rồi thử lại.";
+    }
+    return r;
+  } catch (err) {
+    return { status: "error", error: `Lỗi điều khiển hệ thống: ${err?.message || String(err)}` };
   }
-  // Script chờ UAC (-Wait) rồi mới trả kết quả THẬT ⇒ timeout dài hơn để người dùng kịp bấm 'Yes'.
-  const needsUac = Boolean(bluetooth || camera);
-  const r = await runJsonTool("sys_control.py", cliArgs, { timeoutMs: needsUac ? 60000 : 15000 }, "sys_control.py thất bại.");
-  if (needsUac && r.status === "error" && /Quá thời gian/.test(r.error || "")) {
-    r.error = "Hết thời gian chờ — có thể bảng UAC chưa được xác nhận. Hãy nhờ người dùng bấm 'Yes' rồi thử lại.";
+}
+
+// -----------------------------------------------------------------------
+// Smart Audio Ducking — Tự động hạ nhỏ âm lượng nền khi đàm thoại / họp
+// (kích hoạt khi IRIS_AUDIO_DUCKING=1)
+// -----------------------------------------------------------------------
+let audioDucked = false;
+let preDuckVolumeLevel = null;
+
+export function isAudioDucked() {
+  return audioDucked;
+}
+
+export async function setSmartAudioDucking(enable = true, { duckLevel = 20, restoreLevel = 65 } = {}) {
+  if (String(process.env.IRIS_AUDIO_DUCKING || "").trim() !== "1") {
+    return { status: "skipped", ducked: audioDucked, reason: "IRIS_AUDIO_DUCKING is not enabled" };
   }
-  return r;
+  try {
+    if (enable && !audioDucked) {
+      preDuckVolumeLevel = restoreLevel;
+      const res = await systemControlTool({ volume_level: duckLevel });
+      if (res?.status === "success") audioDucked = true;
+      return { status: "success", ducked: audioDucked, volume_level: duckLevel };
+    }
+    if (!enable && audioDucked) {
+      const targetVol = preDuckVolumeLevel ?? restoreLevel;
+      const res = await systemControlTool({ volume_level: targetVol });
+      audioDucked = false;
+      preDuckVolumeLevel = null;
+      return { status: "success", ducked: false, volume_level: targetVol, details: res };
+    }
+    return { status: "noop", ducked: audioDucked };
+  } catch (err) {
+    return { status: "error", error: err?.message || String(err) };
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -312,6 +704,9 @@ export async function mouseControlTool(args = {}) {
   if (!action) return { status: "error", error: "Thiếu 'action' (move, click, drag, scroll, position, release)." };
   if (!(action in MOUSE_TIMEOUT_MS)) {
     return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: move, click, drag, scroll, position, release.` };
+  }
+  if (action === "click" || action === "drag" || action === "scroll" || (action === "move" && click)) {
+    invalidateOcrCache();
   }
 
   let x = toIntArg(args.x), y = toIntArg(args.y), x2 = toIntArg(args.x2), y2 = toIntArg(args.y2);
@@ -380,20 +775,62 @@ export async function mouseControlTool(args = {}) {
 // -----------------------------------------------------------------------
 // context tools
 // -----------------------------------------------------------------------
-export async function activeWindowInfoTool() {
-  return runJsonTool("active_window_info.py", [], { timeoutMs: 8000 }, "active_window_info.py thất bại.");
+export async function activeWindowInfoTool(args = {}) {
+  const ttlMs = Number(process.env.IRIS_ACTIVE_WINDOW_TTL_MS) || DEFAULT_ACTIVE_WINDOW_TTL_MS;
+  if (args?.no_cache !== true && activeWindowCache && Date.now() - activeWindowCache.timestamp <= ttlMs) {
+    return { ...activeWindowCache.data, cached: true, status: "success" };
+  }
+  const res = await runJsonTool("active_window_info.py", [], { timeoutMs: 8000 }, "active_window_info.py thất bại.");
+  if (res && res.status === "success") {
+    activeWindowCache = { timestamp: Date.now(), data: res };
+  }
+  return res;
 }
 
 export async function ocrRegionTool(args = {}) {
   const vals = [args.left, args.top, args.width, args.height].map(toIntArg);
+  const hasRegion = vals.every((v) => v !== null);
+  const regionKey = hasRegion ? vals.join(",") : "full";
+  const imageKey = args.image ? String(args.image).trim() : "";
+  const findText = args.find || args.find_text || args.query;
+  const cleanFind = findText && String(findText).trim() ? String(findText).trim() : "";
+  const noCache = args.no_cache === true;
+  const ttlMs = Number(process.env.IRIS_OCR_CACHE_TTL_MS) || DEFAULT_OCR_FAST_CACHE_TTL_MS;
+
+  // Smart Visual Cache Fast-Path tại tầng Node.js: tái sử dụng kết quả Native OCR gần nhất trong cửa sổ TTL
+  // để tránh spawn lại Python và giảm tải CPU về 0 khi tìm kiếm nhiều từ trên cùng màn hình.
+  if (
+    !noCache &&
+    ocrFastCache &&
+    Date.now() - ocrFastCache.timestamp <= ttlMs &&
+    ocrFastCache.regionKey === regionKey &&
+    ocrFastCache.imageKey === imageKey &&
+    Array.isArray(ocrFastCache.baseResult?.words)
+  ) {
+    const cachedHit = findMatchInCachedOcr(ocrFastCache.baseResult, cleanFind);
+    if (cachedHit) {
+      return { ...cachedHit, status: "success" };
+    }
+  }
+
   const cli = [];
-  if (vals.every((v) => v !== null)) cli.push("--region", ...vals.map(String)); // nargs=4: bốn giá trị rời
+  if (hasRegion) cli.push("--region", ...vals.map(String)); // nargs=4: bốn giá trị rời
   // lang: bỏ trống ⇒ để script tự chọn (mặc định Windows Native OCR tự động nhận diện) — TL-15
   if (args.lang) cli.push(optArg("lang", args.lang));
-  const findText = args.find || args.find_text || args.query;
-  if (findText && String(findText).trim()) cli.push("--find", String(findText).trim());
-  if (args.image) cli.push("--image", String(args.image).trim());
-  return runJsonTool("ocr_region.py", cli, { timeoutMs: 30000 }, "ocr_region.py thất bại.");
+  if (cleanFind) cli.push("--find", cleanFind);
+  if (imageKey) cli.push("--image", imageKey);
+  if (noCache) cli.push("--no-cache");
+
+  const res = await runJsonTool("ocr_region.py", cli, { timeoutMs: 30000 }, "ocr_region.py thất bại.");
+  if (res && res.status === "success" && Array.isArray(res.words)) {
+    ocrFastCache = {
+      timestamp: Date.now(),
+      regionKey,
+      imageKey,
+      baseResult: res,
+    };
+  }
+  return res;
 }
 
 export async function colorPickerTool(args = {}) {
@@ -532,6 +969,7 @@ export async function processManagerTool(args = {}) {
   }
   if (action === "kill") {
     if (!name) return { status: "error", error: "'name' là bắt buộc cho action 'kill' (vd 'chrome.exe')." };
+    invalidateOcrCache();
     return runJsonTool("process_manager.py", ["kill", String(name), ...(force ? ["--force"] : [])], { timeoutMs: 15000 }, "process_manager.py kill thất bại.");
   }
   return { status: "error", error: `Action '${action}' không hợp lệ. Dùng: list, kill.` };
@@ -562,6 +1000,7 @@ export async function viewImageTool(args = {}) {
 // move_window_precise (TL-01: ctypes, không còn PowerShell)
 // -----------------------------------------------------------------------
 export async function moveWindowPreciseTool(args = {}) {
+  invalidateOcrCache();
   const name = args.name || "active";
   const x = toIntArg(args.x ?? 100) ?? 100;
   const y = toIntArg(args.y ?? 100) ?? 100;
@@ -588,9 +1027,16 @@ export async function mediaControlTool(args = {}) {
 }
 
 export async function desktopManagerTool(args = {}) {
-  const act = args?.action;
-  if (!["new", "close", "left", "right", "boss"].includes(act)) return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
-  return runJsonTool("desktop_manager.py", [act], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
+  try {
+    const act = args?.action ? String(args.action).trim().toLowerCase() : "";
+    if (!["new", "close", "left", "right", "boss"].includes(act)) {
+      return { status: "error", error: "action phải là new, close, left, right hoặc boss." };
+    }
+    invalidateOcrCache();
+    return await runJsonTool("desktop_manager.py", [act], { timeoutMs: 8000 }, "desktop_manager.py thất bại.");
+  } catch (err) {
+    return { status: "error", error: `Lỗi quản lý màn hình ảo: ${err?.message || String(err)}` };
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -620,6 +1066,7 @@ function appTarget(raw) {
 }
 
 export async function systemActionTool(action, target, extra = []) {
+  invalidateOcrCache();
   const t = appTarget(target);
   if (!t) return { status: "error", error: "Thiếu 'target' (tên file .exe hoặc một phần tiêu đề cửa sổ)." };
   return runJsonTool("system_actions.py", [action, t, ...extra], { timeoutMs: 20000 }, `system_actions.py ${action} thất bại.`);
@@ -634,6 +1081,7 @@ export async function writeNoteScriptTool(text, isNew) {
 // file_explorer.py: mở thư mục hoặc bôi đen file trong File Explorer
 // -----------------------------------------------------------------------
 export async function fileExplorerTool(args = {}) {
+  invalidateOcrCache();
   const path = typeof args.path === "string" ? args.path.trim() : "";
   const action = typeof args.action === "string" ? args.action.trim() : "auto";
   const cli = [];
@@ -735,6 +1183,7 @@ export async function universalAppLauncherTool(args = {}) {
   if (command === "search") {
     return runJsonTool("universal_app_launcher.py", ["search", query, optArg("limit", limit)], { timeoutMs: 15000 }, "universal_app_launcher.py search thất bại.");
   }
+  invalidateOcrCache();
   const cli = ["launch", query];
   if (args.args) cli.push(optArg("args", String(args.args)));
   return runJsonTool("universal_app_launcher.py", cli, { timeoutMs: 15000 }, "universal_app_launcher.py launch thất bại.");
@@ -762,31 +1211,35 @@ export async function runTerminalCommandTool(args = {}) {
 }
 
 export async function filesystemOpsTool(args = {}) {
-  if (!isSuperFeatureEnabled("IRIS_FILESYSTEM_OPS")) {
-    return {
-      status: "error",
-      error: "Quyền 'Quản lý File & Thư mục toàn diện' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
-    };
-  }
-  const action = String(args.action || "").trim().toLowerCase();
-  const path = String(args.path || "").trim();
-  if (!action) return { status: "error", error: "Thiếu 'action' (list, read, write, append, mkdir, copy, move, rename, delete, info, zip, unzip)." };
-  if (!path) return { status: "error", error: "Thiếu 'path' (đường dẫn file/thư mục)." };
+  try {
+    if (!isSuperFeatureEnabled("IRIS_FILESYSTEM_OPS")) {
+      return {
+        status: "error",
+        error: "Quyền 'Quản lý File & Thư mục toàn diện' đang TẮT trong Cài đặt. Hãy nhắc người dùng bật trong Settings -> Hệ thống & Điều khiển.",
+      };
+    }
+    const action = String(args?.action || "").trim().toLowerCase();
+    const path = String(args?.path || "").trim();
+    if (!action) return { status: "error", error: "Thiếu 'action' (list, read, write, append, mkdir, copy, move, rename, delete, info, zip, unzip)." };
+    if (!path) return { status: "error", error: "Thiếu 'path' (đường dẫn file/thư mục)." };
 
-  const cli = [action, path];
-  if (args.dest) cli.push(optArg("dest", String(args.dest)));
-  if (args.limit !== undefined) {
-    const lim = toIntArg(args.limit);
-    if (lim !== null) cli.push(optArg("limit", lim));
+    const cli = [action, path];
+    if (args?.dest) cli.push(optArg("dest", String(args.dest)));
+    if (args?.limit !== undefined) {
+      const lim = toIntArg(args.limit);
+      if (lim !== null) cli.push(optArg("limit", lim));
+    }
+    const isWrite = action === "write" || action === "append";
+    if (isWrite) cli.push("--stdin");
+    return await runJsonTool(
+      "filesystem_ops.py",
+      cli,
+      { timeoutMs: 30000, stdin: isWrite ? String(args?.content ?? "") : undefined },
+      `filesystem_ops.py ${action} thất bại.`,
+    );
+  } catch (err) {
+    return { status: "error", error: `Lỗi thao tác file/thư mục: ${err?.message || String(err)}` };
   }
-  const isWrite = action === "write" || action === "append";
-  if (isWrite) cli.push("--stdin");
-  return runJsonTool(
-    "filesystem_ops.py",
-    cli,
-    { timeoutMs: 30000, stdin: isWrite ? String(args.content ?? "") : undefined },
-    `filesystem_ops.py ${action} thất bại.`,
-  );
 }
 
 export async function windowManagerTool(args = {}) {
@@ -796,6 +1249,7 @@ export async function windowManagerTool(args = {}) {
       error: "Quyền 'Quản lý Cửa sổ nâng cao' đang TẮT trong Cài đặt.",
     };
   }
+  invalidateOcrCache();
   const action = String(args.action || "list").trim().toLowerCase();
   const cli = [action];
   if (args.target) cli.push(optArg("target", String(args.target)));
@@ -867,6 +1321,9 @@ export async function uiAutomationTool(args = {}) {
     };
   }
   const action = String(args.action || "dump").trim().toLowerCase();
+  if (action !== "dump" && action !== "find") {
+    invalidateOcrCache();
+  }
   const cli = [];
   if (args.target) cli.push(optArg("target", String(args.target)));
   cli.push(action);

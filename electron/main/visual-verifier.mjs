@@ -97,7 +97,9 @@ export async function captureRegionSnapshot(rectOrPoint, quality = 75) {
 }
 
 /**
- * Thực hiện kiểm tra thị giác Trước - Sau thao tác, tự động thử lại nếu phát hiện chưa ăn nút bấm.
+ * Thực hiện kiểm tra thị giác Trước - Sau thao tác, tự động thử lại theo chuỗi phương thức thay thế
+ * (Multi-Method Visual Self-Healing: UIA Invoke -> Win32 Click -> Physical Mouse Click)
+ * nếu phát hiện chưa ăn nút bấm hoặc cửa sổ chưa phản hồi.
  */
 export async function verifyActionWithDiff({
   beforeSnapshot = null,
@@ -106,6 +108,7 @@ export async function verifyActionWithDiff({
   minDiffRatio = 0.012, // 1.2% khác biệt byte ảnh là đủ chứng minh nút/giao diện đã đổi
   maxRetries = 1,
   retryFn = null,
+  fallbackMethods = [], // [{ name: "win32_click", fn: async () => ... }, { name: "physical_click", fn: async () => ... }]
 } = {}) {
   const isVerifyEnabled = envFlag("IRIS_VISUAL_VERIFY", true);
   if (!isVerifyEnabled) {
@@ -152,48 +155,65 @@ export async function verifyActionWithDiff({
     };
   }
 
-  // 4. Phát hiện thao tác chưa ăn (diff < minDiffRatio) -> Thử lại tự sửa sai (Self-Healing)
-  if (typeof retryFn === "function" && maxRetries > 0) {
+  // 4. Phát hiện thao tác chưa ăn (diff < minDiffRatio) -> Kích hoạt Multi-Method Visual Self-Healing
+  const healingChain = Array.isArray(fallbackMethods) && fallbackMethods.length > 0
+    ? fallbackMethods
+    : (typeof retryFn === "function" && maxRetries > 0
+        ? Array.from({ length: maxRetries }, (_, idx) => ({
+            name: idx === 0 ? "retry_primary" : `retry_fallback_${idx + 1}`,
+            fn: () => retryFn(idx + 1),
+          }))
+        : []);
+
+  for (let i = 0; i < healingChain.length; i++) {
+    const step = healingChain[i];
+    const methodName = step?.name || `attempt_${i + 1}`;
+    const fn = typeof step === "function" ? step : step?.fn;
+    if (typeof fn !== "function") continue;
+
     emitEvent({
       type: "log",
       level: "warn",
-      message: `[VisualVerify] ⚠ Chưa thấy thay đổi sau "${label}" (diff: ${(diffRatio * 100).toFixed(2)}%). Đang tự động thử lại...`,
+      message: `[VisualVerify] ⚠ Chưa thấy thay đổi sau "${label}" (diff: ${(diffRatio * 100).toFixed(2)}%). Đang tự sửa sai lần ${i + 1}/${healingChain.length} bằng phương thức [${methodName}]...`,
     });
     emitToRenderer("hud:message", {
       title: "Tự Sửa Sai (Self-Healing)",
-      content: `⚠ Thao tác "${label}" chưa ăn nút — đang click lại...`,
+      content: `⚠ "${label}" chưa ăn nút — đang thử lại bằng [${methodName}] (${i + 1}/${healingChain.length})...`,
     });
 
     try {
-      await retryFn(1);
-      await smartSettle({ minWaitMs: 250 });
+      await fn(i + 1);
+      await smartSettle({ minWaitMs: 240 });
       const retrySnapshot = await captureRegionSnapshot(cropRectOrPoint);
       if (retrySnapshot?.buffer) {
         const retryDiff = computeBufferDiffRatio(beforeSnapshot.buffer, retrySnapshot.buffer);
+        diffRatio = retryDiff;
         if (retryDiff >= minDiffRatio) {
           const pct2 = (retryDiff * 100).toFixed(1);
           emitEvent({
             type: "log",
             level: "info",
-            message: `[VisualVerify] ✔ Thử lại thành công "${label}": Thay đổi ${pct2}%.`,
+            message: `[VisualVerify] ✔ Tự sửa sai thành công "${label}" qua [${methodName}]: Thay đổi ${pct2}%.`,
           });
           return {
             verified: true,
             diffRatio: retryDiff,
-            retries: 1,
+            retries: i + 1,
+            healing_method: methodName,
             region: retrySnapshot.cropRect,
           };
         }
       }
     } catch (retryErr) {
-      console.warn("[visual-verifier] Retry failed:", retryErr.message);
+      console.warn(`[visual-verifier] Self-healing [${methodName}] failed:`, retryErr.message);
     }
   }
 
-  // Nếu đã thử lại mà vẫn không đổi
+  // Nếu đã thử hết chuỗi phương thức mà vẫn không đổi
   return {
     verified: false,
     diffRatio,
+    retries: healingChain.length,
     warning: `Giao diện "${label}" ít thay đổi (${(diffRatio * 100).toFixed(2)}%), có thể cửa sổ chưa phản hồi hoặc click hụt.`,
     region: afterSnapshot.cropRect,
   };

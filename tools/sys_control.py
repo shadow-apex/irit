@@ -51,7 +51,8 @@ def hardware_inner_script(device, state):
     body = _HW_SCRIPTS[(device, state)]
     # Dừng ở lỗi đầu tiên; không có thiết bị nào ⇒ mã 2.
     cls = "Bluetooth" if device == "bluetooth" else "Camera,Image"
-    return (f"$ErrorActionPreference='Stop'; $d = Get-PnpDevice -Class {cls}; "
+    return (f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            f"$ErrorActionPreference='Stop'; $d = Get-PnpDevice -Class {cls}; "
             f"if (-not $d) {{ exit 2 }}; {body}; exit 0")
 
 
@@ -63,28 +64,32 @@ def _press(vk):
 
 
 def set_volume(action, level=None):
-    if level is not None:
-        downs, ups = volume_key_plan(level)
-        for _ in range(downs):
+    try:
+        if level is not None:
+            downs, ups = volume_key_plan(level)
+            for _ in range(downs):
+                _press(VK_VOLUME_DOWN)
+            for _ in range(ups):
+                _press(VK_VOLUME_UP)
+            return {"message": f"Đã đặt âm lượng ≈ {max(0, min(100, int(level)))}%."}
+        if action == "mute":
+            _press(VK_VOLUME_MUTE)
+            return {"message": "Đã bấm phím tắt tiếng.", "toggle": True,
+                    "note": "Phím mute của Windows là TOGGLE: nếu máy đang tắt tiếng thì lệnh này bật lại tiếng."}
+        if action == "unmute":
+            _press(VK_VOLUME_UP)  # bấm phím âm lượng bất kỳ sẽ bỏ tắt tiếng
             _press(VK_VOLUME_DOWN)
-        for _ in range(ups):
-            _press(VK_VOLUME_UP)
-        return {"message": f"Đã đặt âm lượng ≈ {max(0, min(100, int(level)))}%."}
-    if action == "mute":
-        _press(VK_VOLUME_MUTE)
-        return {"message": "Đã bấm phím tắt tiếng.", "toggle": True,
-                "note": "Phím mute của Windows là TOGGLE: nếu máy đang tắt tiếng thì lệnh này bật lại tiếng."}
-    if action == "unmute":
-        _press(VK_VOLUME_UP)  # bấm phím âm lượng bất kỳ sẽ bỏ tắt tiếng
-        _press(VK_VOLUME_DOWN)
-        return {"message": "Đã bỏ tắt tiếng (bấm tăng rồi giảm 1 bước)."}
-    key = VK_VOLUME_UP if action == "up" else VK_VOLUME_DOWN
-    for _ in range(5):
-        _press(key)
-    return {"message": f"Đã {'tăng' if action == 'up' else 'giảm'} âm lượng ≈ {5 * STEP_PERCENT}%."}
+            return {"message": "Đã bỏ tắt tiếng (bấm tăng rồi giảm 1 bước)."}
+        key = VK_VOLUME_UP if action == "up" else VK_VOLUME_DOWN
+        for _ in range(5):
+            _press(key)
+        return {"message": f"Đã {'tăng' if action == 'up' else 'giảm'} âm lượng ≈ {5 * STEP_PERCENT}%."}
+    except Exception as e:
+        _common.fail(f"Không thể điều chỉnh âm lượng: {e}")
 
 
 _BRIGHTNESS_PS = (
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
     "$ErrorActionPreference='Stop'; "
     "$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; "
     "if (-not $m) { exit 3 }; "
@@ -97,9 +102,18 @@ def set_brightness(level):
     level = int(level)
     if not 0 <= level <= 100:
         _common.fail("Độ sáng phải trong khoảng 0–100.")
-    env = dict(os.environ, IRIS_BRIGHTNESS=str(level))
-    r = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encode_ps(_BRIGHTNESS_PS)],
-                       capture_output=True, env=env)
+    env = dict(os.environ, IRIS_BRIGHTNESS=str(level), PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(_BRIGHTNESS_PS)],
+            capture_output=True,
+            env=env,
+            timeout=12,
+        )
+    except subprocess.TimeoutExpired:
+        _common.fail("Quá thời gian chờ khi chỉnh độ sáng màn hình.")
+    except Exception as e:
+        _common.fail(f"Lỗi thực thi chỉnh độ sáng: {e}")
     if r.returncode == 3:
         _common.fail("Màn hình này không hỗ trợ chỉnh độ sáng qua phần mềm (thường gặp ở màn hình rời).")
     if r.returncode != 0:
@@ -111,18 +125,35 @@ def toggle_hardware(device, state):
     if device == "wifi":
         if state == "on":
             _common.fail("Bật Wi-Fi tự động chưa được hỗ trợ — hãy bật bằng tay hoặc dùng wifi_manager connect.")
-        r = subprocess.run(["netsh", "wlan", "disconnect"], capture_output=True)
+        try:
+            r = subprocess.run(["netsh", "wlan", "disconnect"], capture_output=True, timeout=12)
+        except subprocess.TimeoutExpired:
+            _common.fail("Quá thời gian chờ khi ngắt kết nối Wi-Fi.")
+        except Exception as e:
+            _common.fail(f"Không thể ngắt kết nối Wi-Fi: {e}")
         if r.returncode != 0:
             _common.fail(_common.decode_bytes(r.stderr or r.stdout).strip() or "Không ngắt được Wi-Fi.")
         return {"message": "Đã ngắt kết nối Wi-Fi."}
     inner = encode_ps(hardware_inner_script(device, state))
-    outer = ("$p = Start-Process powershell -ArgumentList '-NoProfile','-EncodedCommand','" + inner + "' "
-             "-Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode")
-    r = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encode_ps(outer)], capture_output=True)
+    outer = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$p = Start-Process powershell -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','" + inner + "' "
+        "-Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(outer)],
+            capture_output=True,
+            timeout=55,
+        )
+    except subprocess.TimeoutExpired:
+        _common.fail(f"Hết thời gian chờ xác nhận quyền Administrator (UAC) khi {state} {device}.")
+    except Exception as e:
+        _common.fail(f"Lỗi khi thực thi {state} {device}: {e}")
     if r.returncode == 2:
         _common.fail(f"Không tìm thấy thiết bị {device} nào để {state}.")
     if r.returncode != 0:
-        _common.fail(f"Không {state} được {device}: người dùng từ chối UAC hoặc thiếu quyền. "
+        _common.fail(f"Không {state} được {device}: người dùng từ chối UAC hoặc thiếu quyền Administrator. "
                      + _common.decode_bytes(r.stderr).strip()[:200])
     extra = {"warning": "Đã vô hiệu hoá MỌI camera/thiết bị ảnh, kể cả webcam Iris dùng cho hand-control/vision."} \
         if (device == "camera" and state == "off") else {}
@@ -143,24 +174,27 @@ def build_parser():
 if __name__ == "__main__":
     _common.ensure_utf8()
     a = build_parser().parse_args()
-    results = []
-    if a.volume_level is not None:
-        results.append(set_volume(None, a.volume_level))
-    elif a.volume:
-        results.append(set_volume(a.volume))
-    if a.brightness is not None:
-        results.append(set_brightness(a.brightness))
-    if a.wifi:
-        results.append(toggle_hardware("wifi", a.wifi))
-    if a.bluetooth:
-        results.append(toggle_hardware("bluetooth", a.bluetooth))
-    if a.camera:
-        results.append(toggle_hardware("camera", a.camera))
-    if not results:
-        _common.fail("Chỉ định ít nhất một tuỳ chọn (--volume, --volume-level, --brightness, --wifi, --bluetooth, --camera).")
-    merged = {"message": " ".join(r["message"] for r in results)}
-    for r in results:
-        for k, v in r.items():
-            if k != "message":
-                merged[k] = v
-    _common.emit(True, **merged)
+    try:
+        results = []
+        if a.volume_level is not None:
+            results.append(set_volume(None, a.volume_level))
+        elif a.volume:
+            results.append(set_volume(a.volume))
+        if a.brightness is not None:
+            results.append(set_brightness(a.brightness))
+        if a.wifi:
+            results.append(toggle_hardware("wifi", a.wifi))
+        if a.bluetooth:
+            results.append(toggle_hardware("bluetooth", a.bluetooth))
+        if a.camera:
+            results.append(toggle_hardware("camera", a.camera))
+        if not results:
+            _common.fail("Chỉ định ít nhất một tuỳ chọn (--volume, --volume-level, --brightness, --wifi, --bluetooth, --camera).")
+        merged = {"message": " ".join(r["message"] for r in results)}
+        for r in results:
+            for k, v in r.items():
+                if k != "message":
+                    merged[k] = v
+        _common.emit(True, **merged)
+    except Exception as e:
+        _common.fail(str(e))

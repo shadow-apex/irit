@@ -84,6 +84,7 @@ def check_autocad_status():
             stderr=subprocess.DEVNULL,
             encoding="utf-8",
             errors="ignore",
+            timeout=8,
         )
         for line in out.strip().splitlines():
             line = line.strip()

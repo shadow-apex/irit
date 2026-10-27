@@ -11,6 +11,7 @@ import { mainWindow, enterHud } from "./window-manager.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { emitEvent } from "./events.mjs";
 import { getAllGeminiKeys, getGenAiClient, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
+import { quickReminderTool } from "./local-tools.mjs";
 
 // Đọc env LÚC GỌI (không ở cấp module — P-03): .env/Settings có thể nạp/đổi model sau khi module được import.
 const getMeetingCandidateModels = () => Array.from(
@@ -307,10 +308,15 @@ async function transcribeSingleWavChunk(fallbackAi, chunk, chunkIdx, totalChunks
                   ? `\n- LƯU Ý: Đoạn âm thanh này bắt đầu từ mốc thời gian [${formatMMSS(chunk.startSec)}] của cuộc họp.`
                   : "";
 
+              let diarizationHint = "\n- TÁCH BIỆT NGƯỜI NÓI (Speaker Diarization): File âm thanh được thu Stereo 2 kênh: Kênh Trái (Left) ưu tiên giọng Mic của người dùng [Người nói 1 (Bạn)], Kênh Phải (Right) ưu tiên âm thanh hệ thống của đối tác [Người nói 2, Người nói 3...]. Hãy lắng nghe âm sắc và vị trí kênh để gán nhãn chính xác (ví dụ: [00:05] Người nói 1 (Bạn): ... / [00:12] Người nói 2: ...).";
+              if (chunk.diarizationText) {
+                diarizationHint += `\n- Gợi ý mốc thời gian người nói từ cảm biến kênh âm thanh:\n${chunk.diarizationText}`;
+              }
+
               const transResponse = await generateMeetingContent(ai, {
                 contents: [
                   { fileData: { fileUri: uploadResult.uri, mimeType: uploadResult.mimeType || "audio/wav" } },
-                  `Bạn là chuyên gia gỡ băng ghi âm cuộc họp. Hãy nghe thật kỹ file âm thanh này và xuất ra toàn bộ bản ghi lời thoại (transcript) chi tiết bằng tiếng Việt.\n- Giữ nguyên toàn bộ nội dung thảo luận, không tóm tắt hay cắt xén lời thoại ở bước này.\n- Phân đoạn rõ ràng theo mốc thời gian hoặc người nói nếu nhận diện được (ví dụ: [00:05] Người nói 1: ...).\n- Ghi lại trung thực các ý kiến, tranh luận và số liệu được nêu trong cuộc họp.${timeOffsetHint}`,
+                  `Bạn là chuyên gia gỡ băng ghi âm cuộc họp đa phương thức (Speaker Diarization). Hãy nghe thật kỹ file âm thanh này và xuất ra toàn bộ bản ghi lời thoại (transcript) chi tiết bằng tiếng Việt (giữ nguyên thuật ngữ chuyên ngành tiếng Anh nếu có).\n- Giữ nguyên toàn bộ nội dung thảo luận, không tóm tắt hay cắt xén lời thoại ở bước này.\n- Phân đoạn rõ ràng theo mốc thời gian và tách biệt từng người nói (Speaker Diarization: Người nói 1, Người nói 2...).\n- Ghi lại trung thực các ý kiến, tranh luận, số liệu, việc cần làm (To-Do) và hạn chót (Deadline) được nêu trong cuộc họp.${timeOffsetHint}${diarizationHint}`,
                 ],
               });
 
@@ -380,7 +386,7 @@ export async function toggleMeetingRecording() {
     isToggling = true;
     try {
       const pythonPath = resolvePythonCommand();
-      const scriptPath = path.join(unpackedRepoRoot(), "sidecar", "meeting_recorder.py");
+      const scriptPath = path.join(unpackedRepoRoot(), "assets", "sidecar", "meeting_recorder.py");
       meetingWavPath = buildMeetingWavPath();
 
       let stderrTail = "";
@@ -529,8 +535,28 @@ export async function processMeetingSummarization(wavPath) {
     }
 
     if (!transcript) {
-      sendHudStatus("Meeting Summarizer", "🎙️ Đang gỡ băng âm thanh cuộc họp qua Gemini...");
+      sendHudStatus("Meeting Summarizer", "🎙️ Đang gỡ băng âm thanh cuộc họp (Speaker Diarization) qua Gemini...");
       const wavChunks = await splitWavIntoChunks(wavPath, MAX_AUDIO_CHUNK_SECONDS);
+
+      // Đọc metadata Speaker Diarization từ sidecar (nếu có) để gán gợi ý người nói cho từng phân đoạn
+      let diarSegments = [];
+      const diarPath = wavPath.replace(/\.wav$/i, "_diarization.json");
+      if (fs.existsSync(diarPath)) {
+        try {
+          const parsedDiar = JSON.parse(fs.readFileSync(diarPath, "utf8"));
+          if (Array.isArray(parsedDiar?.segments)) diarSegments = parsedDiar.segments;
+        } catch {}
+      }
+      for (const ch of wavChunks) {
+        const matchingSegs = diarSegments
+          .filter((s) => s.end_sec >= ch.startSec && s.start_sec <= ch.endSec)
+          .slice(0, 40)
+          .map((s) => `[${formatMMSS(s.start_sec)}-${formatMMSS(s.end_sec)}] ${s.speaker}`);
+        if (matchingSegs.length > 0) {
+          ch.diarizationText = matchingSegs.join(", ");
+        }
+      }
+
       const transcriptParts = [];
 
       for (let i = 0; i < wavChunks.length; i++) {
@@ -604,9 +630,17 @@ export async function processMeetingSummarization(wavPath) {
       engineUsed = "Gemini Flash";
     }
 
-    // --- BƯỚC 3: Lưu file tóm tắt Markdown và gửi hiển thị ---
+    // --- BƯỚC 3: Trích xuất Action Items, đồng bộ vào Quick Reminder và xuất biên bản Markdown + HTML/PDF ---
+    const actionItems = extractActionItemsFromSummary(summary);
+    const syncedReminders = await syncActionItemsToReminders(actionItems);
+
     const summaryPath = wavPath.replace(/\.wav$/i, "_summary.md");
-    const summaryContent = `# Tóm Tắt Cuộc Họp\n\n- Thời gian: ${new Date().toLocaleString("vi-VN")}\n- Động cơ tóm tắt: ${engineUsed}\n- File ghi âm: ${wavPath}\n- Bản ghi lời thoại (Transcript): ${transcriptPath}\n\n${summary}`;
+    const htmlPdfPath = wavPath.replace(/\.wav$/i, "_minutes.html");
+    const nowStr = new Date().toLocaleString("vi-VN");
+    const reminderNote = syncedReminders.length > 0
+      ? `\n- Đồng bộ Nhắc việc (Iris Quick Reminder): Đã tự động tạo ${syncedReminders.length} nhắc nhở công việc.`
+      : "";
+    const summaryContent = `# Tóm Tắt Cuộc Họp\n\n- Thời gian: ${nowStr}\n- Động cơ tóm tắt: ${engineUsed}\n- File ghi âm: ${wavPath}\n- Bản ghi lời thoại (Transcript): ${transcriptPath}${reminderNote}\n\n${summary}`;
 
     try {
       fs.writeFileSync(summaryPath, summaryContent, "utf8");
@@ -614,20 +648,41 @@ export async function processMeetingSummarization(wavPath) {
       console.warn("[MeetingRecorder] Không thể lưu file tóm tắt:", saveErr);
     }
 
-    sendHudStatus(`Tóm tắt cuộc họp (${engineUsed})`, summary);
+    try {
+      const htmlContent = buildPrintableMinutesHtml({
+        dateStr: nowStr,
+        engineUsed,
+        wavPath,
+        transcriptPath,
+        summaryMarkdown: summary,
+        actionItems,
+        syncedReminders,
+      });
+      fs.writeFileSync(htmlPdfPath, htmlContent, "utf8");
+    } catch (htmlErr) {
+      console.warn("[MeetingRecorder] Không thể xuất file biên bản HTML/PDF:", htmlErr);
+    }
+
+    const hudSummary = syncedReminders.length > 0
+      ? `${summary}\n\n---\n⏰ **Đã tự động đồng bộ ${syncedReminders.length} đầu việc (Action Items) vào hệ thống Nhắc việc của Iris!**`
+      : summary;
+    sendHudStatus(`Tóm tắt cuộc họp (${engineUsed})`, hudSummary);
 
     emitEvent({
       type: "log",
       level: "info",
-      message: `Đã hoàn thành tóm tắt cuộc họp (${engineUsed}) -> ${summaryPath}`,
+      message: `Đã hoàn thành tóm tắt cuộc họp (${engineUsed}) -> ${summaryPath} (${actionItems.length} Action Items, ${syncedReminders.length} reminders synced)`,
     });
 
     return {
       status: "success",
-      message: `Đã tạo bản tóm tắt cuộc họp thành công bằng ${engineUsed}.`,
+      message: `Đã tạo bản tóm tắt cuộc họp thành công bằng ${engineUsed} (${actionItems.length} đầu việc, đã đồng bộ ${syncedReminders.length} nhắc nhở).`,
       wav_path: wavPath,
       transcript_path: transcriptPath,
       summary_path: summaryPath,
+      html_pdf_path: htmlPdfPath,
+      action_items: actionItems,
+      synced_reminders: syncedReminders,
       summary,
       engine: engineUsed,
     };
@@ -1024,6 +1079,192 @@ export function listMeetingHistory() {
   }
 
   return history;
+}
+
+/**
+ * Ước lượng số phút hẹn nhắc việc từ chuỗi Deadline tiếng Việt/Anh trong bảng Action Items.
+ */
+export function estimateReminderMinutesFromDeadline(deadlineStr = "") {
+  const s = String(deadlineStr || "").trim().toLowerCase();
+  if (!s) return 60;
+  const minMatch = s.match(/(\d+)\s*(?:phút|min|p\b)/i);
+  if (minMatch) return Math.max(1, Math.min(10080, Number(minMatch[1])));
+  const hourMatch = s.match(/(\d+)\s*(?:giờ|tiếng|h\b|hour)/i);
+  if (hourMatch) return Math.max(5, Math.min(10080, Number(hourMatch[1]) * 60));
+  if (/ngay lập tức|gấp|urgent|asap/i.test(s)) return 15;
+  if (/hôm nay|chiều nay|tối nay|today|tonight|eod/i.test(s)) return 120;
+  if (/ngày mai|sáng mai|tomorrow/i.test(s)) return 720;
+  if (/tuần này|cuối tuần|this week/i.test(s)) return 1440;
+  return 60;
+}
+
+/**
+ * Tự động trích xuất danh sách To-Do List & Action Items (ai làm gì, deadline khi nào)
+ * từ bản tóm tắt Markdown của cuộc họp.
+ */
+export function extractActionItemsFromSummary(summaryMarkdown = "") {
+  const text = String(summaryMarkdown || "");
+  if (!text.trim()) return [];
+
+  const items = [];
+  const lines = text.split(/\r?\n/);
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line.startsWith("|") || !line.endsWith("|")) continue;
+    const cells = line
+      .slice(1, -1)
+      .split("|")
+      .map((c) => c.trim().replace(/\*\*/g, ""));
+
+    if (cells.length < 2) continue;
+    // Bỏ qua dòng tiêu đề bảng và dòng gạch ngang phân cách (| --- | --- |)
+    if (cells.every((c) => /^[-:\s]+$/.test(c))) continue;
+    const firstLower = cells[0].toLowerCase();
+    const secondLower = (cells[1] || "").toLowerCase();
+    if (
+      firstLower === "stt" ||
+      firstLower === "#" ||
+      secondLower.includes("công việc cần làm") ||
+      secondLower.includes("action item") ||
+      secondLower.includes("nhiệm vụ")
+    ) {
+      continue;
+    }
+
+    const isNumberedFirstCol = /^\d+$/.test(cells[0]);
+    const task = isNumberedFirstCol ? (cells[1] || "") : (cells[0] || "");
+    const assignee = isNumberedFirstCol ? (cells[2] || "Chưa gán") : (cells[1] || "Chưa gán");
+    const deadline = isNumberedFirstCol ? (cells[3] || "Sớm nhất") : (cells[2] || "Sớm nhất");
+    const priority = isNumberedFirstCol ? (cells[4] || "Trung bình") : (cells[3] || "Trung bình");
+
+    const cleanTask = task.trim();
+    if (
+      !cleanTask ||
+      cleanTask.length < 3 ||
+      /^(?:không có|chưa có|n\/a|none|-)$/i.test(cleanTask)
+    ) {
+      continue;
+    }
+
+    const cleanOwner = assignee.trim() || "Chưa gán";
+    items.push({
+      index: items.length + 1,
+      task: cleanTask,
+      assignee: cleanOwner,
+      owner: cleanOwner,
+      deadline: deadline.trim() || "Sớm nhất",
+      priority: priority.trim() || "Trung bình",
+      minutes: estimateReminderMinutesFromDeadline(deadline),
+    });
+  }
+
+  return items;
+}
+
+/**
+ * Tự động đồng bộ các đầu việc (Action Items) tìm được từ cuộc họp vào hệ thống nhắc nhở của Iris (`quickReminderTool`).
+ */
+export async function syncActionItemsToReminders(actionItems = []) {
+  if (!Array.isArray(actionItems) || actionItems.length === 0) return [];
+  const autoSync = String(process.env.IRIS_MEETING_AUTO_REMINDERS ?? "1").trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(autoSync)) return [];
+
+  const synced = [];
+  for (const item of actionItems.slice(0, 10)) {
+    try {
+      const title = `[Action Item] ${item.task.slice(0, 60)}`;
+      const message = `Phụ trách: ${item.assignee} | Hạn chót: ${item.deadline} — ${item.task}`;
+      const res = await quickReminderTool({
+        action: "schedule",
+        minutes: item.minutes || 60,
+        title,
+        message,
+      });
+      if (res && res.status === "success") {
+        synced.push({
+          id: res.reminder?.id || null,
+          task: item.task,
+          assignee: item.assignee,
+          deadline: item.deadline,
+          minutes: item.minutes || 60,
+        });
+      }
+    } catch (err) {
+      console.warn("[MeetingRecorder] Lỗi đồng bộ Action Item vào quick_reminder:", err.message);
+    }
+  }
+  return synced;
+}
+
+/**
+ * Xuất biên bản cuộc họp định dạng HTML chuyên nghiệp (tối ưu chuẩn in PDF / Print-to-PDF).
+ */
+export function buildPrintableMinutesHtml(optionsOrMarkdown = {}, maybeDateStr = "") {
+  const opts =
+    typeof optionsOrMarkdown === "string"
+      ? { summaryMarkdown: optionsOrMarkdown, dateStr: maybeDateStr, actionItems: extractActionItemsFromSummary(optionsOrMarkdown) }
+      : optionsOrMarkdown || {};
+  const {
+    dateStr = "",
+    engineUsed = "",
+    wavPath = "",
+    summaryMarkdown = "",
+    actionItems = [],
+    syncedReminders = [],
+  } = opts;
+  const esc = (s) =>
+    String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  const actionRows = actionItems
+    .map(
+      (it) =>
+        `<tr><td>${it.index}</td><td><strong>${esc(it.task)}</strong></td><td>${esc(it.assignee)}</td><td>${esc(it.deadline)}</td></tr>`
+    )
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Biên Bản Cuộc Họp — Iris Smart Meeting Minutes</title>
+  <style>
+    body { font-family: "Segoe UI", Roboto, Arial, sans-serif; color: #1e293b; max-width: 860px; margin: 32px auto; padding: 0 24px; line-height: 1.6; }
+    h1 { color: #0f172a; border-bottom: 2px solid #0ea5e9; padding-bottom: 10px; }
+    .meta { background: #f8fafc; border-left: 4px solid #0ea5e9; padding: 12px 16px; border-radius: 6px; margin-bottom: 24px; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; }
+    th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; font-size: 14px; }
+    th { background: #f1f5f9; color: #0f172a; }
+    pre.md { white-space: pre-wrap; font-family: inherit; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; }
+    .print-btn { background: #0284c7; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; float: right; }
+    @media print { .print-btn { display: none; } body { margin: 0; max-width: 100%; } }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">🖨️ Xuất PDF / In biên bản</button>
+  <h1>📋 BIÊN BẢN CUỘC HỌP (IRIS AI MINUTES)</h1>
+  <div class="meta">
+    <div><strong>Thời gian:</strong> ${esc(dateStr)}</div>
+    <div><strong>Động cơ AI:</strong> ${esc(engineUsed)}</div>
+    <div><strong>File ghi âm gốc:</strong> ${esc(wavPath)}</div>
+    <div><strong>Nhắc việc tự động (Quick Reminders):</strong> Đã đồng bộ ${syncedReminders.length}/${actionItems.length} đầu việc</div>
+  </div>
+  ${
+    actionItems.length > 0
+      ? `<h2>✅ Bảng Kế Hoạch Hành Động (Action Items & To-Do List)</h2>
+  <table>
+    <thead><tr><th>STT</th><th>Công việc cần làm</th><th>Người phụ trách</th><th>Hạn chót (Deadline)</th></tr></thead>
+    <tbody>${actionRows}</tbody>
+  </table>`
+      : ""
+  }
+  <h2>📝 Nội Dung Chi Tiết Biên Bản</h2>
+  <pre class="md">${esc(summaryMarkdown)}</pre>
+</body>
+</html>`;
 }
 
 

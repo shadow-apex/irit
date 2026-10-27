@@ -326,10 +326,12 @@ def launch_app(query, extra_args=None):
     if _common.is_windows():
         try:
             ps_script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                "$OutputEncoding = [System.Text.Encoding]::UTF8; "
                 "Get-StartApps | Where-Object { $_.Name -like ('*' + $env:IRIS_APP_QUERY + '*') } "
                 "| Select-Object -First 1 -Property Name, AppID | ConvertTo-Json -Compress"
             )
-            env = dict(os.environ)
+            env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
             env["IRIS_APP_QUERY"] = low_no_exe
             proc = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script],

@@ -5,7 +5,7 @@
  * meeting recorder) that run alongside the Electron main process.
  */
 import { spawn, spawnSync } from "node:child_process";
-import path from "node:path";
+import { killTree } from "./process-utils.mjs";
 
 // BUGFIX-SIDECAR-PYCMD-01: xem ghi chú đầy đủ ở spawnSidecar() bên dưới.
 // Dò lệnh Python đúng cho máy hiện tại MỘT LẦN, đồng bộ, trước khi spawn thật
@@ -39,21 +39,17 @@ export function resolvePythonCommand() {
   return candidates[0];
 }
 
-// BUGFIX-SIDECAR-PYCMD-01: cả 2 caller (meeting-recording.mjs cho Alt+M,
-// teleprompter.mjs cho Alt+T) từng gọi cứng `pythonPath = "python"`. Trên
-// nhiều máy Linux và macOS hiện đại (Python cài qua Homebrew/python.org bản
-// mới), PATH chỉ có `python3`, không có `python` — spawn ENOENT ngay lập
-// tức, sidecar "chết" trong im lặng (chỉ console.error, người dùng app đóng
-// gói không bao giờ thấy dòng đó), trong khi HUD vẫn đứng yên ở "Đang khởi
-// động...". Alt+T/Alt+M vì vậy có vẻ "bấm không có phản ứng gì" trên các máy
-// đó. Sửa ở 2 chỗ:
-//   1. Caller giờ dùng resolvePythonCommand() (dò 1 lần, đồng bộ) thay vì
-//      chuỗi cứng "python".
-//   2. Nếu spawn vẫn ENOENT (vd người dùng chưa cài Python 3 gì cả), gọi
-//      opts.onFatalError(message) để caller đẩy lỗi tiếng Việt rõ ràng lên
-//      HUD, thay vì để người dùng chờ vô thời hạn không rõ vì sao.
+function cleanupSidecarStreams(proc) {
+  if (!proc) return;
+  for (const s of [proc.stdin, proc.stdout, proc.stderr]) {
+    if (!s) continue;
+    try { s.removeAllListeners(); } catch { /* ignore */ }
+    try { if (!s.destroyed) s.destroy(); } catch { /* ignore */ }
+  }
+}
+
 export function spawnSidecar(pythonPath, args, opts = {}) {
-  const env = { ...process.env, PYTHONIOENCODING: "utf-8", ...(opts.env || {}) };
+  const env = { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", ...(opts.env || {}) };
   const proc = spawn(pythonPath, args, { ...opts, env });
   const handle = { proc, state: "starting", exitCode: null };
 
@@ -88,23 +84,30 @@ export function spawnSidecar(pythonPath, args, opts = {}) {
 
 /**
  * Dừng process an toàn: gửi "stop" qua stdin, đợi tối đa timeoutMs,
- * nếu không thoát thì force-kill. Luôn resolve (không bao giờ treo
- * vô hạn), và chặn race vì caller phải await xong mới được start lại.
+ * nếu không thoát thì force-kill cả cây tiến trình. Luôn resolve (không bao giờ treo
+ * vô hạn), dọn sạch stdio pipes và chặn race vì caller phải await xong mới được start lại.
  */
 export function stopSidecar(handle, { timeoutMs = 3000 } = {}) {
   return new Promise((resolve) => {
-    if (!handle || handle.state === "dead") return resolve();
+    if (!handle || handle.state === "dead") {
+      cleanupSidecarStreams(handle?.proc);
+      return resolve();
+    }
 
     handle.state = "stopping";
     const proc = handle.proc;
 
     const killTimer = setTimeout(() => {
-      console.warn("[sidecar] không thoát kịp sau stop, force kill");
-      try { proc.kill("SIGKILL"); } catch (e) { /* ignore */ }
+      console.warn("[sidecar] không thoát kịp sau stop, force kill tree");
+      try { killTree(proc); } catch { /* ignore */ }
+      try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+      cleanupSidecarStreams(proc);
+      resolve();
     }, timeoutMs);
 
     proc.once("exit", () => {
       clearTimeout(killTimer);
+      cleanupSidecarStreams(proc);
       resolve();
     });
 

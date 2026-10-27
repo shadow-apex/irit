@@ -15,6 +15,7 @@ import { enterHud } from "./window-manager.mjs";
 import { ai } from "./gemini-live.mjs";
 import { userDataDir, unpackedRepoRoot } from "./paths.mjs";
 import { grabPrimaryScreenJpeg, getVisionSnapMode } from "./vision.mjs";
+import { activeWindowInfoTool } from "./local-tools.mjs";
 import { getAllGeminiKeys, getGenAiClient, getNextGeminiKey, withGeminiFailover, isRateLimitError } from "./gemini-keys.mjs";
 import { getMeetingState } from "./meeting-recording.mjs";
 import { envFlag } from "./env-config.mjs";
@@ -58,13 +59,7 @@ export let translateTargetLang = "";
 export let liveTranslations = []; // song song với liveTranscripts, tối đa 3 dòng gần nhất
 export let currentStreamingTranslation = ""; // hiển thị realtime khi dịch
 export let allSessionTranscripts = []; // Toàn bộ lịch sử hội thoại trong phiên để tự động xuất biên bản Markdown
-
-async function getGenAi(apiKey) {
-  const client = getGenAiClient(apiKey);
-  if (client) return client;
-  if (ai) return ai;
-  return null;
-}
+export let liveBulletPoints = []; // Tóm tắt ý chính theo thời gian thực (Real-time Bullet Points)
 
 export async function getGeminiVisionClient(apiKey) {
   const key = (
@@ -167,6 +162,9 @@ export function updateTeleprompterHud() {
       content += `\n\n🌐 [Dịch sang ${translateTargetLang || "ngôn ngữ đích"}]:\n` + t.join("\n");
     }
   }
+  if (Array.isArray(liveBulletPoints) && liveBulletPoints.length > 0) {
+    content += `\n\n📌 [Ý chính thời gian thực]:\n` + liveBulletPoints.map((b) => `• ${b}`).join("\n");
+  }
   // Nhắc bài không còn ghi đè vào `content` dạng text (dòng đơn, dễ mất) —
   // gửi copilotHistory/copilotStatus như dữ liệu có cấu trúc riêng,
   // HudShell tự render thành bảng cuộn được, giữ nguyên toàn bộ lịch sử
@@ -182,6 +180,8 @@ export function updateTeleprompterHud() {
         translateTargetLang,
         copilotEnabled,
         transcriptCount: allSessionTranscripts.length,
+        bulletCount: Array.isArray(liveBulletPoints) ? liveBulletPoints.length : 0,
+        liveBulletPoints: Array.isArray(liveBulletPoints) ? liveBulletPoints : [],
       },
     });
   } catch (err) {
@@ -254,6 +254,14 @@ export async function exportTeleprompterMinutes() {
   md += `- **Số câu hỏi & gợi ý:** ${copilotHistory.length}\n\n`;
   md += `---\n\n`;
 
+  if (liveBulletPoints.length > 0) {
+    md += `## 📌 TÓM TẮT Ý CHÍNH THỜI GIAN THỰC (REAL-TIME BULLET POINTS)\n\n`;
+    liveBulletPoints.forEach((b) => {
+      md += `- ${b}\n`;
+    });
+    md += `\n---\n\n`;
+  }
+
   if (copilotHistory.length > 0) {
     md += `## 💡 CÁC CÂU HỎI & GỢI Ý ĐỐI ĐÁP (COPILOT Q&A)\n\n`;
     copilotHistory.forEach((item, idx) => {
@@ -290,6 +298,75 @@ export async function exportTeleprompterMinutes() {
   };
 }
 
+let bulletSummaryInFlight = false;
+
+/**
+ * Tự động trích xuất/cập nhật các ý chính theo thời gian thực (Real-time Bullet Points)
+ * hỗ trợ song ngữ Anh - Việt cho phỏng vấn hoặc thuyết trình.
+ */
+export async function refreshRealtimeBulletPoints() {
+  if (bulletSummaryInFlight || allSessionTranscripts.length < 2) return liveBulletPoints;
+  const recentSlice = allSessionTranscripts.slice(-6).map((item) => item.text).join("\n");
+  if (!recentSlice.trim()) return liveBulletPoints;
+
+  bulletSummaryInFlight = true;
+  try {
+    const prompt =
+      "Bạn là trợ lý tóm tắt thời gian thực song ngữ Anh - Việt. Dựa trên các câu hội thoại mới nhất dưới đây, hãy trích xuất tối đa 3 gạch đầu dòng (bullet points) ngắn gọn nhất (mỗi ý không quá 16 từ) nêu bật ý chính, số liệu hoặc câu hỏi trọng tâm đang thảo luận. " +
+      "Chỉ trả về các dòng bắt đầu bằng '- ', không thêm tiêu đề hay lời dẫn.\n\n" +
+      recentSlice;
+
+    let raw = "";
+    if (getAllGeminiKeys({ purpose: "teleprompter" }).length > 0) {
+      const res = await withGeminiFailover(
+        async (apiKey) => {
+          const client = getGenAiClient(apiKey);
+          for (const m of TELEPROMPTER_CANDIDATE_MODELS) {
+            try {
+              return await client.models.generateContent({ model: m, contents: prompt });
+            } catch {
+              continue;
+            }
+          }
+          return null;
+        },
+        { purpose: "teleprompter" }
+      ).catch(() => null);
+      raw = String(res?.text || "").trim();
+    } else if (ai) {
+      const res = await ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }).catch(() => null);
+      raw = String(res?.text || "").trim();
+    }
+
+    if (raw) {
+      const bullets = raw
+        .split(/\r?\n/)
+        .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
+        .filter((l) => l.length >= 4)
+        .slice(0, 4);
+      if (bullets.length > 0) {
+        liveBulletPoints = bullets;
+        updateTeleprompterHud();
+      }
+    }
+  } catch {
+    // Bỏ qua lỗi tóm tắt nền để không ảnh hưởng luồng chính
+  } finally {
+    bulletSummaryInFlight = false;
+  }
+  return liveBulletPoints;
+}
+
+/**
+ * Kiểm tra nhanh xem lượt nói vừa rồi có phải là câu hỏi phỏng vấn / chất vấn của đối tác không
+ * để rút ngắn thời gian phản hồi Q&A Copilot.
+ */
+export function isQuestionLikeUtterance(text = "") {
+  const s = String(text || "").trim();
+  if (!s) return false;
+  if (s.includes("?")) return true;
+  return /\b(what|why|how|when|where|who|which|could you|can you|would you|tell me|explain|describe|là gì|như thế nào|tại sao|vì sao|khi nào|ở đâu|cho hỏi|giải thích|trình bày|so sánh)\b/i.test(s);
+}
 export async function toggleLiveTranscriber() {
   if (liveTranscriber && (liveTranscriber.state === "starting" || liveTranscriber.state === "stopping")) {
     return { status: "error", error: "Đang xử lý, vui lòng đợi." };
@@ -297,7 +374,7 @@ export async function toggleLiveTranscriber() {
 
   if (!liveTranscriber || liveTranscriber.state === "dead") {
     const pythonPath = resolvePythonCommand(); // BUGFIX-SIDECAR-PYCMD-01
-    const scriptPath = path.join(unpackedRepoRoot(), "sidecar", "live_transcriber.py");
+    const scriptPath = path.join(unpackedRepoRoot(), "assets", "sidecar", "live_transcriber.py");
 
     liveTranscriber = spawnSidecar(pythonPath, [scriptPath], {
       cwd: unpackedRepoRoot(),
@@ -309,6 +386,7 @@ export async function toggleLiveTranscriber() {
     });
     liveTranscripts = [];
     allSessionTranscripts = [];
+    liveBulletPoints = [];
     copilotBuffer = [];
     copilotHistory = [];
     copilotStatus = "";
@@ -352,6 +430,18 @@ export async function toggleLiveTranscriber() {
              }
              liveTranscripts.push(text);
              if (liveTranscripts.length > 3) liveTranscripts.shift();
+
+             const speakerMatch = text.match(/^\[(Bạn|Đối tác|Chung)\]/);
+             const transcriptEntry = {
+               time: new Date().toLocaleTimeString("vi-VN"),
+               speaker: speakerMatch ? speakerMatch[1] : "Chung",
+               text,
+               translation: "",
+             };
+             allSessionTranscripts.push(transcriptEntry);
+             if (allSessionTranscripts.length % 3 === 0) {
+               refreshRealtimeBulletPoints().catch(() => {});
+             }
 
              // FEAT-TELEPROMPTER-INTERVIEW-01: Dịch — mỗi dòng transcript mới
              // được dịch sang translateTargetLang ngay khi bật, độc lập với
@@ -436,6 +526,7 @@ export async function toggleLiveTranscriber() {
 
                      currentStreamingTranslation = "";
                      if (fullText.trim()) {
+                       transcriptEntry.translation = fullText.trim();
                        liveTranslations.push(fullText.trim());
                        if (liveTranslations.length > 3) liveTranslations.shift();
                        if (liveLogStream) {
@@ -453,6 +544,7 @@ export async function toggleLiveTranscriber() {
                        const translated = await callClaudeForTeleprompter(sysPrompt, userText, { maxTokens: 300 });
                        currentStreamingTranslation = "";
                        if (translated) {
+                         transcriptEntry.translation = translated;
                          liveTranslations.push(translated);
                          if (liveTranslations.length > 3) liveTranslations.shift();
                          if (liveLogStream) {
@@ -490,35 +582,49 @@ export async function toggleLiveTranscriber() {
              
              if (copilotTimer) clearTimeout(copilotTimer);
              
+             // Nếu câu vừa chốt là câu hỏi của [Đối tác] hoặc có dấu hỏi/từ để hỏi -> phản hồi tức thì (900ms), ngược lại 1800ms
+             const isPartnerQuestion = text.startsWith("[Đối tác]") && isQuestionLikeUtterance(text);
+             const debounceMs = isPartnerQuestion ? 900 : (isQuestionLikeUtterance(text) ? 1200 : 1800);
+
              copilotTimer = setTimeout(async () => {
-               // Nối bằng "\n" thay vì " " (bản cũ) để ranh giới lượt nói
-               // [Bạn]/[Đối tác] rõ ràng hơn khi Claude đọc — tránh dồn cả
-               // đoạn hội thoại thành một câu dài dính liền nhau. Chỉ đổi
-               // format prompt nội bộ, không đổi hành vi người dùng thấy.
                const contextText = copilotBuffer.join("\n");
                if (!contextText.trim()) return;
                
-               copilotStatus = "💡 Đang suy nghĩ...";
+               copilotStatus = "💡 Đang phân tích ngữ cảnh & suy nghĩ...";
                updateLiveHud();
 
+               // Tự động kết hợp ngữ cảnh màn hình (slide/tài liệu/code đang mở) với câu hỏi của đối phương
+               const autoVisionEnabled = envFlag("IRIS_COPILOT_AUTO_VISION", true);
+               let activeWinHeader = "";
+               let copilotScreenBase64 = null;
+               if (autoVisionEnabled) {
+                 try {
+                   const [winInfo, grabbed] = await Promise.all([
+                     typeof activeWindowInfoTool === "function" ? activeWindowInfoTool().catch(() => null) : Promise.resolve(null),
+                     grabPrimaryScreenJpeg(65).catch(() => null),
+                   ]);
+                   if (winInfo?.title) {
+                     activeWinHeader = `\n[Ngữ cảnh cửa sổ/tài liệu đang mở trên màn hình: "${winInfo.title}" (${winInfo.process_name || "app"})]`;
+                   }
+                   if (grabbed?.buffer && Buffer.isBuffer(grabbed.buffer)) {
+                     copilotScreenBase64 = grabbed.buffer.toString("base64");
+                   }
+                 } catch {}
+               }
+
                const systemPrompt =
-                 "Bạn là trợ lý chiến lược (Meeting Copilot) hỗ trợ tôi trong các cuộc họp hoặc đàm phán quan trọng. " +
-                 "Bạn sẽ nhận đoạn transcript gần nhất (giọng của tôi: [Bạn], giọng đối tác: [Đối tác]). " +
-                 "Nếu đối tác vừa hỏi hoặc đưa ra vấn đề cần phản hồi, hãy cung cấp ngay các luận điểm trả lời SẮC BÉN, thông minh và thuyết phục nhất. " +
-                 "Trình bày dưới dạng 1-3 gạch đầu dòng (bullet points) siêu ngắn gọn để tôi có thể liếc kính HUD và nói lại được ngay lập tức. " +
-                 "Nếu chưa có gì đáng trả lời (tôi đang tự nói hoặc chuyện phiếm), trả về đúng 1 chữ 'NONE'.";
+                 "Bạn là trợ lý chiến lược & Q&A Copilot thời gian thực hỗ trợ tôi trong phỏng vấn, thuyết trình hoặc đàm phán quan trọng (hỗ trợ song ngữ Anh - Việt mượt mà). " +
+                 "Bạn nhận được đoạn hội thoại gần nhất (giọng của tôi: [Bạn], giọng đối tác: [Đối tác]) KÈM ngữ cảnh màn hình/tài liệu đang mở (nếu có). " +
+                 "Nếu đối tác vừa hỏi (bằng tiếng Anh hoặc tiếng Việt) hoặc nêu vấn đề liên quan tới cuộc trò chuyện hay slide/tài liệu trên màn hình, hãy cung cấp ngay câu trả lời gợi ý SẮC BÉN, chính xác và thuyết phục nhất (nếu câu hỏi bằng tiếng Anh, hãy gợi ý câu trả lời tiếng Anh kèm tóm tắt ý tiếng Việt ngắn gọn). " +
+                 "Trình bày dưới dạng 1-3 gạch đầu dòng (bullet points) siêu ngắn gọn để tôi liếc HUD tàng hình và nói lại được ngay lập tức. " +
+                 "Nếu chưa có gì đáng trả lời (tôi đang tự nói hoặc chuyện phiếm), trả về đúng 1 chữ 'NONE'." +
+                 activeWinHeader;
 
                let suggestion = "";
                let engineUsed = "Claude";
                try {
-                 suggestion = await callClaudeForTeleprompter(systemPrompt, contextText, { maxTokens: 300 });
-               } catch (claudeErr) {
-                 // Chưa cấu hình IRIS_TELEPROMPTER_ANTHROPIC_KEY (hoặc lỗi mạng) ->
-                 // fallback tạm sang Gemini (đã có sẵn) để tính năng không bị câm,
-                 // đồng thời báo rõ lý do trong log để người dùng biết cần cấu hình.
-                 emitEvent({ type: "log", level: "warn", message: `Nhắc bài: gọi Claude thất bại (${claudeErr.message}), fallback sang Gemini.` });
-                 if (getAllGeminiKeys({ purpose: "teleprompter" }).length === 0 && !ai) { copilotStatus = ""; updateLiveHud(); return; }
-                 try {
+                 // Nếu có ảnh chụp slide/tài liệu màn hình và có Gemini Vision key, ưu tiên kết hợp đa phương thức (Screen + Audio Question)
+                 if (copilotScreenBase64 && (getAllGeminiKeys({ purpose: "teleprompter" }).length > 0 || ai)) {
                    const response = getAllGeminiKeys({ purpose: "teleprompter" }).length > 0
                      ? await withGeminiFailover(
                          async (apiKey) => {
@@ -528,7 +634,58 @@ export async function toggleLiveTranscriber() {
                              try {
                                return await client.models.generateContent({
                                  model: m,
-                                 contents: systemPrompt + "\n\n" + contextText,
+                                 contents: [
+                                   { inlineData: { mimeType: "image/jpeg", data: copilotScreenBase64 } },
+                                   { text: systemPrompt + "\n\nĐoạn hội thoại gần nhất:\n" + contextText },
+                                 ],
+                               });
+                             } catch (err) {
+                               lastErr = err;
+                               if (isRateLimitError(err)) continue;
+                               const errMsg = String(err?.message || "");
+                               const errStatus = err?.status ?? err?.code ?? err?.httpStatus;
+                               if (errStatus === 404 || errStatus === 400 || /no longer available|not found|404|NOT_FOUND|deprecated|is not supported|invalid argument/i.test(errMsg)) continue;
+                               throw err;
+                             }
+                           }
+                           throw lastErr || new Error("Không thể gọi Gemini Multimodal Copilot.");
+                         },
+                         { purpose: "teleprompter" }
+                       )
+                     : await ai.models.generateContent({
+                         model: "gemini-flash-latest",
+                         contents: [
+                           { inlineData: { mimeType: "image/jpeg", data: copilotScreenBase64 } },
+                           { text: systemPrompt + "\n\nĐoạn hội thoại gần nhất:\n" + contextText },
+                         ],
+                       });
+                   suggestion = (response?.text || "").trim();
+                   engineUsed = "Gemini Vision Copilot";
+                 } else {
+                   suggestion = await callClaudeForTeleprompter(systemPrompt, contextText, { maxTokens: 350 });
+                 }
+               } catch (claudeErr) {
+                 // Chưa cấu hình IRIS_TELEPROMPTER_ANTHROPIC_KEY (hoặc lỗi mạng) ->
+                 // fallback sang Gemini để tính năng luôn hoạt động
+                 emitEvent({ type: "log", level: "warn", message: `Nhắc bài: chuyển sang Gemini dự phòng (${claudeErr.message}).` });
+                 if (getAllGeminiKeys({ purpose: "teleprompter" }).length === 0 && !ai) { copilotStatus = ""; updateLiveHud(); return; }
+                 try {
+                   const contentsPayload = copilotScreenBase64
+                     ? [
+                         { inlineData: { mimeType: "image/jpeg", data: copilotScreenBase64 } },
+                         { text: systemPrompt + "\n\n" + contextText },
+                       ]
+                     : systemPrompt + "\n\n" + contextText;
+                   const response = getAllGeminiKeys({ purpose: "teleprompter" }).length > 0
+                     ? await withGeminiFailover(
+                         async (apiKey) => {
+                           const client = getGenAiClient(apiKey);
+                           let lastErr = null;
+                           for (const m of TELEPROMPTER_CANDIDATE_MODELS) {
+                             try {
+                               return await client.models.generateContent({
+                                 model: m,
+                                 contents: contentsPayload,
                                });
                              } catch (err) {
                                lastErr = err;
@@ -557,7 +714,7 @@ export async function toggleLiveTranscriber() {
                            try {
                              return await ai.models.generateContent({
                                model: m,
-                               contents: systemPrompt + "\n\n" + contextText,
+                               contents: contentsPayload,
                              });
                            } catch (err) {
                              lastErr = err;
@@ -579,7 +736,7 @@ export async function toggleLiveTranscriber() {
                          throw lastErr || new Error("Không thể gọi Gemini Copilot.");
                        })();
                    suggestion = (response?.text || "").trim();
-                   engineUsed = "Gemini (fallback)";
+                   engineUsed = copilotScreenBase64 ? "Gemini Vision (fallback)" : "Gemini (fallback)";
                  } catch (geminiErr) {
                    copilotStatus = "";
                    updateLiveHud();
@@ -605,7 +762,7 @@ export async function toggleLiveTranscriber() {
                  copilotStatus = "💡 (Đang lắng nghe...)";
                }
                updateLiveHud();
-             }, 3000);
+             }, debounceMs);
              
              updateLiveHud();
           }

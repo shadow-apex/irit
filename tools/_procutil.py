@@ -67,9 +67,14 @@ def close_processes(name, force=False):
     errors = []
     for pid in pids:
         cmd = ["taskkill", "/PID", str(pid)] + (["/F"] if force else [])
-        r = subprocess.run(cmd, capture_output=True)
-        if r.returncode != 0:
-            errors.append(decode_bytes(r.stderr or r.stdout).strip())
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=8)
+            if r.returncode != 0:
+                errors.append(decode_bytes(r.stderr or r.stdout).strip())
+        except subprocess.TimeoutExpired:
+            errors.append(f"Quá thời gian chờ taskkill cho PID {pid}")
+        except Exception as e:
+            errors.append(str(e))
     time.sleep(1.0 if pids else 0)
     alive = set(find_pids(exe))
     remaining = len([p for p in pids if p in alive])

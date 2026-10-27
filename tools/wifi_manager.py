@@ -82,8 +82,13 @@ def validate_ssid(ssid):
 
 
 def _run(args):
-    r = subprocess.run(["netsh"] + args, capture_output=True)
-    return r.returncode, _common.decode_bytes(r.stdout), _common.decode_bytes(r.stderr)
+    try:
+        r = subprocess.run(["netsh"] + args, capture_output=True, timeout=15)
+        return r.returncode, _common.decode_bytes(r.stdout), _common.decode_bytes(r.stderr)
+    except subprocess.TimeoutExpired:
+        return 1, "", "Lệnh netsh chạy quá thời gian chờ."
+    except Exception as e:
+        return 1, "", str(e)
 
 
 def build_parser():

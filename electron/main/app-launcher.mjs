@@ -137,7 +137,7 @@ export async function closeAppTarget(target, deps) {
       deps.run ||
       ((file, args) =>
         new Promise((resolve, reject) =>
-          execFile(file, args, { windowsHide: true }, (err) => (err ? reject(err) : resolve())),
+          execFile(file, args, { windowsHide: true, timeout: 10000 }, (err) => (err ? reject(err) : resolve())),
         ));
     await run("taskkill", ["/F", "/IM", procName]);
     return { success: true };

@@ -38,6 +38,7 @@ export function installedAgentFile(agent, cwd) {
 
 export function personasSourceDir() {
   const candidates = [
+    path.join(repoRoot, "assets", "resources", "personas"),
     path.join(repoRoot, "resources", "personas"),
     process.resourcesPath ? path.join(process.resourcesPath, "personas") : null,
   ];
@@ -45,10 +46,11 @@ export function personasSourceDir() {
 }
 
 // Ported from myiris: the second-brain capability's vendored wiki-*
-// skill bundle (resources/skills/claude-skills/wiki-*), same dev/packaged
+// skill bundle (assets/resources/skills/claude-skills/wiki-*), same dev/packaged
 // dual-location pattern as personasSourceDir() above.
 export function skillsSourceDir() {
   const candidates = [
+    path.join(repoRoot, "assets", "resources", "skills"),
     path.join(repoRoot, "resources", "skills"),
     process.resourcesPath ? path.join(process.resourcesPath, "skills") : null,
   ];

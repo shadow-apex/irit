@@ -52,7 +52,12 @@ if __name__ == "__main__":
         sys.exit(0)
     elif a.action in ("shutdown", "restart"):
         flag = "/s" if a.action == "shutdown" else "/r"
-        r = subprocess.run(["shutdown", flag, "/t", str(SHUTDOWN_DELAY_SECONDS)], capture_output=True)
+        try:
+            r = subprocess.run(["shutdown", flag, "/t", str(SHUTDOWN_DELAY_SECONDS)], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            _common.fail("Lệnh shutdown chạy quá thời gian chờ.")
+        except Exception as e:
+            _common.fail(f"Lỗi thực thi lệnh nguồn: {e}")
         if r.returncode != 0:
             _common.fail(_common.decode_bytes(r.stderr or r.stdout).strip() or "Lệnh shutdown thất bại.")
         _common.emit(True, message=f"Máy sẽ {'tắt' if a.action == 'shutdown' else 'khởi động lại'} sau "

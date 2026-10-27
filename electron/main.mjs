@@ -318,7 +318,7 @@ app.whenReady().then(() => {
   ipcMain.handle("companion:get-ice-servers", () => getIceServers());
   ipcMain.handle("companion:get-phone-cam-url", () => {
     try {
-      const p = path.join(__dirname, "../PHONE_CAMERA/.url");
+      const p = path.join(__dirname, "../assets/PHONE_CAMERA/.url");
       return fs.existsSync(p) ? fs.readFileSync(p, "utf-8").trim() : null;
     } catch (e) {
       return null;

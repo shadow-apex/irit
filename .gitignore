@@ -8,6 +8,9 @@ release/
 __pycache__/
 *.pyc
 *.log
+.omni_token
+.iris-data/
+assets/sidecar/runtime/
 sidecar/runtime/
 roadmap.md
 .env_test*
@@ -21,14 +24,17 @@ smarthome_cameras.json
 tools/*.png
 tools/img/
 **/screenshots/
+assets/PHONE_CAMERA/cert/
 PHONE_CAMERA/cert/
 
 # Firmware: token điều khiển (F-01)
 secrets.h
 **/secrets.yaml
 
-# MediaPipe asset cục bộ (sinh bởi scripts/prepare-mediapipe.mjs)
+# MediaPipe asset cục bộ (sinh bởi assets/scripts/prepare-mediapipe.mjs)
+assets/public/mediapipe/
 public/mediapipe/
 
-# ONNX Runtime WASM tu host (sinh boi scripts/prepare-ort.mjs)
+# ONNX Runtime WASM tu host (sinh boi assets/scripts/prepare-ort.mjs)
+assets/public/ort/
 public/ort/

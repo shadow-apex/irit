@@ -28,6 +28,8 @@ if __name__ == "__main__":
     pg.FAILSAFE = False
     try:
         pg.hotkey(*HOTKEYS[a.action][0])
+    except PermissionError as e:
+        _common.fail(f"Không đủ quyền gửi tổ hợp phím hệ thống (cửa sổ đích có thể đang chạy quyền Administrator): {e}")
     except Exception as e:  # noqa: BLE001
-        _common.fail(str(e))
+        _common.fail(f"Không thể thực hiện thao tác màn hình ảo '{a.action}': {e}")
     _common.emit(True, message=HOTKEYS[a.action][1])

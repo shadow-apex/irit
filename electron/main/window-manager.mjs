@@ -27,10 +27,6 @@ export function getMainWindow() {
   return mainWindow;
 }
 
-// Unused in the original monolithic main.mjs (kept as-is across the split —
-// see CLAUDE.md "keep old logic working exactly as before").
-let privacyCamEnabled = false;
-let privacyWindow = null;
 let hudStatsInterval = null; // Guard: chi tao mot interval duy nhat, tat duoc khi quit
 
 export function stopHudStatsInterval() {

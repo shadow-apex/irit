@@ -49,9 +49,11 @@ if __name__ == "__main__":
         _common.fail(str(e))
     n = max(1, min(a.max, MAX_RESULTS))
     try:
-        r = subprocess.run(["es.exe", "-n", str(n), q], capture_output=True, check=False)
+        r = subprocess.run(["es.exe", "-n", str(n), q], capture_output=True, check=False, timeout=10)
     except FileNotFoundError:
         _common.fail("Không tìm thấy 'es.exe'. Tải Everything CLI từ voidtools.com và thêm vào PATH.")
+    except subprocess.TimeoutExpired:
+        _common.fail("Quá thời gian chờ tìm kiếm với Everything CLI (es.exe).")
     except Exception as e:  # noqa: BLE001
         _common.fail(str(e))
     if r.returncode != 0:

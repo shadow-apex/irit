@@ -16,6 +16,7 @@ tools/filesystem_ops.py — Quản lý File & Thư mục toàn diện trên máy
 Hỗ trợ shortcut thư mục (desktop, downloads, documents, pictures, videos, music, home, temp, appdata)
 và biến môi trường (%USERPROFILE%, ~).
 """
+import errno
 import hashlib
 import os
 import shutil
@@ -46,6 +47,31 @@ def _check_safe_modify(resolved_path):
         _common.fail(f"Đường dẫn hệ thống tối quan trọng được bảo vệ, từ chối sửa/xoá: {resolved_path}")
 
 
+def _format_fs_error(err, target_path=""):
+    """Chuẩn hoá lỗi khoá file (WinError 32) và lỗi từ chối quyền Admin (WinError 5 / PermissionError) sang tiếng Việt rõ ràng."""
+    winerr = getattr(err, "winerror", None)
+    err_no = getattr(err, "errno", None)
+    p_info = f" '{target_path}'" if target_path else ""
+    if winerr == 32 or err_no == errno.EBUSY:
+        return f"Tệp hoặc thư mục{p_info} đang bị khoá bởi một ứng dụng khác đang mở. Hãy đóng ứng dụng đó rồi thử lại."
+    if isinstance(err, PermissionError) or winerr == 5 or err_no in (errno.EACCES, errno.EPERM):
+        return f"Không đủ quyền truy cập hoặc quyền Administrator bị từ chối khi thao tác với{p_info}: {err}"
+    return str(err)
+
+
+def _handle_remove_readonly(func, path, exc_info):
+    """Xử lý file Read-Only khi xoá thư mục bằng shutil.rmtree trên Windows."""
+    exc = exc_info[1] if isinstance(exc_info, tuple) else exc_info
+    if isinstance(exc, PermissionError) or getattr(exc, "errno", None) == errno.EACCES:
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+            return
+        except Exception:
+            pass
+    raise exc
+
+
 def list_dir(raw_path, limit=100):
     p = resolve_target_path(raw_path)
     if not os.path.exists(p):
@@ -57,8 +83,8 @@ def list_dir(raw_path, limit=100):
     try:
         with os.scandir(p) as it:
             entries = list(it)
-    except PermissionError:
-        _common.fail(f"Không có quyền truy cập thư mục: {p}")
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
 
     # Sắp xếp thư mục lên trước, sau đó theo tên
     entries.sort(key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
@@ -95,9 +121,12 @@ def read_file(raw_path, max_bytes=100000):
         _common.fail(f"'{p}' là thư mục, hãy dùng action='list' để xem danh sách bên trong.")
 
     max_b = max(1024, min(int(max_bytes or 100000), 500000))
-    size = os.path.getsize(p)
-    with open(p, "rb") as f:
-        raw = f.read(max_b)
+    try:
+        size = os.path.getsize(p)
+        with open(p, "rb") as f:
+            raw = f.read(max_b)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
 
     content = _common.decode_bytes(raw)
     return {
@@ -113,13 +142,16 @@ def read_file(raw_path, max_bytes=100000):
 def write_file(raw_path, content, append=False):
     p = resolve_target_path(raw_path)
     _check_safe_modify(p)
-    parent = os.path.dirname(p)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    mode = "a" if append else "w"
-    with open(p, mode, encoding="utf-8") as f:
-        f.write(content or "")
-    size = os.path.getsize(p)
+    try:
+        parent = os.path.dirname(p)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        mode = "a" if append else "w"
+        with open(p, mode, encoding="utf-8") as f:
+            f.write(content or "")
+        size = os.path.getsize(p)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
     return {
         "action": "append" if append else "write",
         "path": p,
@@ -130,7 +162,10 @@ def write_file(raw_path, content, append=False):
 
 def make_dir(raw_path):
     p = resolve_target_path(raw_path)
-    os.makedirs(p, exist_ok=True)
+    try:
+        os.makedirs(p, exist_ok=True)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
     return {"action": "mkdir", "path": p, "message": f"Đã tạo thư mục '{p}'."}
 
 
@@ -139,18 +174,21 @@ def copy_item(raw_src, raw_dest):
     dest = resolve_target_path(raw_dest)
     if not os.path.exists(src):
         _common.fail(f"Nguồn không tồn tại: {src}")
-    if os.path.isdir(src):
-        if os.path.isdir(dest):
-            dest = os.path.join(dest, os.path.basename(src))
-        shutil.copytree(src, dest, dirs_exist_ok=True)
-    else:
-        if os.path.isdir(dest):
-            dest = os.path.join(dest, os.path.basename(src))
+    try:
+        if os.path.isdir(src):
+            if os.path.isdir(dest):
+                dest = os.path.join(dest, os.path.basename(src))
+            shutil.copytree(src, dest, dirs_exist_ok=True)
         else:
-            parent = os.path.dirname(dest)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-        shutil.copy2(src, dest)
+            if os.path.isdir(dest):
+                dest = os.path.join(dest, os.path.basename(src))
+            else:
+                parent = os.path.dirname(dest)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+            shutil.copy2(src, dest)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, src))
     return {"action": "copy", "source": src, "destination": dest, "message": f"Đã sao chép '{src}' sang '{dest}'."}
 
 
@@ -160,13 +198,16 @@ def move_item(raw_src, raw_dest):
     if not os.path.exists(src):
         _common.fail(f"Nguồn không tồn tại: {src}")
     _check_safe_modify(src)
-    if os.path.isdir(dest):
-        dest = os.path.join(dest, os.path.basename(src))
-    else:
-        parent = os.path.dirname(dest)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-    moved_to = shutil.move(src, dest)
+    try:
+        if os.path.isdir(dest):
+            dest = os.path.join(dest, os.path.basename(src))
+        else:
+            parent = os.path.dirname(dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        moved_to = shutil.move(src, dest)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, src))
     return {"action": "move", "source": src, "destination": moved_to, "message": f"Đã di chuyển '{src}' tới '{moved_to}'."}
 
 
@@ -179,7 +220,10 @@ def rename_item(raw_src, new_name):
     if not clean_new:
         _common.fail("Tên mới không hợp lệ.")
     dest = os.path.join(os.path.dirname(src), clean_new)
-    os.rename(src, dest)
+    try:
+        os.rename(src, dest)
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, src))
     return {"action": "rename", "old_path": src, "new_path": dest, "message": f"Đã đổi tên thành '{clean_new}'."}
 
 
@@ -188,40 +232,50 @@ def delete_item(raw_path):
     if not os.path.exists(p):
         _common.fail(f"Đường dẫn không tồn tại: {p}")
     _check_safe_modify(p)
-    if os.path.isdir(p) and not os.path.islink(p):
-        shutil.rmtree(p)
-        return {"action": "delete", "path": p, "type": "dir", "message": f"Đã xoá thư mục '{p}'."}
-    else:
-        os.remove(p)
-        return {"action": "delete", "path": p, "type": "file", "message": f"Đã xoá file '{p}'."}
+    try:
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p, onerror=_handle_remove_readonly)
+            return {"action": "delete", "path": p, "type": "dir", "message": f"Đã xoá thư mục '{p}'."}
+        else:
+            try:
+                os.remove(p)
+            except PermissionError:
+                os.chmod(p, stat.S_IWRITE)
+                os.remove(p)
+            return {"action": "delete", "path": p, "type": "file", "message": f"Đã xoá file '{p}'."}
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
 
 
 def item_info(raw_path):
     p = resolve_target_path(raw_path)
     if not os.path.exists(p):
         _common.fail(f"Đường dẫn không tồn tại: {p}")
-    st = os.stat(p)
-    is_d = os.path.isdir(p)
-    info = {
-        "action": "info",
-        "path": p,
-        "name": os.path.basename(p),
-        "type": "dir" if is_d else "file",
-        "size_bytes": int(st.st_size),
-        "created": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_ctime)),
-        "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
-        "readonly": not bool(st.st_mode & stat.S_IWRITE),
-    }
-    if not is_d and st.st_size <= 50 * 1024 * 1024:
-        h = hashlib.sha256()
-        with open(p, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-        info["sha256"] = h.hexdigest()
-    return info
+    try:
+        st = os.stat(p)
+        is_d = os.path.isdir(p)
+        info = {
+            "action": "info",
+            "path": p,
+            "name": os.path.basename(p),
+            "type": "dir" if is_d else "file",
+            "size_bytes": int(st.st_size),
+            "created": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_ctime)),
+            "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
+            "readonly": not bool(st.st_mode & stat.S_IWRITE),
+        }
+        if not is_d and st.st_size <= 50 * 1024 * 1024:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            info["sha256"] = h.hexdigest()
+        return info
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, p))
 
 
 def zip_item(raw_src, raw_dest):
@@ -231,30 +285,33 @@ def zip_item(raw_src, raw_dest):
     dest = resolve_target_path(raw_dest) if raw_dest else (src.rstrip("\\/") + ".zip")
     if not dest.lower().endswith(".zip"):
         dest += ".zip"
-    parent = os.path.dirname(dest)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    try:
+        parent = os.path.dirname(dest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
 
-    count = 0
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-        if os.path.isdir(src):
-            for root, _dirs, files in os.walk(src):
-                for fn in files:
-                    full = os.path.join(root, fn)
-                    rel = os.path.relpath(full, os.path.dirname(src))
-                    zf.write(full, rel)
-                    count += 1
-        else:
-            zf.write(src, os.path.basename(src))
-            count = 1
-    return {
-        "action": "zip",
-        "source": src,
-        "archive": dest,
-        "files_archived": count,
-        "size_bytes": os.path.getsize(dest),
-        "message": f"Đã nén {count} file vào '{dest}'.",
-    }
+        count = 0
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+            if os.path.isdir(src):
+                for root, _dirs, files in os.walk(src):
+                    for fn in files:
+                        full = os.path.join(root, fn)
+                        rel = os.path.relpath(full, os.path.dirname(src))
+                        zf.write(full, rel)
+                        count += 1
+            else:
+                zf.write(src, os.path.basename(src))
+                count = 1
+        return {
+            "action": "zip",
+            "source": src,
+            "archive": dest,
+            "files_archived": count,
+            "size_bytes": os.path.getsize(dest),
+            "message": f"Đã nén {count} file vào '{dest}'.",
+        }
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, src))
 
 
 def unzip_item(raw_src, raw_dest):
@@ -262,23 +319,26 @@ def unzip_item(raw_src, raw_dest):
     if not os.path.exists(src):
         _common.fail(f"File zip không tồn tại: {src}")
     dest = resolve_target_path(raw_dest) if raw_dest else os.path.splitext(src)[0]
-    os.makedirs(dest, exist_ok=True)
-    dest_real = os.path.realpath(dest)
-    with zipfile.ZipFile(src, "r") as zf:
-        # Chống Zip-Slip
-        for member in zf.namelist():
-            target_p = os.path.realpath(os.path.join(dest_real, member))
-            if not target_p.startswith(dest_real + os.sep) and target_p != dest_real:
-                _common.fail(f"Phát hiện đường dẫn không an toàn trong file nén: {member}")
-        zf.extractall(dest_real)
-        count = len(zf.namelist())
-    return {
-        "action": "unzip",
-        "archive": src,
-        "destination": dest_real,
-        "entries_extracted": count,
-        "message": f"Đã giải nén {count} mục vào '{dest_real}'.",
-    }
+    try:
+        os.makedirs(dest, exist_ok=True)
+        dest_real = os.path.realpath(dest)
+        with zipfile.ZipFile(src, "r") as zf:
+            # Chống Zip-Slip
+            for member in zf.namelist():
+                target_p = os.path.realpath(os.path.join(dest_real, member))
+                if not target_p.startswith(dest_real + os.sep) and target_p != dest_real:
+                    _common.fail(f"Phát hiện đường dẫn không an toàn trong file nén: {member}")
+            zf.extractall(dest_real)
+            count = len(zf.namelist())
+        return {
+            "action": "unzip",
+            "archive": src,
+            "destination": dest_real,
+            "entries_extracted": count,
+            "message": f"Đã giải nén {count} mục vào '{dest_real}'.",
+        }
+    except (PermissionError, OSError) as e:
+        _common.fail(_format_fs_error(e, src))
 
 
 def build_parser():
@@ -333,4 +393,4 @@ if __name__ == "__main__":
             _common.fail(f"Hành động không hỗ trợ: {act}")
         _common.emit(True, **res)
     except Exception as e:
-        _common.fail(str(e))
+        _common.fail(_format_fs_error(e, getattr(args, "path", "")))

@@ -1,5 +1,5 @@
 import { ipcMain, globalShortcut } from "electron";
-import { exec } from "child_process";
+import { execFile } from "node:child_process";
 import { mainWindow } from "./window-manager.mjs";
 
 let stopListening = null;
@@ -15,7 +15,7 @@ if (process.platform === "win32") {
   }
 }
 
-// Gửi phím ảo qua PowerShell (không cần thư viện C++)
+// Gửi phím ảo qua PowerShell (execFile an toàn, có timeout và windowsHide, không dùng shell)
 const sendMediaKey = (keyName) => {
   let method = "";
   if (keyName === "play-pause") method = "PlayPause";
@@ -23,24 +23,31 @@ const sendMediaKey = (keyName) => {
   else if (keyName === "prev") method = "PrevTrack";
   else return;
 
-  const script = `
-    $code = @"
-    using System;
-    using System.Runtime.InteropServices;
-    public class Keyboard {
-        [DllImport("user32.dll")]
-        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
-        public static void PlayPause() { keybd_event(0xB3, 0, 0, 0); keybd_event(0xB3, 0, 2, 0); }
-        public static void NextTrack() { keybd_event(0xB0, 0, 0, 0); keybd_event(0xB0, 0, 2, 0); }
-        public static void PrevTrack() { keybd_event(0xB1, 0, 0, 0); keybd_event(0xB1, 0, 2, 0); }
+  const script = [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;",
+    '$code = @"',
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public class Keyboard {",
+    '    [DllImport("user32.dll")]',
+    "    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);",
+    "    public static void PlayPause() { keybd_event(0xB3, 0, 0, 0); keybd_event(0xB3, 0, 2, 0); }",
+    "    public static void NextTrack() { keybd_event(0xB0, 0, 0, 0); keybd_event(0xB0, 0, 2, 0); }",
+    "    public static void PrevTrack() { keybd_event(0xB1, 0, 0, 0); keybd_event(0xB1, 0, 2, 0); }",
+    "}",
+    '"@',
+    "Add-Type -TypeDefinition $code;",
+    `[Keyboard]::${method}()`,
+  ].join("\n");
+
+  execFile(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { windowsHide: true, timeout: 8000 },
+    (err) => {
+      if (err) console.error("Failed to send media key:", err.message);
     }
-"@
-    Add-Type -TypeDefinition $code
-    [Keyboard]::${method}()
-  `;
-  exec(`powershell -NoProfile -Command "${script.replace(/\n/g, '')}"`, (err) => {
-    if (err) console.error("Failed to send media key:", err);
-  });
+  );
 };
 
 export const initMusicWidget = () => {
@@ -55,10 +62,10 @@ export const initMusicWidget = () => {
   // Lắng nghe sự thay đổi bài hát trên Windows
   stopListening = wms.onSessionsChanged((sessions) => {
     if (!mainWindow) return;
-    
+
     // Tìm session đang active (playing) hoặc lấy cái đầu tiên
     const active = sessions.find(s => s.playbackStatus === 'playing') || sessions[0];
-    
+
     if (active) {
       mainWindow.webContents.send("music:update", {
         title: active.title || "",

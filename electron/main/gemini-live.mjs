@@ -10,7 +10,7 @@ import { buildVideoInput, stripDataUrl } from "./live-input.mjs";
 import { emitToRenderer, emitEvent } from "./events.mjs";
 import { mainWindow, updateTrayMenu } from "./window-manager.mjs";
 import { buildClaudeTools } from "./claude-tools-catalog.mjs";
-import { executeClaudeTool } from "./tool-dispatcher.mjs";
+import { executeClaudeTool, getToolStatusLabel } from "./tool-dispatcher.mjs";
 import { canvasCapability, secondBrainCapability } from "./capabilities.mjs";
 import { startCompanionServer } from "../companion-server.mjs";
 import { pendingClaudeAnnouncements } from "./notify-iris.mjs";
@@ -20,6 +20,12 @@ import { submitClaudeTask, sendWebMessage } from "./claude-runner.mjs";
 import { getRobotsConfig } from "./device-config.mjs";
 import { stopAllVisionLoops } from "./vision.mjs";
 import { getNextGeminiKey, getGenAiClient, markKeyRateLimited, isRateLimitError } from "./gemini-keys.mjs";
+import {
+  warmPythonDaemon,
+  getCachedActiveWindow,
+  formatActiveWindowSummary,
+  refreshActiveWindowContext,
+} from "./local-tools.mjs";
 
 export let liveSession = null;
 
@@ -75,13 +81,61 @@ export const GreetGate = {
   },
 };
 
+// Bộ lọc âm thanh/văn bản rác: phát hiện tiếng thở dài, tiếng cười, nhiễu nền hoặc từ đệm vô nghĩa ("ờ", "ừm", "hmm", "...").
+const NOISE_TAG_RE = /(?:\[[^\]]*\]|\([^)]*\)|<[^>]*>|\*[^*]*\*)/gi;
+const FILLER_WORDS = new Set([
+  "ờ", "ơ", "ớ", "ở", "ỡ", "ợ",
+  "ừ", "ừm", "ư", "ứ", "ử", "ữ", "ự", "ưm",
+  "à", "á", "ả", "ã", "ạ", "àờ", "ừờ",
+  "hmm", "hm", "hmmm", "hừm", "hừ", "hơ", "hả", "hở", "ha", "haha", "hahaha", "hihi", "hehe", "huhu",
+  "uh", "um", "uhm", "umm", "uhh", "ah", "ahh", "eh", "oh", "ooh", "oops", "erm", "er",
+  "chà", "ồ", "ố", "ối", "ôi", "ầy", "ây", "haizz", "haiz", "phù",
+  "sigh", "sighs", "laugh", "laughs", "laughter", "cough", "coughs", "snort", "yawn", "noise", "music", "silence", "inaudible", "ahem",
+]);
+
+export function isNoiseOrFillerTranscript(rawText) {
+  if (typeof rawText !== "string") return false;
+  const trimmed = rawText.trim();
+  if (!trimmed) return false;
+
+  // Bỏ các thẻ âm thanh như [noise], (thở dài), <laughter>, *sigh*
+  const withoutTags = trimmed.replace(NOISE_TAG_RE, " ").trim();
+  // Bỏ dấu câu và ký tự đặc biệt
+  const cleaned = withoutTags.replace(/[.,!?…\-_~"'`()[\]{}<>/\\|:;+*@#$%^&+=]+/g, " ").trim();
+  if (!cleaned) return true; // Chỉ chứa thẻ nhiễu hoặc dấu chấm "..."
+
+  const words = cleaned.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length > 4) return false;
+
+  return words.every((w) => {
+    if (FILLER_WORDS.has(w)) return true;
+    // Các biến thể kéo dài nguyên âm/phụ âm của từ đệm: "ờờờ", "ừmmm", "hmmmm", "haizzz", "uhhh"
+    if (/^(?:ờ+|ơ+|ừ+m*|ư+m*|à+|h+m+|h+ừ+m*|u+h+m*|u+m+|a+h+|e+h+|o+h+|ha+i*z+|ha+h*a*|hi+h*i*|he+h*e*)$/i.test(w)) {
+      return true;
+    }
+    return false;
+  });
+}
+
 function flushTranscripts() {
-  if (userTranscriptBuffer.trim()) {
-    emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
+  const userText = userTranscriptBuffer.trim();
+  const modelText = modelTranscriptBuffer.trim();
+  const isNoiseInput = Boolean(userText) && isNoiseOrFillerTranscript(userText);
+
+  if (isNoiseInput && pendingToolCalls === 0) {
+    // Bỏ qua hoàn toàn âm thanh nhiễu / từ đệm vô nghĩa, không phát sinh transcript phản hồi
+    userTranscriptBuffer = "";
+    modelTranscriptBuffer = "";
+    return;
   }
-  if (modelTranscriptBuffer.trim()) {
-    emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
-    sendWebMessage(`[Gemini🎙️]: ${modelTranscriptBuffer.trim()}`);
+
+  if (userText) {
+    emitEvent({ type: "transcript", speaker: "you", text: userText });
+  }
+  if (modelText) {
+    emitEvent({ type: "transcript", speaker: "gemini", text: modelText });
+    sendWebMessage(`[Gemini🎙️]: ${modelText}`);
   }
   userTranscriptBuffer = "";
   modelTranscriptBuffer = "";
@@ -109,7 +163,7 @@ const LOCAL_TOOL_RULES = [
   "7. MULTI-STEP ACTION CHAINS: Khi người dùng yêu cầu chuỗi hành động kết hợp (ví dụ: 'mở Notepad rồi gõ...', 'mở Chrome rồi vào trang...', 'vào Cài đặt rồi bấm...') -> LUÔN gọi execute_visual_chain{goal: '...', steps: [...]}. Hệ thống sẽ tự động thực hiện và nghiệm thu thị giác từng bước trước khi sang bước kế tiếp."
 ].join("\n");
 
-function buildLiveConfig(resumeHandle) {
+export function buildLiveConfig(resumeHandle) {
   const isClaudeEnabled = process.env.IRIS_CLAUDE_ENABLED !== "false";
   return {
     responseModalities: ["AUDIO"],
@@ -142,9 +196,13 @@ function buildLiveConfig(resumeHandle) {
         {
           text: [
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-            "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (QUY TẮC PHẢN HỒI & TRỢ LÝ THÔNG MINH):",
-            "- CONVERSATION ETIQUETTE: When the user is on a phone call or speaking to someone else in the room (third-party speech), stay quietly attentive. BUT when the user speaks to the computer, asks questions, gives commands, or chats with you (even without explicitly saying 'Iris'), ALWAYS RESPOND promptly, warmly, and helpfully. When in doubt, respond briefly and politely.",
-            "- RESPECT SILENCE: When the room is quiet, the user is thinking/working, or there is only ambient noise, remain silent and do not speak unprompted (never say 'Are you there?', 'Bạn có đó không?'). Be attentive, discreet, and 100% ready to respond when spoken to.",
+            "CRITICAL ETIQUETTE & DISCRETION PROTOCOL (GIAO THỨC CHỐNG NÓI LEO & SIÊU SÚC TÍCH):",
+            "- STRICT ANTI-CHIME-IN: Khi người dùng đang nói chuyện với người thứ ba (nói chuyện với người trong phòng, nghe điện thoại, họp, gọi video, hoặc tiếng tivi/âm thanh phòng), Iris PHẢI IM LẶNG TUYỆT ĐỐI (100% SILENT). Không tự ý tham gia, không đưa ra ý kiến không được hỏi, không nói các câu đệm như 'Dạ', 'Vâng', 'Tôi đây'.",
+            "- WHEN IN DOUBT -> REMAIN SILENT: Nếu phân vân không rõ người dùng có đang nói với mình hay không, LUÔN CHỌN IM LẶNG.",
+            "- TRIGGER CONDITION: CHỈ trả lời khi: (a) Người dùng gọi đích danh tên ('Iris', 'Này Iris', 'Ê Iris'), HOẶC (b) Ra khẩu lệnh thao tác máy tính dứt khoát, rõ ràng ('mở Chrome', 'tắt máy', 'chụp màn hình', 'tăng âm lượng').",
+            "- ULTRA-CONCISE VOICE: Giới hạn câu thoại của Iris tối đa 1 câu ngắn gọn (dưới 10 từ) khi xác nhận lệnh (ví dụ: 'Đã mở Chrome cho bạn.', 'Đã tăng âm lượng.'). Tuyệt đối không lặp lại câu hỏi của người dùng, không thêm câu đệm khách sáo, không giải thích chi tiết trừ khi người dùng nói 'tại sao' hoặc yêu cầu giải thích.",
+            "- NOISE & FILLER FILTER: Nếu âm thanh đầu vào hoặc inputTranscription chỉ là tiếng thở dài, tiếng cười, âm thanh nhiễu, hoặc các từ đệm vô nghĩa ('ờ', 'ừm', 'hmm', '...'), BẮT BUỘC bỏ qua và KHÔNG phát sinh audio phản hồi.",
+            "- RESPECT SILENCE: When the room is quiet, the user is thinking/working, or there is only ambient noise, remain 100% silent and never speak unprompted (never say 'Are you there?', 'Bạn có đó không?').",
             process.env.IRIS_ENABLE_GOOGLE_SEARCH === "true"
               ? "Claude is your worker brain for multi-step coding, deep research, deals and background automation. You also have built-in Google Search — use it directly for quick facts and simple lookups that don't need Claude."
               : "Claude is your worker brain for multi-step coding, deep research, deals and background automation. For quick everyday facts, answer directly from your knowledge concisely.",
@@ -156,6 +214,7 @@ function buildLiveConfig(resumeHandle) {
             "SILENT MODE: set_silent_mode(enabled: true) on 'quiet/whisper/mute' requests ('im lặng thôi', 'đừng nói to') — keep listening and replying as text, just not aloud. set_silent_mode(enabled: false) to resume speaking.",
             "Sessions are user-controlled: each role (PO/DEV/plain) keeps its own continuous, auto-resuming conversation, reset only by an explicit new-session request or a different project folder. Follow-ups may reference the role's earlier work. One task runs at a time; new ones queue. Never invent a session id or folder — if the user wants a different project, tell them to pick it from the UI.",
             workspaceContextLine(),
+            formatActiveWindowSummary(getCachedActiveWindow()),
             "Call get_workspace_info (never guess) when asked which project/session/role is active. On SYSTEM_EVENT_WORKSPACE_UPDATE, update silently, don't speak. On SYSTEM_EVENT_AGENT_SELECT (role switched from UI), follow its instructions_to_iris; switching to PO with no ongoing conversation always opens by asking how the project started (own idea / mandate / customer request).",
             "Agent pipeline (OpenSpec-based): PO grills the request then proposes a change under openspec/changes/<name>/tasks.md (decides WHAT); DEV implements the open change's tasks test-first, verifies, archives it (decides HOW). User picks the role from the UI; only pass 'agent' when they explicitly name one. PO is a live session that can pause mid-task to ask you something (SYSTEM_EVENT_PO_QUESTION); DEV is headless, never pauses, and needs a PO-proposed change to run against.",
             "STUDY role (separate, for learning not building): the user reads a source and synthesizes aloud to you — you answer their questions yourself, and only hand the worker a brief to RECORD a note (synthesis + source) or VERIFY one (claims + source) when explicitly asked. May pause with SYSTEM_EVENT_PO_QUESTION (asking_role: Study). No OpenSpec. Only route here when STUDY is active or explicitly requested.",
@@ -171,8 +230,7 @@ function buildLiveConfig(resumeHandle) {
             `start_new_claude_session only on an explicit request (new/fresh session, start over); confirm briefly afterward.`,
             `On SYSTEM_EVENT_SESSION_START, greet ${userDisplayName()} once briefly, then listen quietly.`,
             `On SYSTEM_EVENT_CLAUDE_COMPLETE, proactively announce it briefly: Claude's back, summarize, ask if they want the details before continuing. EXCEPTION: If the user is in a meeting / on a call, or silent mode is on, stay quiet and only send a desktop HUD message via display_hud_message.`,
-            "Answer directly for questions, everyday conversation, facts, translations, calculations, and status questions.",
-            "Keep voice responses natural and short.",
+            "Answer directly only when explicitly addressed or asked a clear question; keep every confirmation under 10 words (1 short sentence), without repeating the user's question or adding filler.",
             "IMPORTANT VIETNAMESE UI MAPPING: (1) 'Ẩn màn hình', 'về desktop' = desktop_manager{action: 'boss'}. (2) 'Thu nhỏ' / 'thu nhỏ màn hình' (Iris = control_ui{action: 'toggle_robot_pip'}; App ngoài = move_window_precise{name: 'active', width: 960, height: 600, x: 100, y: 100}. (3) 'Ẩn' Iris = control_ui{action: 'minimize_iris'}; App ngoài = minimize_app{target: 'active'}. (4) 'Phóng to' Iris = control_ui{action: 'restore_iris'}; App ngoài = window_manager{action: 'maximize'}. NEVER confuse these.",
             canvasCapability.promptFragment(),
             secondBrainCapability.promptFragment(),
@@ -232,6 +290,9 @@ async function connectLive({ isReconnect }) {
   liveStatus = { running: true, pid: process.pid, geminiStatus: "connecting" };
   emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec", geminiStatus: "connecting" } });
   emitEvent({ type: "gemini_status", status: "connecting", model });
+
+  warmPythonDaemon();
+  try { await refreshActiveWindowContext(); } catch { /* ignore */ }
 
   try {
     liveSession = await ai.live.connect({
@@ -341,6 +402,7 @@ async function handleToolCall(toolCall) {
   pendingToolCalls += calls.length || 1;
   const functionResponses = [];
   const executedShowcase = new Set();
+  emitEvent({ type: "audio_state", state: "thinking" });
   try {
     for (const call of calls) {
       // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
@@ -356,11 +418,55 @@ async function handleToolCall(toolCall) {
         executedShowcase.add("iris_showcase");
       }
 
-      emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
+      const statusLabel = getToolStatusLabel(call.name, call.args || {});
+      emitEvent({ type: "tool_call", name: call.name, args: call.args || {}, label: statusLabel });
+      emitEvent({ type: "tool_status", state: "running", name: call.name, label: statusLabel });
+      emitToRenderer("iris:tool-status", { state: "running", name: call.name, label: statusLabel });
+
+      const t0 = Date.now();
       try {
         const result = await executeClaudeTool(call.name, call.args || {});
-        functionResponses.push({ id: call.id, name: call.name, response: { result } });
+        const durationMs = Date.now() - t0;
+        const isErr = result?.status === "error";
+        emitEvent({
+          type: "tool_status",
+          state: isErr ? "error" : "done",
+          name: call.name,
+          label: statusLabel,
+          durationMs,
+        });
+        emitToRenderer("iris:tool-status", {
+          state: isErr ? "error" : "done",
+          name: call.name,
+          label: statusLabel,
+          durationMs,
+        });
+        const winContext = getCachedActiveWindow();
+        functionResponses.push({
+          id: call.id,
+          name: call.name,
+          response: {
+            result,
+            ...(winContext ? { active_window: { title: winContext.title, app: winContext.process_name } } : {}),
+          },
+        });
       } catch (error) {
+        const durationMs = Date.now() - t0;
+        emitEvent({
+          type: "tool_status",
+          state: "error",
+          name: call.name,
+          label: statusLabel,
+          error: error.message,
+          durationMs,
+        });
+        emitToRenderer("iris:tool-status", {
+          state: "error",
+          name: call.name,
+          label: statusLabel,
+          error: error.message,
+          durationMs,
+        });
         functionResponses.push({
           id: call.id,
           name: call.name,
@@ -373,6 +479,9 @@ async function handleToolCall(toolCall) {
     }
   } finally {
     pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
+    if (pendingToolCalls === 0) {
+      emitEvent({ type: "audio_state", state: "listening" });
+    }
   }
 }
 
@@ -413,17 +522,22 @@ function handleLiveMessage(message) {
   if (content.inputTranscription?.text) userTranscriptBuffer += content.inputTranscription.text;
   if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
 
+  // Nếu đầu vào hiện tại chỉ là tiếng thở dài, tiếng cười, âm thanh nhiễu hoặc từ đệm vô nghĩa ("ờ", "ừm", "hmm", "..."),
+  // chặn phát sinh audio phản hồi để Iris tuyệt đối không nói leo.
+  const isFillerInput =
+    Boolean(userTranscriptBuffer.trim()) &&
+    isNoiseOrFillerTranscript(userTranscriptBuffer) &&
+    !message.toolCall &&
+    pendingToolCalls === 0;
+
   for (const part of content.modelTurn?.parts || []) {
     if (part.text) modelTranscriptBuffer += part.text;
     const inlineData = part.inlineData;
     if (!inlineData?.data) continue;
     const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
     if (!mimeType.startsWith("audio/")) continue;
-    // Chống báo hoàn thành ảo / nói trước khi tool thực thi:
-    // Nếu trong packet có toolCall hoặc đang có tool gọi dở dang chưa trả toolResponse (pendingToolCalls > 0),
-    // mọi audio chunk được sinh ra trong lượt này là lời thoại võ đoán trước khi tool chạy xong.
-    // Bỏ qua audio này để chờ lượt kế tiếp (sau sendToolResponse) khi Gemini đã có kết quả thực tế.
-    if (message.toolCall || pendingToolCalls > 0) continue;
+    // Chống báo hoàn thành ảo / nói trước khi tool thực thi + chống phản hồi tiếng ồn/từ đệm rác:
+    if (message.toolCall || pendingToolCalls > 0 || isFillerInput) continue;
     emitToRenderer("live:audio", { data: inlineData.data, mimeType });
     emitEvent({ type: "audio_state", state: "speaking" });
   }

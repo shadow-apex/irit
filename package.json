@@ -16,25 +16,25 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "predev": "node scripts/kill-ports.mjs && node scripts/prepare-mediapipe.mjs",
-    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
-    "dev:with-legacy-obs-cam": "concurrently -k -n VITE,ELECTRON,PHONE -c cyan,magenta,yellow \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\" \"npm run camera\"",
-    "camera": "node -e \"require('fs').existsSync('PHONE_CAMERA/node_modules')||require('child_process').execSync('npm install',{cwd:'PHONE_CAMERA',stdio:'inherit'})\" && node PHONE_CAMERA/server.js",
-    "camera:install": "npm install --prefix PHONE_CAMERA",
+    "predev": "node assets/scripts/kill-ports.mjs && node assets/scripts/prepare-mediapipe.mjs",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node assets/scripts/run-electron.mjs\"",
+    "dev:with-legacy-obs-cam": "concurrently -k -n VITE,ELECTRON,PHONE -c cyan,magenta,yellow \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node assets/scripts/run-electron.mjs\" \"npm run camera\"",
+    "camera": "node -e \"require('fs').existsSync('assets/PHONE_CAMERA/node_modules')||require('child_process').execSync('npm install',{cwd:'assets/PHONE_CAMERA',stdio:'inherit'})\" && node assets/PHONE_CAMERA/server.js",
+    "camera:install": "npm install --prefix assets/PHONE_CAMERA",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "start": "npm run build && node scripts/run-electron.mjs --prod",
-    "start:prod": "node scripts/run-electron.mjs --prod",
+    "start": "npm run build && node assets/scripts/run-electron.mjs --prod",
+    "start:prod": "node assets/scripts/run-electron.mjs --prod",
     "package:mac": "npm run build && electron-builder --mac --dir",
     "dist:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win --dir",
     "dist:win": "npm run build && electron-builder --win",
-    "electron": "node scripts/run-electron.mjs",
-    "test": "node --test --test-concurrency=1 scripts/tests/*.test.mjs",
-    "setup:mediapipe": "node scripts/prepare-mediapipe.mjs",
-    "setup:ort": "node scripts/prepare-ort.mjs",
-    "setup:cmd": "scripts/setup-cmd.bat",
-    "postinstall": "node scripts/setup-cmd.mjs",
+    "electron": "node assets/scripts/run-electron.mjs",
+    "test": "node --test --test-concurrency=1 assets/scripts/tests/*.test.mjs",
+    "setup:mediapipe": "node assets/scripts/prepare-mediapipe.mjs",
+    "setup:ort": "node assets/scripts/prepare-ort.mjs",
+    "setup:cmd": "assets/scripts/setup-cmd.bat",
+    "postinstall": "node assets/scripts/setup-cmd.mjs",
     "test:py": "python -m unittest discover -s tools/tests"
   },
   "dependencies": {
@@ -96,16 +96,20 @@
       "build/trayTemplate@2x.png",
       "package.json",
       "tools/**",
-      "sidecar/**",
-      "public/**",
+      "assets/sidecar/**",
+      "assets/public/**",
       "robots.example.json",
       "smarthome_cameras.example.json",
       ".agents/**"
     ],
     "extraResources": [
       {
-        "from": "resources/personas",
+        "from": "assets/resources/personas",
         "to": "personas"
+      },
+      {
+        "from": "assets/resources/skills",
+        "to": "skills"
       }
     ],
     "mac": {
@@ -116,6 +120,7 @@
       ]
     },
     "win": {
+      "icon": "build/icon.png",
       "target": [
         "dir"
       ],
@@ -123,7 +128,7 @@
     },
     "asarUnpack": [
       "tools/**",
-      "sidecar/**"
+      "assets/sidecar/**"
     ]
   },
   "optionalDependencies": {

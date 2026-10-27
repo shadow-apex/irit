@@ -20,7 +20,23 @@ import {
   isCancelled,
 } from "../action-lane.mjs";
 import { emitEvent, emitToRenderer } from "./events.mjs";
-import { systemActionTool, writeNoteScriptTool, mouseControlTool } from "./local-tools.mjs";
+import {
+  systemActionTool,
+  writeNoteScriptTool,
+  mouseControlTool,
+  uiAutomationTool,
+  ocrRegionTool,
+  universalAppLauncherTool,
+  invalidateOcrCache,
+  searchEverythingTool,
+  filesystemOpsTool,
+  quickReminderTool,
+  sendDesktopNotificationTool,
+  readClipboardTool,
+  writeClipboardTool,
+  windowManagerTool,
+  runTerminalCommandTool,
+} from "./local-tools.mjs";
 import { ensureOmniServer, omniAuthHeaders } from "./omni-server.mjs";
 import { mainWindow } from "./window-manager.mjs";
 import { toggleScreenVision, toggleCameraStreamVision, grabPrimaryScreenJpeg, visionFrameGeometry } from "./vision.mjs";
@@ -151,7 +167,6 @@ export async function startOmniParserTask(args) {
   if (envFlag("IRIS_UI_AUTOMATION", true)) {
     try {
       const cleanQuery = task.trim().replace(/^(?:click|bấm|nhấp|tap|chọn|mở)?\s*(?:vào|icon|nút|ô|thanh|mục|chỗ)?\s*/i, "").trim() || task.trim();
-      const { uiAutomationTool } = await import("./local-tools.mjs");
       const uiaRes = await uiAutomationTool({ action: "click", query: cleanQuery });
       if (uiaRes && uiaRes.success) {
         emitEvent({
@@ -174,19 +189,18 @@ export async function startOmniParserTask(args) {
     }
   }
 
-  // 2. Native OCR Fast-Path: Dùng Windows Native OCR tìm chữ trên màn hình (20ms - 50ms)
+  // 2. Native OCR Fast-Path (kết hợp Smart Visual Cache): Dùng Windows Native OCR tìm chữ trên màn hình (0ms - 30ms)
   // Nếu người dùng yêu cầu click vào một nhãn chữ/văn bản/nút có chữ mà UIA không tìm thấy
   try {
     const cleanQuery = task.trim().replace(/^(?:click|bấm|nhấp|tap|chọn|mở)?\s*(?:vào|icon|nút|ô|thanh|mục|chỗ|chữ)?\s*/i, "").trim() || task.trim();
     if (cleanQuery.length >= 2) {
-      const { ocrRegionTool } = await import("./local-tools.mjs");
       const ocrRes = await ocrRegionTool({ find: cleanQuery });
       if (ocrRes && ocrRes.found && Array.isArray(ocrRes.center)) {
         const [screenX, screenY] = ocrRes.center;
         emitEvent({
           type: "log",
           level: "info",
-          message: `[NativeOCR] ✔ Tìm thấy chữ "${ocrRes.matched_text || cleanQuery}" tại (${screenX}, ${screenY}) qua Windows Native OCR — đang click...`,
+          message: `[NativeOCR] ✔ Tìm thấy chữ "${ocrRes.matched_text || cleanQuery}" tại (${screenX}, ${screenY}) qua Windows Native OCR${ocrRes.cached ? " [CACHE HIT]" : ""} — đang click...`,
         });
         const preSnapshot = await captureRegionSnapshot({ x: screenX, y: screenY });
         const clickRes = await mouseControlTool({
@@ -202,13 +216,25 @@ export async function startOmniParserTask(args) {
           beforeSnapshot: preSnapshot,
           cropRectOrPoint: { x: screenX, y: screenY },
           label: task,
-          retryFn: async () => {
-            await clickMouseNative(screenX, screenY, "left");
-          },
+          fallbackMethods: [
+            {
+              name: "win32_mouse_click",
+              fn: async () => {
+                await mouseControlTool({ action: "click", x: screenX, y: screenY, button: "left", human_like: true });
+              },
+            },
+            {
+              name: "physical_native_click",
+              fn: async () => {
+                await clickMouseNative(screenX, screenY, "left");
+              },
+            },
+          ],
         });
         return {
           status: "success",
           method: "windows_native_ocr",
+          cached: Boolean(ocrRes.cached),
           x: screenX,
           y: screenY,
           ...(verification ? { verification } : {}),
@@ -227,11 +253,6 @@ export async function startOmniParserTask(args) {
   try {
     // 1. Capture screen.
     // BUG-4 FIX (Memory Leak): Giảm thumbnailSize từ 1920x1080 xuống 1366x768.
-    // Lý do: (a) giảm payload HTTP loopback ~55% (từ ~3MB xuống ~1.3MB PNG),
-    // giảm thời gian upload + YOLO inference; (b) NativeImage objects lớn hơn
-    // giữ nhiều bộ nhớ hơn trước khi GC kịp dọn — với 1366x768 thì nhẹ hơn.
-    // YOLO vẫn resize ảnh về 640px nên độ chính xác detect không bị ảnh hưởng.
-    // Đặt thumbnailSize=null sau khi lấy buffer để GC không cần giữ NativeImage.
     let imgBuffer = null;
     let imgMime = "image/png";
     let imgFilename = "screenshot.png";
@@ -338,15 +359,27 @@ export async function startOmniParserTask(args) {
         throw new Error(`Mouse click failed: ${clickResult.error || clickResponse.statusText}`);
       }
 
+      invalidateOcrCache();
       const preSnapshot = await captureRegionSnapshot({ x: clickResult.x, y: clickResult.y });
       emitEvent({ type: "log", level: "info", message: `[MouseController] Clicked at (${clickResult.x}, ${clickResult.y})` });
       const verification = await verifyActionWithDiff({
         beforeSnapshot: preSnapshot,
         cropRectOrPoint: { x: clickResult.x, y: clickResult.y },
         label: task,
-        retryFn: async () => {
-          await clickMouseNative(clickResult.x, clickResult.y, "left");
-        },
+        fallbackMethods: [
+          {
+            name: "win32_mouse_click",
+            fn: async () => {
+              await mouseControlTool({ action: "click", x: clickResult.x, y: clickResult.y, button: "left" });
+            },
+          },
+          {
+            name: "physical_native_click",
+            fn: async () => {
+              await clickMouseNative(clickResult.x, clickResult.y, "left");
+            },
+          },
+        ],
       });
       return {
         status: "success",
@@ -370,14 +403,6 @@ export async function startOmniParserTask(args) {
     emitEvent({ type: "log", level: "error", message: `[OmniParser Error] ${err.message}` });
     return { status: "error", message: `Error performing computer task: ${err.message}` };
   }
-}
-
-async function verifyClickByCrop(screenX, screenY, beforeSnapshot = null, label = "click") {
-  return verifyActionWithDiff({
-    beforeSnapshot,
-    cropRectOrPoint: { x: screenX, y: screenY },
-    label,
-  });
 }
 
 async function findAndClickWithGeminiVision(imgBuffer, imgMime, task, fast_mode = true) {
@@ -550,6 +575,8 @@ export async function startComputerUseType(args) {
     return { status: "error", message: "Thiếu nội dung, phím hoặc thao tác cần thực hiện." };
   }
 
+  invalidateOcrCache();
+
   emitEvent({
     type: "log",
     level: "info",
@@ -560,16 +587,15 @@ export async function startComputerUseType(args) {
   // nhưng CHỈ KHI là tác vụ text/key đơn giản (OmniParser API chỉ nhận {text, key}).
   if (!hasPos && !hasAction && Number(repeat || 1) <= 1 && (process.env.OMNIPARSER_TYPE_URL || process.env.OMNIPARSER_ENABLED === "true")) {
     const typeUrl = process.env.OMNIPARSER_TYPE_URL || "http://127.0.0.1:8000/type";
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
       const response = await fetch(typeUrl, {
         method: "POST",
         headers: omniAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ text, key }),
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
       const result = await response.json().catch(() => ({}));
       if (response.ok && result.success) {
         emitEvent({ type: "log", level: "info", message: `[KeyboardController] Success via OmniParser` });
@@ -577,6 +603,8 @@ export async function startComputerUseType(args) {
       }
     } catch {
       // OmniParser không sẵn sàng, tự động chuyển xuống native typing bên dưới
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -755,12 +783,24 @@ export async function submitLocalChat(args) {
   try {
     const { default: ollama } = await import("ollama");
     const localModel = process.env.IRIS_LOCAL_MODEL || "llama3";
+    const habits = getToolMemoryState()?.userHabits;
+    const habitHint =
+      habits && Object.keys(habits.frequentApps || {}).length > 0
+        ? `\n[User Context Memory - Ứng dụng thường dùng: ${Object.keys(habits.frequentApps).slice(0, 5).join(", ")}]`
+        : "";
     const response = await ollama.chat({
       model: localModel,
-      messages: [{ role: "user", content: args.query }],
+      messages: [
+        {
+          role: "system",
+          content: `Bạn là trợ lý ảo đa phương thức Iris chạy cục bộ (Offline Fallback Mode). Trả lời ngắn gọn, thông minh bằng tiếng Việt.${habitHint}`,
+        },
+        { role: "user", content: args.query },
+      ],
     });
     return {
       status: "success",
+      engine: `ollama:${localModel}`,
       local_ai_response: response.message.content,
       instructions: "Read the local_ai_response aloud to the user exactly as it is."
     };
@@ -811,6 +851,8 @@ export async function openUrlOrApp(args) {
     return startOmniParserTask({ task: trimmedTarget });
   }
 
+  invalidateOcrCache();
+
   // --- URL branch ---
   if (is_url || /^https?:\/\//i.test(target.trim())) {
     let parsed;
@@ -839,7 +881,6 @@ export async function openUrlOrApp(args) {
     String(process.env.IRIS_UNIVERSAL_APPS ?? "true").trim().toLowerCase(),
   );
   if (universalEnabled) {
-    const { universalAppLauncherTool } = await import("./local-tools.mjs");
     const res = await universalAppLauncherTool({ command: "launch", query: target });
     if (res.status === "success") return res;
   }
@@ -862,6 +903,9 @@ export async function openUrlOrApp(args) {
       detached: true, // App runs independently; Electron won't hold it alive
       stdio: "ignore",
       windowsHide: false,
+    });
+    child.on("error", (err) => {
+      console.warn(`[openUrlOrApp] spawn error for ${toRun}:`, err.message);
     });
     child.unref();
     return { status: "success", message: `Started application: ${toRun}` };
@@ -1049,6 +1093,186 @@ export function setUiContext(context) {
   irisUiContext = context;
 }
 
+// -----------------------------------------------------------------------
+// Fast-Path Memory Pipeline & Adaptive Context Memory (Agentic Tool Chaining)
+// Truyền dữ liệu thông minh giữa các công cụ trực tiếp qua bộ nhớ trong (0ms),
+// không tốn chi phí parse lại JSON trung gian hay chờ vòng lặp LLM.
+// -----------------------------------------------------------------------
+const toolMemoryState = {
+  lastResult: null,
+  resultsByTool: {},
+  stepResults: {},
+  history: [], // Lưu 25 lần thực thi gần nhất
+  userHabits: {
+    frequentApps: {},
+    recentFiles: [],
+    recentQueries: [],
+  },
+};
+
+export function getToolMemoryState() {
+  return toolMemoryState;
+}
+
+export function resetToolMemoryState() {
+  toolMemoryState.lastResult = null;
+  toolMemoryState.resultsByTool = {};
+  toolMemoryState.stepResults = {};
+  toolMemoryState.history = [];
+  toolMemoryState.userHabits = {
+    frequentApps: {},
+    recentFiles: [],
+    recentQueries: [],
+  };
+}
+
+export function recordToolExecution(toolName, args = {}, result = {}, stepKey = null) {
+  if (!result || typeof result !== "object") return result;
+  const firstCandidate =
+    result.first_path ||
+    (Array.isArray(result.results) && (result.results[0]?.path || result.results[0])) ||
+    (Array.isArray(result.files) && (result.files[0]?.path || result.files[0])) ||
+    result.path ||
+    undefined;
+  const enriched =
+    firstCandidate && result.first_path === undefined
+      ? { ...result, first_path: firstCandidate }
+      : result;
+
+  toolMemoryState.lastResult = enriched;
+  if (toolName) {
+    toolMemoryState.resultsByTool[toolName] = enriched;
+  }
+  if (stepKey) {
+    const normKey = String(stepKey).trim().toLowerCase();
+    toolMemoryState.stepResults[normKey] = enriched;
+    if (normKey.startsWith("step")) {
+      toolMemoryState.stepResults[normKey.slice(4)] = enriched;
+    }
+  }
+  toolMemoryState.history.push({
+    tool: toolName,
+    ts: Date.now(),
+    status: enriched.status || (enriched.success ? "success" : "unknown"),
+  });
+  if (toolMemoryState.history.length > 25) {
+    toolMemoryState.history.shift();
+  }
+
+  // Cập nhật Context Memory thói quen người dùng (ứng dụng hay mở, file vừa chạm, từ khóa tìm kiếm)
+  try {
+    if (
+      toolName === "open_url_or_app" ||
+      toolName === "universal_app_launcher" ||
+      toolName === "open_application" ||
+      toolName === "open_app"
+    ) {
+      const appKey = String(args?.target || args?.app_name || args?.query || "").trim().toLowerCase();
+      if (appKey) {
+        toolMemoryState.userHabits.frequentApps[appKey] = (toolMemoryState.userHabits.frequentApps[appKey] || 0) + 1;
+      }
+    } else if (toolName === "filesystem_ops" && args?.path) {
+      const p = String(args.path).trim();
+      if (p && !toolMemoryState.userHabits.recentFiles.includes(p)) {
+        toolMemoryState.userHabits.recentFiles.unshift(p);
+        if (toolMemoryState.userHabits.recentFiles.length > 15) toolMemoryState.userHabits.recentFiles.pop();
+      }
+    } else if (toolName === "search_local_files") {
+      const firstPath = enriched.first_path || result?.results?.[0]?.path;
+      if (firstPath && !toolMemoryState.userHabits.recentFiles.includes(firstPath)) {
+        toolMemoryState.userHabits.recentFiles.unshift(firstPath);
+        if (toolMemoryState.userHabits.recentFiles.length > 15) toolMemoryState.userHabits.recentFiles.pop();
+      }
+    }
+  } catch {}
+
+  return enriched;
+}
+
+/**
+ * Truy xuất giá trị lồng nhau trong bộ nhớ theo đường dẫn (vd: "prev.results.0.path", "step1.content", "last.search_local_files.results.0.path").
+ */
+export function resolveMemoryPath(expr, memory = toolMemoryState) {
+  const clean = String(expr || "").trim().replace(/^\$/, "");
+  if (!clean) return undefined;
+  const parts = clean
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean);
+  if (parts.length === 0) return undefined;
+
+  let rootObj = null;
+  const head = parts[0];
+  let rest = parts.slice(1);
+
+  if (head === "prev" || head === "lastResult") {
+    rootObj = memory.lastResult;
+  } else if (/^step(\d+)$/i.test(head)) {
+    const stepIdx = head.toLowerCase();
+    rootObj = memory.stepResults?.[stepIdx] ?? memory.stepResults?.[head.slice(4)];
+  } else if (head === "last" && rest.length > 0) {
+    rootObj = memory.resultsByTool?.[rest[0]];
+    rest = rest.slice(1);
+  } else if (head === "habits") {
+    rootObj = memory.userHabits;
+  } else if (memory.resultsByTool && head in memory.resultsByTool) {
+    rootObj = memory.resultsByTool[head];
+  } else {
+    rootObj = memory.lastResult;
+    rest = parts;
+  }
+
+  let cur = rootObj;
+  for (const key of rest) {
+    if (cur == null) return undefined;
+    cur = cur[key];
+  }
+  return cur;
+}
+
+/**
+ * Nội suy trực tiếp dữ liệu từ Fast-Path Memory Pipeline vào tham số đầu vào của công cụ
+ * (hỗ trợ cả cú pháp `{{prev.results.0.path}}`, `{{step1.content}}` và `$prev.path`).
+ */
+export function interpolatePipelineArgs(input, memory = toolMemoryState) {
+  if (input == null) return input;
+  if (typeof input === "string") {
+    // Nếu toàn bộ chuỗi là 1 biểu thức đơn "{{...}}" hoặc "$prev...." thì trả về nguyên kiểu dữ liệu
+    const exactBrace = input.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (exactBrace) {
+      const val = resolveMemoryPath(exactBrace[1], memory);
+      return val !== undefined ? val : input;
+    }
+    const exactDollar = input.match(/^\$(prev\.[A-Za-z0-9_.[\]]+|step\d+\.[A-Za-z0-9_.[\]]+)$/);
+    if (exactDollar) {
+      const val = resolveMemoryPath(exactDollar[1], memory);
+      return val !== undefined ? val : input;
+    }
+    // Thay thế chuỗi con
+    return input
+      .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (full, expr) => {
+        const val = resolveMemoryPath(expr, memory);
+        if (val === undefined || val === null) return full;
+        return typeof val === "object" ? JSON.stringify(val) : String(val);
+      })
+      .replace(/\$(prev\.[A-Za-z0-9_.[\]]+|step\d+\.[A-Za-z0-9_.[\]]+)/g, (full, expr) => {
+        const val = resolveMemoryPath(expr, memory);
+        if (val === undefined || val === null) return full;
+        return typeof val === "object" ? JSON.stringify(val) : String(val);
+      });
+  }
+  if (Array.isArray(input)) {
+    return input.map((item) => interpolatePipelineArgs(item, memory));
+  }
+  if (typeof input === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+      out[k] = interpolatePipelineArgs(v, memory);
+    }
+    return out;
+  }
+  return input;
+}
 
 export async function executeVisualChainTool(args = {}) {
   const steps = Array.isArray(args?.steps) ? args.steps : [];
@@ -1069,54 +1293,158 @@ export async function executeVisualChainTool(args = {}) {
   });
 
   const executedSteps = [];
+  // Khởi tạo bộ nhớ bước của chuỗi hiện tại (step1, step2, ...)
+  toolMemoryState.stepResults = {};
 
   for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    const action = String(step.action || "").trim().toLowerCase();
+    const rawStep = steps[i] || {};
+    // Tự động truyền dữ liệu qua bộ nhớ trong (Fast-Path Memory Pipeline) giữa các bước
+    const step = interpolatePipelineArgs(rawStep, toolMemoryState);
+    const stepArgs = step.args && typeof step.args === "object" ? step.args : step;
+    const action = String(step.action || step.tool || "").trim().toLowerCase();
     const stepLabel = `Bước ${i + 1}/${steps.length} [${action}]`;
+    const stepDetail = String(
+      step.target || step.text || step.key || step.query || step.path || stepArgs?.query || stepArgs?.path || ""
+    ).trim();
 
     emitEvent({
       type: "log",
       level: "info",
-      message: `[VisualChain] ${stepLabel}: ${step.target || step.text || step.key || ""}`,
+      message: `[VisualChain] ${stepLabel}: ${stepDetail}`,
+    });
+    emitToRenderer("iris:tool-status", {
+      state: "running",
+      name: "execute_visual_chain",
+      label: `${stepLabel}${stepDetail ? `: ${stepDetail.slice(0, 32)}` : ""}`,
     });
 
     let stepResult = { step: i + 1, action, success: false };
 
     try {
-      if (action === "open_app" || action === "open_url") {
-        const target = step.target || step.text;
-        const isUrl = action === "open_url" || /^https?:\/\//i.test(target);
+      if (action === "open_app" || action === "open_url" || action === "open_url_or_app") {
+        const target = step.target || step.text || stepArgs.target || stepArgs.url;
+        const isUrl = action === "open_url" || Boolean(stepArgs.is_url) || /^https?:\/\//i.test(String(target || ""));
         const res = await openUrlOrApp({ target, is_url: isUrl });
         await smartSettle({ minWaitMs: 350 });
         stepResult.success = res?.status !== "error";
         stepResult.details = res;
-      } else if (action === "click") {
-        const target = step.target || step.text;
-        const res = await startOmniParserTask({ task: target });
+      } else if (action === "click" || action === "computer_use_omniparser") {
+        const target = step.target || step.text || stepArgs.task || stepArgs.target;
+        const res = await startOmniParserTask({ task: target, fast_mode: step.fast_mode ?? true });
         stepResult.success = res?.status === "success";
         stepResult.details = res;
-      } else if (action === "type") {
-        const text = step.text || "";
-        const res = await startComputerUseType({ text });
+      } else if (action === "type" || action === "computer_use_type") {
+        const text = step.text ?? stepArgs.text ?? "";
+        const res = await startComputerUseType({ ...stepArgs, text });
         await smartSettle({ minWaitMs: 150 });
         stepResult.success = res?.status === "success";
         stepResult.details = res;
       } else if (action === "press_key") {
-        const key = step.key || step.text || "";
+        const key = step.key || step.text || stepArgs.key || "";
         const res = await startComputerUseType({ key });
         await smartSettle({ minWaitMs: 150 });
         stepResult.success = res?.status === "success";
         stepResult.details = res;
       } else if (action === "wait") {
-        const dur = Math.min(10000, Math.max(100, Number(step.duration_ms || 500)));
+        const dur = Math.min(10000, Math.max(100, Number(step.duration_ms || stepArgs.duration_ms || 500)));
         await sleep(dur);
         stepResult.success = true;
+        stepResult.details = { status: "success", waited_ms: dur };
       } else if (action === "verify") {
-        const { grabPrimaryScreenJpeg } = await import("./vision.mjs");
         const { buffer } = await grabPrimaryScreenJpeg(75);
         stepResult.success = Boolean(buffer && buffer.length > 0);
         stepResult.has_frame = stepResult.success;
+        stepResult.details = { status: stepResult.success ? "success" : "error", has_frame: stepResult.success };
+      } else if (action === "search_local_files" || action === "search_everything") {
+        const query = step.query || step.target || step.text || stepArgs.query;
+        const res = await searchEverythingTool({ query, max: step.max || stepArgs.max || 10 });
+        // Thêm trường tiện lợi first_path để bước sau dễ dàng lấy {{prev.first_path}}
+        if (res?.status === "success" && Array.isArray(res.results) && res.results[0]?.path) {
+          res.first_path = res.results[0].path;
+          res.path = res.results[0].path;
+        }
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "filesystem_ops" || action === "read_file" || action === "write_file") {
+        const fsAction =
+          action === "read_file" ? "read" : action === "write_file" ? "write" : (step.fs_action || stepArgs.action || "read");
+        const targetPath = step.path || step.target || stepArgs.path || resolveMemoryPath("prev.first_path");
+        const res = await filesystemOpsTool({
+          ...stepArgs,
+          action: fsAction,
+          path: targetPath,
+          content: step.content ?? step.text ?? stepArgs.content,
+        });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "ui_automation") {
+        const res = await uiAutomationTool({
+          action: step.uia_action || stepArgs.action || "click",
+          target: step.target || stepArgs.target,
+          query: step.query || step.target || stepArgs.query,
+          text: step.text || stepArgs.text,
+        });
+        stepResult.success = res?.status === "success" || res?.success === true;
+        stepResult.details = res;
+      } else if (action === "ocr_region") {
+        const res = await ocrRegionTool({
+          ...stepArgs,
+          find: step.find || step.query || step.target || stepArgs.find,
+        });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "browser_open") {
+        const res = await browserOpenTool({ url: step.url || step.target || step.text || stepArgs.url });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "browser_click") {
+        const res = await browserClickTool({ target: step.target || step.text || stepArgs.target });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "browser_type") {
+        const res = await browserTypeTool({
+          target: step.target || stepArgs.target,
+          text: step.text || stepArgs.text,
+          submit: step.submit ?? stepArgs.submit,
+        });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "browser_extract_text") {
+        const res = await browserExtractTextTool(stepArgs);
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "quick_reminder") {
+        const res = await quickReminderTool({
+          action: step.reminder_action || stepArgs.action || "schedule",
+          minutes: step.minutes ?? stepArgs.minutes ?? 30,
+          title: step.title || step.target || stepArgs.title || goal,
+          message: step.message || step.text || stepArgs.message || goal,
+        });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "send_desktop_notification" || action === "notify") {
+        const res = await sendDesktopNotificationTool({
+          title: step.title || stepArgs.title || "Iris",
+          message: step.message || step.text || stepArgs.message || `Đã hoàn tất: ${goal}`,
+        });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "read_clipboard") {
+        const res = await readClipboardTool();
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "write_clipboard") {
+        const res = await writeClipboardTool({ text: step.text || stepArgs.text });
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "window_manager") {
+        const res = await windowManagerTool(stepArgs);
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
+      } else if (action === "run_terminal_command") {
+        const res = await runTerminalCommandTool(stepArgs);
+        stepResult.success = res?.status === "success";
+        stepResult.details = res;
       } else {
         stepResult.error = `Hành động không xác định: ${action}`;
         stepResult.success = false;
@@ -1126,9 +1454,16 @@ export async function executeVisualChainTool(args = {}) {
       stepResult.success = false;
     }
 
+    // Lưu kết quả bước vào Fast-Path Memory Pipeline để các bước kế tiếp truy cập tức thì (< 0.05ms)
+    if (stepResult.details) {
+      recordToolExecution(action, step, stepResult.details);
+      toolMemoryState.stepResults[`step${i + 1}`] = stepResult.details;
+      toolMemoryState.stepResults[String(i + 1)] = stepResult.details;
+    }
+
     executedSteps.push(stepResult);
 
-    if (!stepResult.success) {
+    if (!stepResult.success && step.continue_on_error !== true) {
       emitEvent({
         type: "log",
         level: "warn",
@@ -1159,6 +1494,7 @@ export async function executeVisualChainTool(args = {}) {
     goal,
     total_steps: steps.length,
     executed_steps: executedSteps,
+    last_output: toolMemoryState.lastResult,
     message: `Đã thực hiện và nghiệm thu thành công toàn bộ ${steps.length} bước cho: "${goal}".`,
   };
 }

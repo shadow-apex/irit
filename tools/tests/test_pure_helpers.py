@@ -209,6 +209,53 @@ class Ocr(unittest.TestCase):
         a = ocr_region.build_parser().parse_args(["--region", "-100", "10.6", "300", "200"])
         self.assertEqual(a.region, [-100, 11, 300, 200])
 
+    def test_find_in_ocr_data_and_visual_signature(self):
+        words = [
+            {"text": "File", "x": 10, "y": 10, "w": 20, "h": 10},
+            {"text": "Settings", "x": 50, "y": 10, "w": 60, "h": 10},
+        ]
+        lines = [
+            {"text": "File Settings", "x": 10, "y": 10, "w": 100, "h": 10},
+        ]
+        m1 = ocr_region.find_in_ocr_data(words, lines, "settings")
+        self.assertIsNotNone(m1)
+        self.assertEqual(m1["matched_text"], "Settings")
+        self.assertEqual(m1["center"], [80, 15])
+        m2 = ocr_region.find_in_ocr_data(words, lines, "file settings")
+        self.assertIsNotNone(m2)
+        self.assertEqual(m2["matched_text"], "File Settings")
+        self.assertEqual(m2["center"], [60, 15])
+        self.assertIsNone(ocr_region.find_in_ocr_data(words, lines, "nonexistent"))
+
+
+import filesystem_ops as fops  # noqa: E402
+import tool_daemon  # noqa: E402
+
+
+class ToolDaemonTests(unittest.TestCase):
+    def test_daemon_in_memory_nonexistent(self):
+        res = tool_daemon.execute_tool_in_memory("khong_co.py")
+        self.assertFalse(res["ok"])
+        self.assertIn("Không tìm thấy script", res["stderr"])
+
+    def test_daemon_in_memory_active_window(self):
+        res = tool_daemon.execute_tool_in_memory("active_window_info.py")
+        self.assertTrue(res["ok"])
+        self.assertIn('"success": true', res["stdout"])
+
+
+class FilesystemOpsErrors(unittest.TestCase):
+    def test_locked_and_permission_errors(self):
+        err_perm = PermissionError(13, "Access is denied")
+        err_perm.winerror = 5
+        msg_perm = fops._format_fs_error(err_perm, "C:\\test.txt")
+        self.assertIn("quyền Administrator bị từ chối", msg_perm)
+
+        err_lock = OSError(16, "The process cannot access the file because it is being used by another process")
+        err_lock.winerror = 32
+        msg_lock = fops._format_fs_error(err_lock, "C:\\locked.docx")
+        self.assertIn("đang bị khoá", msg_lock)
+
 
 class SysControl(unittest.TestCase):
     def test_volume_plan(self):
