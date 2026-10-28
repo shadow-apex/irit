@@ -25,7 +25,18 @@ import {
   getCachedActiveWindow,
   formatActiveWindowSummary,
   refreshActiveWindowContext,
+  setSmartAudioDucking,
 } from "./local-tools.mjs";
+import { handleSpatialDeskVoiceTranscript } from "../../assets/spatial_desk/desk-window.mjs";
+
+export function updateAudioState(state) {
+  emitEvent({ type: "audio_state", state });
+  if (state === "speaking") {
+    setSmartAudioDucking(true).catch(() => {});
+  } else if (state === "listening" || state === "idle") {
+    setSmartAudioDucking(false).catch(() => {});
+  }
+}
 
 export let liveSession = null;
 
@@ -139,10 +150,12 @@ function flushTranscripts() {
 
   if (userText) {
     emitEvent({ type: "transcript", speaker: "you", text: userText });
+    handleSpatialDeskVoiceTranscript("you", userText);
   }
   if (modelText) {
     emitEvent({ type: "transcript", speaker: "gemini", text: modelText });
     sendWebMessage(`[Gemini🎙️]: ${modelText}`);
+    handleSpatialDeskVoiceTranscript("gemini", modelText);
   }
   userTranscriptBuffer = "";
   modelTranscriptBuffer = "";
@@ -167,7 +180,9 @@ const LOCAL_TOOL_RULES = [
   // 6. SHOWCASE & ANTI-HALLUCINATION / INTEGRITY
   "6. SHOWCASE & INTEGRITY: 'demo tính năng' / 'showcase' -> iris_showcase{} (TUYỆT ĐỐI KHÔNG gọi lại khi đang chạy; Iris hoàn toàn im lặng trong khi showcase thuyết minh; sau khi xong chỉ nói 1 câu ngắn xác nhận). Khi thực thi lệnh, LUÔN phát toolCall trước, TUYỆT ĐỐI KHÔNG nói 'Đã xong' / 'Đã hoàn thành' trước khi nhận toolResponse thành công.",
   // 7. MULTI-STEP ACTION CHAINS (CHUỖI HÀNH ĐỘNG TỰ HÀNH CÓ NGHIỆM THU)
-  "7. MULTI-STEP ACTION CHAINS: Khi người dùng yêu cầu chuỗi hành động kết hợp (ví dụ: 'mở Notepad rồi gõ...', 'mở Chrome rồi vào trang...', 'vào Cài đặt rồi bấm...') -> LUÔN gọi execute_visual_chain{goal: '...', steps: [...]}. Hệ thống sẽ tự động thực hiện và nghiệm thu thị giác từng bước trước khi sang bước kế tiếp."
+  "7. MULTI-STEP ACTION CHAINS: Khi người dùng yêu cầu chuỗi hành động kết hợp (ví dụ: 'mở Notepad rồi gõ...', 'mở Chrome rồi vào trang...', 'vào Cài đặt rồi bấm...') -> LUÔN gọi execute_visual_chain{goal: '...', steps: [...]}. Hệ thống sẽ tự động thực hiện và nghiệm thu thị giác từng bước trước khi sang bước kế tiếp.",
+  // 8. SPATIAL AI DESK (BÀN LÀM VIỆC KHÔNG GIAN CHIẾU MÁY CHIẾU)
+  "8. SPATIAL AI DESK: 'mở bàn làm việc' / 'bật bàn không gian' -> toggle_spatial_desk{action: 'open'}; 'đóng bàn làm việc' / 'tắt bàn làm việc' -> toggle_spatial_desk{action: 'close'}; 'kéo cửa sổ xuống bàn' -> toggle_spatial_desk{action: 'drop_window'}; 'chìa khóa/bút/... của tôi ở đâu?' (tìm đồ vật trên bàn) -> toggle_spatial_desk{action: 'aura_locate', target: '...'}; 'quét X-Ray linh kiện trên bàn' -> toggle_spatial_desk{action: 'xray_scan'}; 'đo kích thước vật này' / 'thước đo laze' -> desk_measure_object{label: '...'}; 'thiết kế hộp đựng ... để in 3D' / 'xuất file STL' -> desk_generate_stl{model_type: 'sliding_box', wall_mm: 2.0}; 'Iris, tự căn chỉnh máy chiếu' / 'hiệu chuẩn máy chiếu' -> desk_auto_calibrate{}; 'Iris, chiếu sơ đồ chân bo mạch này' / 'sơ đồ chân ESP32/Arduino/Pico/STM32/IC 555' -> desk_overlay_pinout{board: '...'}; 'Iris, gửi lệnh in 3D' / 'Iris, in chi tiết này' -> desk_send_to_3d_printer{printer_type: 'bambu_lab'}; 'Iris, quét 3D vật thể này' / 'quét 3D đa góc' -> desk_scan_3d_mesh{views: 12}; 'Iris, mở file 3D' / 'chọn file STL' -> desk_load_cad_model{file: 'dialog'}; 'Iris, tách chi tiết' / 'tách nắp hộp' -> desk_modify_cad_dimensions{explode: true}; 'Iris, chỉnh kích thước hộp' -> desk_modify_cad_dimensions{length_mm: 75.0, width_mm: 45.0, height_mm: 30.0}."
 ].join("\n");
 
 export function buildLiveConfig(resumeHandle) {
@@ -317,7 +332,7 @@ async function connectLive({ isReconnect }) {
           liveStatus = { running: true, pid: process.pid, geminiStatus: "connected" };
           emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec", geminiStatus: "connected" } });
           emitEvent({ type: "gemini_status", status: "connected", model });
-          emitEvent({ type: "audio_state", state: "listening" });
+          updateAudioState("listening");
           updateTrayMenu();
           // G-02: onopen có thể chạy TRƯỚC khi `liveSession` được gán (gán sau `await connect`), khi đó
           // hàng đợi không xả được — nên xả cả ở đây lẫn ngay sau khi connect() trả về.
@@ -348,7 +363,7 @@ async function connectLive({ isReconnect }) {
           if (userStopped) {
             liveStatus = { running: false, pid: null, geminiStatus: "offline" };
             emitEvent({ type: "gemini_status", status: "offline" });
-            emitEvent({ type: "audio_state", state: "idle" });
+            updateAudioState("idle");
             emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
             updateTrayMenu();
             return;
@@ -392,7 +407,7 @@ function scheduleReconnect(reason, { isRateLimit = false } = {}) {
       error: reason,
     });
     emitEvent({ type: "gemini_status", status: "offline" });
-    emitEvent({ type: "audio_state", state: "idle" });
+    updateAudioState("idle");
     emitEvent({ type: "sidecar_status", status: liveStatus, reason });
     return;
   }
@@ -420,7 +435,7 @@ async function handleToolCall(toolCall) {
   pendingToolCalls += calls.length || 1;
   const functionResponses = [];
   const executedShowcase = new Set();
-  emitEvent({ type: "audio_state", state: "thinking" });
+  updateAudioState("thinking");
   try {
     for (const call of calls) {
       // Khử trùng lặp gọi lặp iris_showcase trong cùng một lượt
@@ -502,7 +517,7 @@ async function handleToolCall(toolCall) {
   } finally {
     pendingToolCalls = Math.max(0, pendingToolCalls - (calls.length || 1));
     if (pendingToolCalls === 0) {
-      emitEvent({ type: "audio_state", state: "listening" });
+      updateAudioState("listening");
     }
   }
 }
@@ -538,7 +553,7 @@ function handleLiveMessage(message) {
   if (content.interrupted) {
     flushTranscripts();
     emitToRenderer("live:interrupt", {});
-    emitEvent({ type: "audio_state", state: "listening" });
+    updateAudioState("listening");
     return;
   }
 
@@ -565,12 +580,12 @@ function handleLiveMessage(message) {
     // Chống báo hoàn thành ảo / nói trước khi tool thực thi + chống phản hồi tiếng ồn/từ đệm rác:
     if (message.toolCall || pendingToolCalls > 0 || isFillerInput) continue;
     emitToRenderer("live:audio", { data: inlineData.data, mimeType });
-    emitEvent({ type: "audio_state", state: "speaking" });
+    updateAudioState("speaking");
   }
 
   if (content.turnComplete) {
     flushTranscripts();
-    emitEvent({ type: "audio_state", state: pendingToolCalls > 0 ? "thinking" : "listening" });
+    updateAudioState(pendingToolCalls > 0 ? "thinking" : "listening");
   }
 }
 
@@ -596,7 +611,7 @@ export async function stopLive() {
   liveStatus = { running: false, pid: null, geminiStatus: "offline" };
   emitToRenderer("live:interrupt", {});
   emitEvent({ type: "gemini_status", status: "offline" });
-  emitEvent({ type: "audio_state", state: "idle" });
+  updateAudioState("idle");
   emitEvent({ type: "sidecar_status", status: liveStatus });
   updateTrayMenu();
   return liveStatus;

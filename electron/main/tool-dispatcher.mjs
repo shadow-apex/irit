@@ -110,6 +110,17 @@ import {
   searchEverythingTool,
   readNotificationsTool,
 } from "./local-tools.mjs";
+import {
+  toggleSpatialDeskTool,
+  deskMeasureObjectTool,
+  deskGenerateStlTool,
+  deskAutoCalibrateTool,
+  deskOverlayPinoutTool,
+  deskSendTo3dPrinterTool,
+  deskScan3dMeshTool,
+  deskLoadCadModelTool,
+  deskModifyCadDimensionsTool,
+} from "../../assets/spatial_desk/desk-window.mjs";
 
 const TOOL_STATUS_LABELS = {
   computer_use_omniparser: "Đang định vị & click trên màn hình",
@@ -144,6 +155,15 @@ const TOOL_STATUS_LABELS = {
   cad_automation: "Đang xử lý bản vẽ AutoCAD",
   submit_claude_task: "Đang giao tác vụ cho Claude Code",
   iris_showcase: "Đang chạy màn trình diễn tính năng",
+  toggle_spatial_desk: "Đang điều khiển Bàn làm việc không gian",
+  desk_measure_object: "Đang đo vật thể bằng thước Laze milimet",
+  desk_generate_stl: "Đang thiết kế & xuất file in 3D (.STL)",
+  desk_auto_calibrate: "Đang tự động hiệu chuẩn máy chiếu (ArUco 2s)",
+  desk_overlay_pinout: "Đang chiếu sơ đồ chân linh kiện (PCB Pinout)",
+  desk_send_to_3d_printer: "Đang cắt lớp G-code & gửi lệnh in 3D",
+  desk_scan_3d_mesh: "Đang quét & tái tạo mô hình 3D đa góc",
+  desk_load_cad_model: "Đang mở & giải mã file 3D CAD (.STL/.OBJ)",
+  desk_modify_cad_dimensions: "Đang chỉnh sửa kích thước mô hình 3D",
 };
 
 /**
@@ -388,6 +408,24 @@ async function dispatchClaudeToolInternal(name, args = {}) {
       return cadAutomationTool(args);
     case "ui_automation":
       return uiAutomationTool(args);
+    case "toggle_spatial_desk":
+      return toggleSpatialDeskTool(args);
+    case "desk_measure_object":
+      return deskMeasureObjectTool(args);
+    case "desk_generate_stl":
+      return deskGenerateStlTool(args);
+    case "desk_auto_calibrate":
+      return deskAutoCalibrateTool(args);
+    case "desk_overlay_pinout":
+      return deskOverlayPinoutTool(args);
+    case "desk_send_to_3d_printer":
+      return deskSendTo3dPrinterTool(args);
+    case "desk_scan_3d_mesh":
+      return deskScan3dMeshTool(args);
+    case "desk_load_cad_model":
+      return deskLoadCadModelTool(args);
+    case "desk_modify_cad_dimensions":
+      return deskModifyCadDimensionsTool(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }

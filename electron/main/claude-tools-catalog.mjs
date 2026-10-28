@@ -1115,6 +1115,189 @@ function buildClaudeToolsRaw() {
             required: ["action"],
           },
         },
+        {
+          name: "toggle_spatial_desk",
+          description: "Control the Spatial AI Desk (Bàn làm việc không gian chiếu máy chiếu). Supports opening/closing the transparent fullscreen Desk HUD on the projector display (or Simulator mode on 1 monitor), dropping PC windows onto the desk (Infinite Desk Extension), triggering X-Ray Hardware Inspector callout overlays, or activating the Pulsing Aura Object Locator to find items on the desk (e.g. 'Iris, mở bàn làm việc', 'Iris, đóng bàn làm việc', 'Iris, chìa khóa của tôi ở đâu?', 'quét X-Ray linh kiện trên bàn').",
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                enum: ["toggle", "open", "close", "status", "aura_locate", "xray_scan", "drop_window", "calibrate"],
+                description: "Action to execute: 'open' (mở bàn làm việc), 'close' (đóng bàn làm việc), 'toggle' (bật/tắt), 'status' (kiểm tra trạng thái), 'aura_locate' (vẽ vòng hào quang tìm đồ vật trên bàn), 'xray_scan' (quét X-Ray giải mã linh kiện), 'drop_window' (kéo cửa sổ máy tính thả xuống bàn), 'calibrate' (hiệu chuẩn ProCam Homography).",
+              },
+              target: {
+                type: "string",
+                description: "Object name to highlight with Pulsing Aura (e.g. 'Chìa khóa nhà', 'Bút dạ') or window title to drop onto the desk.",
+              },
+              x: { type: "number", description: "Optional X coordinate on desk projection." },
+              y: { type: "number", description: "Optional Y coordinate on desk projection." },
+              ppm: { type: "number", description: "Optional Pixels-Per-Millimeter calibration ratio." },
+            },
+          },
+        },
+        {
+          name: "desk_measure_object",
+          description: "Virtual Laser Caliper (Thước đo Laze quang học chuẩn Milimet trên mặt bàn). Captures or measures an object on the desk using desk_caliper.py and tools/ocr_region.py, computes exact physical dimensions (length x width in millimeters with ±0.5mm precision), and projects neon green laser ruler lines with millimeter ticks directly onto the desk surface.",
+          parameters: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "Name or description of the object being measured on the desk (e.g. 'Bo mạch ESP32', 'Pin 18650', 'Chìa khóa')." },
+              ppm: { type: "number", description: "Pixels-Per-Millimeter calibration factor (default 4.25)." },
+              x1: { type: "number", description: "Optional start X coordinate in pixels." },
+              y1: { type: "number", description: "Optional start Y coordinate in pixels." },
+              x2: { type: "number", description: "Optional end X coordinate in pixels." },
+              y2: { type: "number", description: "Optional end Y coordinate in pixels." },
+              width_px: { type: "number", description: "Optional measured pixel width." },
+              height_px: { type: "number", description: "Optional measured pixel height." },
+              height_mm: { type: "number", description: "Estimated physical thickness/height in millimeters (default 15)." },
+              image: { type: "string", description: "Optional path to overhead camera snapshot image." },
+              no_ocr: { type: "boolean", description: "If true, skip OCR text extraction on the object." },
+            },
+          },
+        },
+        {
+          name: "desk_generate_stl",
+          description: "AI Parametric 3D CAD & .STL Generator (Bộ sinh file in 3D .STL qua OpenSCAD tham số). Uses measured millimeter dimensions from the desk to generate parametric OpenSCAD (.scad) code and export a watertight 3D-printable .STL file directly to Desktop via desk_stl_gen.py, while projecting a 360-degree rotating 3D hologram preview onto the desk surface.",
+          parameters: {
+            type: "object",
+            properties: {
+              model_type: {
+                type: "string",
+                enum: ["sliding_box", "box", "enclosure", "stand", "holder", "cylinder", "spacer"],
+                description: "Type of parametric 3D model to generate ('sliding_box' default for custom-fitted box with sliding lid).",
+              },
+              length_mm: { type: "number", description: "Inner object length in millimeters (auto-filled from last laser caliper measurement if omitted)." },
+              width_mm: { type: "number", description: "Inner object width in millimeters (auto-filled from last laser caliper measurement if omitted)." },
+              height_mm: { type: "number", description: "Inner object height/depth in millimeters (default 18)." },
+              wall_mm: { type: "number", description: "Wall thickness in millimeters (default 2.0)." },
+              clearance_mm: { type: "number", description: "Fit tolerance clearance in millimeters (default 0.8)." },
+              has_lid: { type: "boolean", description: "Whether to include a sliding lid (default true)." },
+              output: { type: "string", description: "Output .STL file path (default 'desktop/iris_spatial_box.stl')." },
+              open_slicer: { type: "boolean", description: "If true, automatically open 3D slicer software (Bambu Studio / PrusaSlicer / Cura) if installed." },
+            },
+          },
+        },
+        {
+          name: "desk_auto_calibrate",
+          description: "Auto ProCam Calibration in 2 Seconds (Tự động hiệu chuẩn máy chiếu - camera trong 2 giây). Projects a high-contrast 4-corner ArUco and ChArUco chessboard pattern onto the desk for 1.5 seconds, detects corners via OpenCV in desk_autocalib.py, computes the 3x3 Homography matrix and Pixels-Per-Millimeter (PPM) ratio, saves to procam_config.json, and projects a green neon success halo (e.g. 'Iris, tự căn chỉnh máy chiếu', 'hiệu chuẩn máy chiếu').",
+          parameters: {
+            type: "object",
+            properties: {
+              image: { type: "string", description: "Optional path to an overhead camera image frame." },
+              camera_id: { type: "integer", description: "Optional overhead camera index (default -1 uses optical reference pattern)." },
+              board_width_mm: { type: "number", description: "Physical width of the projected calibration pattern in millimeters (default 380)." },
+              board_height_mm: { type: "number", description: "Physical height of the projected calibration pattern in millimeters (default 215)." },
+              projector_width: { type: "integer", description: "Projector horizontal resolution in pixels (default 1920)." },
+              projector_height: { type: "integer", description: "Projector vertical resolution in pixels (default 1080)." },
+              output_config: { type: "string", description: "Optional custom path to save procam_config.json." },
+            },
+          },
+        },
+        {
+          name: "desk_overlay_pinout",
+          description: "Interactive PCB Pinout AR Overlay (Chiếu sơ đồ chân linh kiện điện tử trực tiếp lên mặt bàn). Uses desk_pcb_pinout.py to detect the position and rotation angle of a microcontroller/IC on the desk (ESP32, Arduino Uno/Nano/Mega, Raspberry Pi Pico, STM32 BluePill, IC 555, ATmega328P, ESP8266, with Gemini/Claude Vision fallback) and projects color-coded neon laser pin labels ([VCC - Đỏ], [GND - Xanh sẫm], [GPIO / PWM - Xanh cyan], [TX/RX - Vàng cam], [ADC - Tím]) directly onto the desk surface.",
+          parameters: {
+            type: "object",
+            properties: {
+              board: {
+                type: "string",
+                description: "Board or IC name/marking (e.g. 'esp32', 'arduino_uno', 'arduino_nano', 'arduino_mega', 'raspberry_pi_pico', 'stm32_bluepill', 'ic_555', 'atmega328p', 'esp8266').",
+              },
+              image: { type: "string", description: "Optional overhead camera image path for pose detection and IC marking OCR/Vision fallback." },
+              center_x: { type: "integer", description: "Optional board center X coordinate on desk projection (px)." },
+              center_y: { type: "integer", description: "Optional board center Y coordinate on desk projection (px)." },
+              angle: { type: "number", description: "Optional board rotation angle in degrees on the desk surface." },
+              ppm: { type: "number", description: "Optional Pixels-Per-Millimeter ratio." },
+              vision_fallback: { type: "boolean", description: "If true, force AI Vision / OCR IC marking lookup." },
+            },
+          },
+        },
+        {
+          name: "desk_send_to_3d_printer",
+          description: "Direct Send to 3D Printer via Bambu Lab / OctoPrint & Headless Slicer CLI (Bắn thẳng lệnh in 3D sang máy in). Uses desk_3d_printer.py to slice a .STL file into G-code in headless mode (OrcaSlicer / PrusaSlicer CLI or built-in FDM slicer), dispatches the print job over LAN/Wi-Fi to Bambu Lab (X1C, P1S, A1, A1 mini) or OctoPrint REST API, and projects a glowing rotating progress ring (%) around the 3D model on the desk (e.g. 'Iris, gửi lệnh in 3D', 'Iris, in chi tiết này').",
+          parameters: {
+            type: "object",
+            properties: {
+              stl_path: { type: "string", description: "Path to the .STL file to slice and print (defaults to latest generated .STL on Desktop)." },
+              printer_type: {
+                type: "string",
+                enum: ["bambu_lab", "octoprint", "auto"],
+                description: "3D printer protocol ('bambu_lab' or 'octoprint').",
+              },
+              printer_model: {
+                type: "string",
+                description: "Printer model identifier (e.g. 'x1c', 'p1s', 'a1', 'a1_mini').",
+              },
+              host: { type: "string", description: "Optional LAN IP address or hostname of the 3D printer." },
+              api_key: { type: "string", description: "Optional OctoPrint REST API key." },
+              access_code: { type: "string", description: "Optional Bambu Lab LAN access code." },
+              serial: { type: "string", description: "Optional Bambu Lab printer serial number." },
+              layer_height: { type: "number", description: "Slicing layer height in millimeters (default 0.2)." },
+              infill: { type: "integer", description: "Infill percentage 0-100 (default 20)." },
+              nozzle_temp: { type: "integer", description: "Nozzle temperature in Celsius (default 215)." },
+              bed_temp: { type: "integer", description: "Bed temperature in Celsius (default 60)." },
+              slicer: {
+                type: "string",
+                enum: ["auto", "orcaslicer", "prusaslicer", "builtin"],
+                description: "Headless slicer engine to use ('auto' default).",
+              },
+            },
+          },
+        },
+        {
+          name: "desk_scan_3d_mesh",
+          description: "Multi-View 3D Reconstruction & Photogrammetry (Tái tạo mô hình 3D vật thể từ ảnh chụp đa góc). Uses desk_photogrammetry.py to capture or process 8-16 multi-angle views around an object on the desk, extracts Silhouettes, Visual Hull, and Depth Maps to reconstruct a watertight 3D mesh, exports both .STL and .OBJ files to Desktop/iris_reconstructed_mesh.stl, and projects the rotating 3D wireframe hologram next to the real object (e.g. 'Iris, quét 3D vật thể này').",
+          parameters: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "Name or description of the physical object being scanned." },
+              views: { type: "integer", description: "Number of multi-angle views to capture around the object (8 to 16, default 12)." },
+              length_mm: { type: "number", description: "Estimated object length in millimeters." },
+              width_mm: { type: "number", description: "Estimated object width in millimeters." },
+              height_mm: { type: "number", description: "Estimated object height in millimeters (default 44)." },
+              preset: {
+                type: "string",
+                enum: ["organic_vase", "gear", "mechanical", "box_scan"],
+                description: "Visual hull geometry profile preset ('organic_vase' default).",
+              },
+              output: { type: "string", description: "Output .STL file path (default 'desktop/iris_reconstructed_mesh.stl')." },
+              images: {
+                type: "array",
+                items: { type: "string" },
+                description: "Optional list of multi-angle image paths captured from the overhead camera.",
+              },
+            },
+          },
+        },
+        {
+          name: "desk_load_cad_model",
+          description: "Open an existing 3D CAD file (.STL or .OBJ) to project onto the desk workspace for visualization, exploded assembly inspection, or manual dimension editing (e.g. 'Iris, mở file 3D', 'Iris, mở file CAD', 'chọn file STL').",
+          parameters: {
+            type: "object",
+            properties: {
+              file: { type: "string", description: "Path to the 3D .STL or .OBJ file, or 'dialog' to open the Windows file picker dialog." },
+              explode: { type: "boolean", description: "Whether to project in exploded assembly view (tách rời nắp và thân cụm chi tiết)." },
+              explode_distance: { type: "number", description: "Distance in millimeters to explode/separate components (default 38.0)." },
+            },
+          },
+        },
+        {
+          name: "desk_modify_cad_dimensions",
+          description: "Interactively modify 3D CAD dimensions (Length, Width, Height) and toggle exploded assembly view on the work desk (e.g. 'Iris, chỉnh kích thước hộp dài 75 rộng 45 cao 30', 'Iris, tách nắp hộp', 'Iris, nới rộng hộp'). Updates the 3D model in real time and saves an updated watertight .STL file.",
+          parameters: {
+            type: "object",
+            properties: {
+              file: { type: "string", description: "Optional path to the .STL file to modify (defaults to current model on desk)." },
+              length_mm: { type: "number", description: "New length in millimeters." },
+              width_mm: { type: "number", description: "New width in millimeters." },
+              height_mm: { type: "number", description: "New height in millimeters." },
+              explode: { type: "boolean", description: "Whether to separate parts in exploded assembly view." },
+              explode_distance: { type: "number", description: "Distance in millimeters to separate components." },
+              output: { type: "string", description: "Output path for the modified .STL file (defaults to Desktop/iris_spatial_edited.stl)." },
+            },
+          },
+        },
       ],
     },
   ];

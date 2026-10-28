@@ -1,0 +1,625 @@
+/**
+ * assets/spatial_desk/desk-hud/desk-hud.css
+ *
+ * Giao diện HUD không gian chiếu thẳng góc xuống mặt bàn gỗ (Spatial AI Desk).
+ * Thiết kế tương phản cao trên nền trong suốt (#00000000) để máy chiếu chỉ phát sáng
+ * các đường tia laze, nhãn chân mạch PCB, hào quang neon, cửa sổ cảm ứng,
+ * mô hình 3D xoay 360 độ và vòng tiến độ in 3D.
+ */
+
+:root {
+  --neon-cyan: #00f3ff;
+  --neon-green: #00ff9d;
+  --neon-magenta: #ff2a85;
+  --neon-amber: #ffb800;
+  --pin-vcc-red: #ff2a55;
+  --pin-gnd-blue: #1e64ff;
+  --pin-gpio-cyan: #00f3ff;
+  --pin-uart-orange: #ff9d00;
+  --pin-adc-purple: #c44dff;
+  --glass-bg: rgba(6, 14, 26, 0.82);
+  --glass-border: rgba(0, 243, 255, 0.38);
+  --text-bright: #e8fcff;
+  --text-muted: #8ab8c7;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+html,
+body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
+  color: var(--text-bright);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.spatial-desk-root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: radial-gradient(circle at 50% 50%, rgba(0, 243, 255, 0.04) 0%, rgba(0, 0, 0, 0) 75%);
+}
+
+#desk-spatial-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+/* Infinite Desk Extension Portal (Mép trên mặt bàn đón cửa sổ từ màn hình chính) */
+.infinite-drop-portal {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 68%;
+  height: 32px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: all 0.25s ease;
+}
+
+.portal-glow-line {
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--neon-cyan), var(--neon-green), var(--neon-cyan), transparent);
+  box-shadow: 0 0 18px var(--neon-cyan), 0 0 32px var(--neon-green);
+}
+
+.portal-label {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px rgba(0, 243, 255, 0.85);
+  opacity: 0.82;
+}
+
+.infinite-drop-portal.portal-active .portal-glow-line {
+  height: 6px;
+  box-shadow: 0 0 28px var(--neon-green), 0 0 50px var(--neon-cyan);
+}
+
+/* Header & Glass HUD Mirror */
+.desk-top-bar {
+  position: absolute;
+  top: 34px;
+  left: 28px;
+  right: 28px;
+  z-index: 12;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  pointer-events: none;
+}
+
+.desk-brand-pill,
+.glass-hud-mirror,
+.neon-clock-card {
+  pointer-events: auto;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0 22px rgba(0, 243, 255, 0.16), inset 0 0 14px rgba(0, 243, 255, 0.08);
+}
+
+.desk-brand-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+}
+
+.iris-core-orb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 10%, var(--neon-cyan) 55%, #0051ff 100%);
+  box-shadow: 0 0 16px var(--neon-cyan), 0 0 28px var(--neon-green);
+  animation: orbPulse 2.4s infinite ease-in-out;
+}
+
+@keyframes orbPulse {
+  0%, 100% { transform: scale(0.95); opacity: 0.9; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+.brand-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 10px rgba(0, 243, 255, 0.65);
+}
+
+.brand-subtitle {
+  font-size: 11px;
+  color: var(--neon-green);
+  margin-top: 2px;
+  letter-spacing: 0.8px;
+}
+
+.glass-hud-mirror {
+  flex: 1;
+  max-width: 580px;
+  padding: 10px 18px;
+}
+
+.hud-mirror-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--neon-cyan);
+  margin-bottom: 4px;
+}
+
+.hud-mirror-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon-green);
+  box-shadow: 0 0 10px var(--neon-green);
+}
+
+.hud-mirror-transcript {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Đồng hồ Neon phát sáng */
+.neon-clock-card {
+  padding: 8px 18px;
+  text-align: right;
+}
+
+.neon-time {
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 2px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 12px var(--neon-cyan), 0 0 24px rgba(0, 243, 255, 0.45);
+}
+
+.neon-date {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: var(--neon-green);
+  margin-top: 2px;
+}
+
+/* Bảng Telemetry nổi bên phải bàn */
+.desk-telemetry-panel {
+  position: absolute;
+  top: 114px;
+  right: 28px;
+  z-index: 11;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  pointer-events: none;
+}
+
+.telemetry-section {
+  pointer-events: auto;
+  background: var(--glass-bg);
+  border: 1px solid rgba(0, 255, 157, 0.34);
+  border-radius: 12px;
+  padding: 9px 14px;
+  box-shadow: 0 0 16px rgba(0, 255, 157, 0.12);
+}
+
+.telemetry-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--neon-green);
+  margin-bottom: 3px;
+}
+
+.telemetry-value {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-bright);
+  text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
+}
+
+.telemetry-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+/* Nút ảo phát sáng "BẮT ĐẦU IN 3D" trong thẻ 3D Studio */
+.virtual-3d-print-cta {
+  margin-top: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1.5px solid var(--neon-green);
+  background: linear-gradient(90deg, rgba(0, 255, 157, 0.22), rgba(0, 243, 255, 0.22));
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  box-shadow: 0 0 18px rgba(0, 255, 157, 0.45), inset 0 0 10px rgba(0, 255, 157, 0.2);
+  transition: all 0.18s ease;
+  animation: printBtnPulse 2s infinite ease-in-out;
+}
+
+.virtual-3d-print-cta:hover {
+  background: linear-gradient(90deg, rgba(0, 255, 157, 0.45), rgba(0, 243, 255, 0.42));
+  box-shadow: 0 0 28px var(--neon-green), 0 0 42px var(--neon-cyan);
+  transform: translateY(-1px);
+}
+
+@keyframes printBtnPulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(0, 255, 157, 0.42); }
+  50% { box-shadow: 0 0 26px rgba(0, 255, 157, 0.85), 0 0 36px rgba(0, 243, 255, 0.45); }
+}
+
+/* Hộp thoại chi tiết chân linh kiện điện tử (Interactive PCB Pinout Touch Dialog) */
+.pinout-detail-popover {
+  position: absolute;
+  left: 38px;
+  bottom: 96px;
+  width: 375px;
+  z-index: 16;
+  pointer-events: auto;
+  background: rgba(5, 12, 24, 0.92);
+  border: 1.5px solid var(--neon-cyan);
+  border-radius: 16px;
+  padding: 14px 16px;
+  box-shadow: 0 0 32px rgba(0, 243, 255, 0.35), inset 0 0 18px rgba(0, 243, 255, 0.1);
+  backdrop-filter: blur(14px);
+  transition: all 0.2s ease;
+}
+
+.pinout-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 243, 255, 0.28);
+}
+
+.pinout-popover-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  background: rgba(0, 243, 255, 0.2);
+  border: 1px solid var(--neon-cyan);
+  color: #ffffff;
+}
+
+.pinout-popover-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--neon-green);
+  text-shadow: 0 0 10px rgba(0, 255, 157, 0.55);
+}
+
+.pinout-popover-close {
+  background: rgba(255, 42, 133, 0.18);
+  border: 1px solid rgba(255, 42, 133, 0.5);
+  color: #ffffff;
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.pinout-popover-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pinout-popover-item {
+  background: rgba(0, 243, 255, 0.07);
+  border: 1px solid rgba(0, 243, 255, 0.22);
+  border-radius: 8px;
+  padding: 6px 9px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pinout-meta-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  color: var(--text-muted);
+}
+
+.pinout-meta-val {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-bright);
+  margin-top: 2px;
+}
+
+.pinout-popover-desc {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-bright);
+  background: rgba(0, 255, 157, 0.08);
+  border-left: 3px solid var(--neon-green);
+  padding: 7px 10px;
+  border-radius: 6px;
+}
+
+/* Lớp cửa sổ cảm ứng chiếu trên bàn (Infinite Desk Extension + Touch/Pinch-to-Zoom) */
+.desk-windows-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.projected-window-card {
+  position: absolute;
+  pointer-events: auto;
+  background: rgba(8, 18, 34, 0.86);
+  border: 1.5px solid var(--neon-cyan);
+  border-radius: 14px;
+  box-shadow: 0 0 26px rgba(0, 243, 255, 0.28), inset 0 0 18px rgba(0, 243, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform-origin: center center;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.projected-window-card.window-touching {
+  border-color: var(--neon-green);
+  box-shadow: 0 0 36px rgba(0, 255, 157, 0.55), inset 0 0 22px rgba(0, 255, 157, 0.15);
+}
+
+.projected-window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.22), rgba(0, 255, 157, 0.14));
+  border-bottom: 1px solid rgba(0, 243, 255, 0.3);
+  cursor: grab;
+}
+
+.projected-window-header:active {
+  cursor: grabbing;
+}
+
+.projected-window-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  letter-spacing: 0.6px;
+}
+
+.projected-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.win-ctrl-btn {
+  background: rgba(0, 243, 255, 0.15);
+  border: 1px solid rgba(0, 243, 255, 0.4);
+  color: var(--text-bright);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.win-ctrl-btn:hover {
+  background: var(--neon-cyan);
+  color: #021019;
+}
+
+.projected-window-body {
+  flex: 1;
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-bright);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.window-gesture-hint {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 255, 157, 0.1);
+  border: 1px dashed rgba(0, 255, 157, 0.4);
+  font-size: 11px;
+  color: var(--neon-green);
+}
+
+/* Thanh Dock công cụ không gian dưới mặt bàn */
+.spatial-dock-container {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  max-width: 96vw;
+}
+
+.spatial-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: rgba(5, 12, 24, 0.88);
+  border: 1.5px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow: 0 0 32px rgba(0, 243, 255, 0.25), inset 0 0 18px rgba(0, 243, 255, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.dock-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 243, 255, 0.28);
+  background: rgba(0, 243, 255, 0.08);
+  color: var(--text-bright);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.dock-btn:hover,
+.dock-btn.active {
+  background: rgba(0, 243, 255, 0.24);
+  border-color: var(--neon-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(0, 243, 255, 0.55);
+  transform: translateY(-2px);
+}
+
+.dock-btn-print-glow {
+  border-color: var(--neon-green);
+  background: rgba(0, 255, 157, 0.15);
+  color: #ffffff;
+  box-shadow: 0 0 14px rgba(0, 255, 157, 0.35);
+}
+
+.dock-btn-print-glow:hover,
+.dock-btn-print-glow.active {
+  background: rgba(0, 255, 157, 0.32);
+  border-color: var(--neon-green);
+  box-shadow: 0 0 22px var(--neon-green);
+}
+
+.dock-btn-danger {
+  border-color: rgba(255, 42, 133, 0.45);
+  background: rgba(255, 42, 133, 0.12);
+}
+
+.dock-btn-danger:hover {
+  background: rgba(255, 42, 133, 0.32);
+  border-color: var(--neon-magenta);
+  box-shadow: 0 0 16px rgba(255, 42, 133, 0.65);
+}
+
+.dock-btn.touch-activated,
+.win-ctrl-btn.touch-activated,
+.virtual-3d-print-cta.touch-activated,
+.dim-btn.touch-activated {
+  transform: scale(0.92) !important;
+  border-color: var(--neon-green) !important;
+  box-shadow: 0 0 24px var(--neon-green), inset 0 0 14px var(--neon-green) !important;
+  background: rgba(0, 255, 157, 0.35) !important;
+}
+
+.dock-icon {
+  font-size: 14px;
+}
+
+/* CAD Dimension Editor & Exploded View Controls */
+.cad-dims-control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.cad-dim-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(0, 243, 255, 0.08);
+  border: 1px solid rgba(0, 243, 255, 0.25);
+  border-radius: 8px;
+}
+
+.dim-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  width: 42px;
+}
+
+.dim-val {
+  font-size: 12px;
+  font-weight: 800;
+  color: #ffffff;
+  min-width: 58px;
+  text-align: center;
+  font-family: monospace;
+}
+
+.dim-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 243, 255, 0.45);
+  background: rgba(0, 243, 255, 0.15);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.dim-btn:hover {
+  background: var(--neon-cyan);
+  color: #021019;
+  box-shadow: 0 0 10px var(--neon-cyan);
+}
+
+.dim-btn:active {
+  transform: scale(0.9);
+  background: var(--neon-green);
+  border-color: var(--neon-green);
+}

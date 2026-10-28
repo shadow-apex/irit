@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iris Spatial AI Desk HUD</title>
+  <link rel="stylesheet" href="./desk-hud.css" />
+</head>
+<body>
+  <div id="spatial-desk-root" class="spatial-desk-root">
+    <!-- Lớp Canvas không gian chiếu toàn mặt bàn (ArUco Auto-Calib, Tia laze, Pinout AR, Hào quang Aura, X-Ray, Mô hình 3D .STL & Photogrammetry, Cử chỉ tay) -->
+    <canvas id="desk-spatial-canvas"></canvas>
+
+    <!-- Vùng tiếp nhận cửa sổ rơi từ màn hình máy tính xuống bàn (Infinite Desk Extension) -->
+    <div id="infinite-drop-portal" class="infinite-drop-portal">
+      <div class="portal-glow-line"></div>
+      <span class="portal-label">⬇ INFINITE DESK EXTENSION — KÉO CỬA SỔ TỪ MÀN HÌNH CHÍNH THẢ TUỘT XUỐNG BÀN ⬇</span>
+    </div>
+
+    <!-- Header thông tin Máy chiếu & Đồng hồ Neon phát sáng -->
+    <header class="desk-top-bar">
+      <div class="desk-brand-pill">
+        <span class="iris-core-orb" id="iris-core-orb"></span>
+        <div class="brand-meta">
+          <div class="brand-title">IRIS SPATIAL AI DESK</div>
+          <div class="brand-subtitle" id="projector-mode-badge">PROJECTOR MAPPING ACTIVE • 4.25 PPM</div>
+        </div>
+      </div>
+
+      <!-- Phản chiếu trạng thái Glass HUD & Giọng nói của Iris xuống mặt bàn -->
+      <div class="glass-hud-mirror" id="glass-hud-mirror">
+        <div class="hud-mirror-header">
+          <span class="hud-mirror-dot"></span>
+          <span id="hud-voice-state">IRIS GLASS HUD MIRROR • ĐANG LẮNG NGHE</span>
+        </div>
+        <div class="hud-mirror-transcript" id="hud-mirror-transcript">
+          "Iris sẵn sàng. Đặt vật thể lên bàn để đo Laze, chiếu sơ đồ chân mạch, quét 3D đa góc hoặc bắn lệnh in 3D."
+        </div>
+      </div>
+
+      <!-- Đồng hồ Neon phát sáng trên mặt bàn gỗ -->
+      <div class="neon-clock-card">
+        <div class="neon-time" id="neon-clock-time">00:00:00</div>
+        <div class="neon-date" id="neon-clock-date">SPATIAL WORKSPACE</div>
+      </div>
+    </header>
+
+    <!-- Vùng chứa các cửa sổ ứng dụng ảo được kéo thả xuống mặt bàn (Touch & Pinch-to-Zoom) -->
+    <main id="desk-windows-layer" class="desk-windows-layer"></main>
+
+    <!-- Hộp thoại chi tiết chân linh kiện điện tử khi người dùng chạm ngón tay vào chân mạch trên bàn -->
+    <div id="pinout-detail-popover" class="pinout-detail-popover hidden" role="dialog" aria-label="Chi tiết chân linh kiện">
+      <div class="pinout-popover-header">
+        <span class="pinout-popover-badge" id="pinout-popover-badge">[GPIO / PWM]</span>
+        <span class="pinout-popover-title" id="pinout-popover-title">D21 (GPIO21)</span>
+        <button class="pinout-popover-close" id="pinout-popover-close" title="Đóng">✕</button>
+      </div>
+      <div class="pinout-popover-grid">
+        <div class="pinout-popover-item">
+          <span class="pinout-meta-label">ĐIỆN ÁP LOGIC</span>
+          <span class="pinout-meta-val" id="pinout-popover-voltage">3.3V</span>
+        </div>
+        <div class="pinout-popover-item">
+          <span class="pinout-meta-label">GIAO THỨC HỖ TRỢ</span>
+          <span class="pinout-meta-val" id="pinout-popover-protocols">I2C_SDA • PWM</span>
+        </div>
+        <div class="pinout-popover-item">
+          <span class="pinout-meta-label">DÒNG ĐỊNH MỨC</span>
+          <span class="pinout-meta-val" id="pinout-popover-current">40 mA</span>
+        </div>
+        <div class="pinout-popover-item">
+          <span class="pinout-meta-label">VỊ TRÍ CHÂN</span>
+          <span class="pinout-meta-val" id="pinout-popover-pinnum">Chân #15 (RIGHT)</span>
+        </div>
+      </div>
+      <div class="pinout-popover-desc" id="pinout-popover-desc">
+        Chân dữ liệu giao tiếp I2C mặc định (I2C SDA) mức điện áp 3.3V.
+      </div>
+    </div>
+
+    <!-- Khu vực hiển thị thông số Thước đo Laze, Sơ đồ chân PCB & Máy in 3D .STL nổi trên bàn -->
+    <aside class="desk-telemetry-panel" id="desk-telemetry-panel">
+      <div class="telemetry-section" id="caliper-readout-card">
+        <div class="telemetry-title">📏 VIRTUAL LASER CALIPER</div>
+        <div class="telemetry-value" id="caliper-dimensions">52.0 × 28.0 mm</div>
+        <div class="telemetry-sub" id="caliper-sub">PPM: 4.25 px/mm • Sai số ±0.5mm</div>
+      </div>
+      <div class="telemetry-section" id="pinout-readout-card">
+        <div class="telemetry-title">🔌 PCB PINOUT AR OVERLAY</div>
+        <div class="telemetry-value" id="pinout-board-name">ESP32-WROOM-32</div>
+        <div class="telemetry-sub" id="pinout-board-sub">20 chân • Chạm chân mạch xem điện áp</div>
+      </div>
+      <div class="telemetry-section" id="hand-gesture-card">
+        <div class="telemetry-title">✋ MEDIAPIPE HAND TRACKING</div>
+        <div class="telemetry-value" id="hand-gesture-status">Sẵn sàng nhận cử chỉ</div>
+        <div class="telemetry-sub" id="hand-pinch-readout">THUMB_TIP ↔ INDEX_FINGER_TIP</div>
+      </div>
+      <div class="telemetry-section" id="stl-status-card">
+        <div class="telemetry-title">🧊 3D STUDIO & BAMBU/OCTOPRINT</div>
+        <div class="telemetry-value" id="stl-model-name">Hộp nắp trượt (2.0mm)</div>
+        <div class="telemetry-sub" id="stl-output-path">Desktop/iris_spatial_box.stl</div>
+        <button class="virtual-3d-print-cta" id="btn-floating-start-print" title="Chạm để bắn thẳng G-code sang máy in 3D">
+          🖨 BẮT ĐẦU IN 3D
+        </button>
+      </div>
+      <!-- Floating 3D CAD Dimension Editor HUD -->
+      <div class="telemetry-section" id="cad-editor-card">
+        <div class="telemetry-title">📐 CAD DIMENSIONS & EXPLODED VIEW</div>
+        <div class="cad-dims-control-row">
+          <div class="cad-dim-chip">
+            <span class="dim-tag">DÀI</span>
+            <button class="dim-btn" data-axis="length" data-delta="-2">-</button>
+            <span class="dim-val" id="cad-len-display">58mm</span>
+            <button class="dim-btn" data-axis="length" data-delta="2">+</button>
+          </div>
+          <div class="cad-dim-chip">
+            <span class="dim-tag">RỘNG</span>
+            <button class="dim-btn" data-axis="width" data-delta="-2">-</button>
+            <span class="dim-val" id="cad-wid-display">34mm</span>
+            <button class="dim-btn" data-axis="width" data-delta="2">+</button>
+          </div>
+          <div class="cad-dim-chip">
+            <span class="dim-tag">CAO</span>
+            <button class="dim-btn" data-axis="height" data-delta="-2">-</button>
+            <span class="dim-val" id="cad-hei-display">24mm</span>
+            <button class="dim-btn" data-axis="height" data-delta="2">+</button>
+          </div>
+        </div>
+        <div class="telemetry-sub" id="cad-editor-sub">Kéo điểm neo Neon trên bàn để chỉnh sửa</div>
+      </div>
+    </aside>
+
+    <!-- Thanh Dock công cụ không gian chiếu ở mép dưới mặt bàn -->
+    <footer class="spatial-dock-container">
+      <div class="spatial-dock" role="toolbar" aria-label="Thanh công cụ Bàn làm việc không gian">
+        <button class="dock-btn" id="btn-drop-window" data-tool="drop-window" title="Kéo cửa sổ máy tính thả xuống mặt bàn">
+          <span class="dock-icon">🪟</span>
+          <span class="dock-text">Thả Cửa Sổ</span>
+        </button>
+        <button class="dock-btn active" id="btn-laser-caliper" data-tool="laser-caliper" title="Thước đo Laze quang học chuẩn Milimet">
+          <span class="dock-icon">📐</span>
+          <span class="dock-text">Thước Laze</span>
+        </button>
+        <button class="dock-btn" id="btn-pcb-pinout" data-tool="pcb-pinout" title="Chiếu sơ đồ chân linh kiện điện tử (ESP32, Arduino, Pico, STM32, 555)">
+          <span class="dock-icon">🔌</span>
+          <span class="dock-text">Sơ Đồ Chân</span>
+        </button>
+        <button class="dock-btn" id="btn-xray-scan" data-tool="xray-scan" title="Quét X-Ray & Giải mã linh kiện phần cứng">
+          <span class="dock-icon">🔬</span>
+          <span class="dock-text">Quét X-Ray</span>
+        </button>
+        <button class="dock-btn" id="btn-aura-locator" data-tool="aura-locator" title="Vòng hào quang Neon tìm đồ vật thất lạc">
+          <span class="dock-icon">✨</span>
+          <span class="dock-text">Tìm Đồ</span>
+        </button>
+        <button class="dock-btn" id="btn-open-cad-file" data-tool="open-cad-file" title="Mở file 3D CAD (.STL / .OBJ) từ máy tính lên bàn">
+          <span class="dock-icon">📂</span>
+          <span class="dock-text">Mở File 3D</span>
+        </button>
+        <button class="dock-btn" id="btn-explode-assembly" data-tool="explode-assembly" title="Tách rời nắp và thân cụm chi tiết lắp ráp (Exploded View)">
+          <span class="dock-icon">💥</span>
+          <span class="dock-text">Tách Chi Tiết</span>
+        </button>
+        <button class="dock-btn" id="btn-stl-generator" data-tool="stl-generator" title="AI Thiết kế & Sinh mô hình in 3D (.STL) xoay 360°">
+          <span class="dock-icon">🧊</span>
+          <span class="dock-text">Tạo 3D (.STL)</span>
+        </button>
+        <button class="dock-btn" id="btn-scan-3d-mesh" data-tool="scan-3d-mesh" title="Quét 3D đa góc (Multi-View Photogrammetry) thành file .STL & .OBJ">
+          <span class="dock-icon">📸</span>
+          <span class="dock-text">Quét 3D Đa Góc</span>
+        </button>
+        <button class="dock-btn dock-btn-print-glow" id="btn-send-3d-printer" data-tool="send-3d-printer" title="Bắn thẳng lệnh in 3D sang máy in Bambu Lab / OctoPrint">
+          <span class="dock-icon">🖨️</span>
+          <span class="dock-text">Bắt Đầu In 3D</span>
+        </button>
+        <button class="dock-btn" id="btn-procam-calib" data-tool="procam-calib" title="Tự động hiệu chuẩn Máy chiếu - Camera bằng ArUco trong 2 giây">
+          <span class="dock-icon">🎯</span>
+          <span class="dock-text">Hiệu Chuẩn</span>
+        </button>
+        <button class="dock-btn dock-btn-danger" id="btn-close-desk" data-tool="close-desk" title="Đóng bàn làm việc không gian (Win+Alt+Space)">
+          <span class="dock-icon">✕</span>
+          <span class="dock-text">Đóng Bàn</span>
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="./desk-canvas.js"></script>
+</body>
+</html>

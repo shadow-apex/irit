@@ -1,0 +1,79 @@
+{
+  "version": "2.0",
+  "method": "opencv_aruco_4corners",
+  "frame_source": "aruco_charuco_optical_pattern",
+  "ppm": 4.2327,
+  "board_width_mm": 380.0,
+  "board_height_mm": 215.0,
+  "projector_resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "camera_resolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "cameraQuad": [
+    {
+      "x": 0.080208,
+      "y": 0.07963
+    },
+    {
+      "x": 0.919792,
+      "y": 0.07963
+    },
+    {
+      "x": 0.919792,
+      "y": 0.92037
+    },
+    {
+      "x": 0.080208,
+      "y": 0.92037
+    }
+  ],
+  "projectorQuad": [
+    {
+      "x": 0.08,
+      "y": 0.08
+    },
+    {
+      "x": 0.92,
+      "y": 0.08
+    },
+    {
+      "x": 0.92,
+      "y": 0.92
+    },
+    {
+      "x": 0.08,
+      "y": 0.92
+    }
+  ],
+  "homography": [
+    1.00049551,
+    0.0,
+    -0.00024775,
+    0.0,
+    0.99911987,
+    0.00044008,
+    0.0,
+    0.0,
+    1.0
+  ],
+  "inverseHomography": [
+    0.99950474,
+    -0.0,
+    0.00024763,
+    -0.0,
+    1.00088091,
+    -0.00044047,
+    0.0,
+    -0.0,
+    1.0
+  ],
+  "markers_detected": 4,
+  "chessboard_corners_detected": 35,
+  "reprojection_error_px": 0.0,
+  "calibration_time_ms": 613.71,
+  "calibrated_at": "2026-10-28T12:05:18Z"
+}

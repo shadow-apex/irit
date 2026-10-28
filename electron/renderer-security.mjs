@@ -22,9 +22,16 @@ export function installRendererSecurity({ repoRoot }) {
   // whatever content it navigates to.
   const APP_DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
   const APP_PACKAGED_URL = pathToFileURL(path.join(repoRoot, "dist", "index.html")).href;
+  const DESK_HUD_URL = pathToFileURL(path.join(repoRoot, "assets", "spatial_desk", "desk-hud", "index.html")).href;
 
   function isAppOwnDocument(url) {
-    return url === APP_DEV_URL || url.startsWith(`${APP_DEV_URL}/`) || url === APP_PACKAGED_URL;
+    return (
+      url === APP_DEV_URL ||
+      url.startsWith(`${APP_DEV_URL}/`) ||
+      url === APP_PACKAGED_URL ||
+      url === DESK_HUD_URL ||
+      url.startsWith(`${DESK_HUD_URL}?`)
+    );
   }
 
   // D9 (harden-security-boundaries): app-wide navigation containment,

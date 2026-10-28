@@ -132,6 +132,12 @@ import {
 } from "./main/po-questions.mjs";
 import { initMusicWidget, stopMusicWidget } from "./main/music-widget.mjs";
 import { initReminders, disposeReminders, stopClipboardWatcher } from "./main/local-tools.mjs";
+import {
+  toggleSpatialDesk,
+  closeSpatialDesk,
+  forwardHandGestureToDesk,
+  deskLoadCadModelTool,
+} from "../assets/spatial_desk/desk-window.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -509,6 +515,11 @@ app.whenReady().then(() => {
   // (IRIS_HAND_SYSTEM_GESTURES=1 để bật). Logic nằm ở main/hand-gestures.mjs.
   ipcMain.on("iris:hand-gesture", (_event, gesture) => {
     handGestures.handle(gesture);
+    forwardHandGestureToDesk(gesture);
+  });
+
+  ipcMain.on("iris:desk-open-cad-dialog", () => {
+    deskLoadCadModelTool({ file: "dialog" });
   });
 
   createWindow();
@@ -544,9 +555,32 @@ app.whenReady().then(() => {
     }
   };
   const reg1 = registerHud(hudKey);
-  const reg2 = registerHud("CommandOrControl+Alt+Space");
+  const reg2 = !reg1 ? registerHud("CommandOrControl+Alt+Space") : false;
   if (!reg1 && !reg2) {
     emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudKey}.` });
+  }
+
+  // Phím tắt toàn cục cho Spatial AI Desk (Bàn làm việc không gian chiếu máy chiếu):
+  // Hỗ trợ Super+Alt+Space (Win+Alt+Space), CommandOrControl+Alt+Space và fallback Alt+Space (qua IRIS_DESK_HOTKEY)
+  // kèm try-catch an toàn và kiểm tra isRegistered để không đè phím tắt sẵn có.
+  const deskShortcuts = [
+    process.env.IRIS_DESK_HOTKEY || "",
+    "Super+Alt+Space",
+    "CommandOrControl+Alt+Space",
+    "Alt+Space",
+  ].filter(Boolean);
+  for (const deskAcc of new Set(deskShortcuts)) {
+    try {
+      if (globalShortcut.isRegistered(deskAcc)) continue;
+      globalShortcut.register(deskAcc, () => {
+        setTimeout(() => {
+          unstickModifiers().catch(() => {});
+        }, 50);
+        toggleSpatialDesk();
+      });
+    } catch (e) {
+      emitEvent({ type: "log", level: "warn", message: `[spatial-desk] Không đăng ký được phím ${deskAcc}: ${e?.message || e}` });
+    }
   }
 
   // Phím tắt Ctrl + Space để tràn toàn màn hình (phủ cả taskbar)
@@ -700,6 +734,7 @@ function withTimeout(label, fn, ms = 5000) {
 }
 
 async function cleanupAll() {
+  await withTimeout("spatial desk", () => closeSpatialDesk());
   await withTimeout("hud/timers", () => { stopHudStatsInterval(); stopSmarthomeRuleTimer(); });
   await withTimeout("browser", () => browserAgent.browserClose());
   await withTimeout("live+vision", () => stopLive()); // stopLive dừng cả mọi vòng vision
