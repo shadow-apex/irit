@@ -78,60 +78,8 @@
       </div>
     </div>
 
-    <!-- Khu vực hiển thị thông số Thước đo Laze, Sơ đồ chân PCB & Máy in 3D .STL nổi trên bàn -->
-    <aside class="desk-telemetry-panel" id="desk-telemetry-panel">
-      <div class="telemetry-section" id="caliper-readout-card">
-        <div class="telemetry-title">📏 VIRTUAL LASER CALIPER</div>
-        <div class="telemetry-value" id="caliper-dimensions">52.0 × 28.0 mm</div>
-        <div class="telemetry-sub" id="caliper-sub">PPM: 4.25 px/mm • Sai số ±0.5mm</div>
-      </div>
-      <div class="telemetry-section" id="pinout-readout-card">
-        <div class="telemetry-title">🔌 PCB PINOUT AR OVERLAY</div>
-        <div class="telemetry-value" id="pinout-board-name">ESP32-WROOM-32</div>
-        <div class="telemetry-sub" id="pinout-board-sub">20 chân • Chạm chân mạch xem điện áp</div>
-      </div>
-      <div class="telemetry-section" id="hand-gesture-card">
-        <div class="telemetry-title">✋ MEDIAPIPE HAND TRACKING</div>
-        <div class="telemetry-value" id="hand-gesture-status">Sẵn sàng nhận cử chỉ</div>
-        <div class="telemetry-sub" id="hand-pinch-readout">THUMB_TIP ↔ INDEX_FINGER_TIP</div>
-      </div>
-      <div class="telemetry-section" id="stl-status-card">
-        <div class="telemetry-title">🧊 3D STUDIO & BAMBU/OCTOPRINT</div>
-        <div class="telemetry-value" id="stl-model-name">Hộp nắp trượt (2.0mm)</div>
-        <div class="telemetry-sub" id="stl-output-path">Desktop/iris_spatial_box.stl</div>
-        <button class="virtual-3d-print-cta" id="btn-floating-start-print" title="Chạm để bắn thẳng G-code sang máy in 3D">
-          🖨 BẮT ĐẦU IN 3D
-        </button>
-      </div>
-      <!-- Floating 3D CAD Dimension Editor HUD -->
-      <div class="telemetry-section" id="cad-editor-card">
-        <div class="telemetry-title">📐 CAD DIMENSIONS & EXPLODED VIEW</div>
-        <div class="cad-dims-control-row">
-          <div class="cad-dim-chip">
-            <span class="dim-tag">DÀI</span>
-            <button class="dim-btn" data-axis="length" data-delta="-2">-</button>
-            <span class="dim-val" id="cad-len-display">58mm</span>
-            <button class="dim-btn" data-axis="length" data-delta="2">+</button>
-          </div>
-          <div class="cad-dim-chip">
-            <span class="dim-tag">RỘNG</span>
-            <button class="dim-btn" data-axis="width" data-delta="-2">-</button>
-            <span class="dim-val" id="cad-wid-display">34mm</span>
-            <button class="dim-btn" data-axis="width" data-delta="2">+</button>
-          </div>
-          <div class="cad-dim-chip">
-            <span class="dim-tag">CAO</span>
-            <button class="dim-btn" data-axis="height" data-delta="-2">-</button>
-            <span class="dim-val" id="cad-hei-display">24mm</span>
-            <button class="dim-btn" data-axis="height" data-delta="2">+</button>
-          </div>
-        </div>
-        <div class="telemetry-sub" id="cad-editor-sub">Kéo điểm neo Neon trên bàn để chỉnh sửa</div>
-      </div>
-    </aside>
-
     <!-- Thanh Dock công cụ không gian chiếu ở mép dưới mặt bàn -->
-    <footer class="spatial-dock-container">
+    <footer class="spatial-dock-container" id="spatial-dock-container">
       <div class="spatial-dock" role="toolbar" aria-label="Thanh công cụ Bàn làm việc không gian">
         <button class="dock-btn" id="btn-drop-window" data-tool="drop-window" title="Kéo cửa sổ máy tính thả xuống mặt bàn">
           <span class="dock-icon">🪟</span>
@@ -153,7 +101,7 @@
           <span class="dock-icon">✨</span>
           <span class="dock-text">Tìm Đồ</span>
         </button>
-        <button class="dock-btn" id="btn-open-cad-file" data-tool="open-cad-file" title="Mở file 3D CAD (.STL / .OBJ) từ máy tính lên bàn">
+        <button class="dock-btn" id="btn-open-cad-file" data-tool="open-cad-file" title="Mở file 3D CAD (.STL / .OBJ / .DWG / .DXF) từ máy tính lên bàn">
           <span class="dock-icon">📂</span>
           <span class="dock-text">Mở File 3D</span>
         </button>
@@ -183,6 +131,22 @@
         </button>
       </div>
     </footer>
+
+    <!-- Nút thu gọn / mở rộng toàn bộ thanh công cụ ở góc phải dưới -->
+    <button id="btn-toggle-dock" class="dock-toggle-fab" title="Thu gọn / Mở rộng thanh công cụ (Phím Space)">
+      <span class="dock-toggle-icon" id="dock-toggle-icon">⚡</span>
+      <span class="dock-toggle-text" id="dock-toggle-text">Công Cụ</span>
+      <span class="dock-toggle-chevron" id="dock-toggle-chevron">▲</span>
+    </button>
+
+    <!-- Native File Input ẩn mở file 3D CAD (.STL / .OBJ / .DWG / .DXF) -->
+    <input type="file" id="cad-native-file-input" accept=".stl,.obj,.dwg,.dxf,*" style="display: none;" />
+
+    <!-- Thông báo trạng thái nạp 3D CAD nổi phát sáng Neon trên bàn -->
+    <div id="desk-cad-toast" class="desk-cad-toast hidden" role="status" aria-live="polite">
+      <span class="cad-toast-icon" id="desk-cad-toast-icon">🧊</span>
+      <span class="cad-toast-text" id="desk-cad-toast-text">Sẵn sàng nạp mô hình 3D CAD</span>
+    </div>
   </div>
 
   <script src="./desk-canvas.js"></script>

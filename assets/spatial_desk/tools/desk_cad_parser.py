@@ -125,6 +125,53 @@ def load_stl_file(file_path):
     return _parse_stl_binary(data), "stl_binary"
 
 
+def _parse_obj_ascii(text):
+    """Phân tích tệp định dạng Wavefront .OBJ thành danh sách tam giác 3D."""
+    raw_vertices = []
+    triangles = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        tag = parts[0].lower()
+        if tag == "v" and len(parts) >= 4:
+            try:
+                raw_vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            except ValueError:
+                pass
+        elif tag == "f" and len(parts) >= 4:
+            face_indices = []
+            for p in parts[1:]:
+                v_idx_str = p.split("/")[0]
+                try:
+                    v_idx = int(v_idx_str)
+                    if v_idx > 0:
+                        face_indices.append(v_idx - 1)
+                    elif v_idx < 0:
+                        face_indices.append(len(raw_vertices) + v_idx)
+                except ValueError:
+                    pass
+            for i in range(1, len(face_indices) - 1):
+                i0, i1, i2 = face_indices[0], face_indices[i], face_indices[i + 1]
+                if 0 <= i0 < len(raw_vertices) and 0 <= i1 < len(raw_vertices) and 0 <= i2 < len(raw_vertices):
+                    triangles.append({
+                        "normal": (0.0, 0.0, 1.0),
+                        "v1": raw_vertices[i0],
+                        "v2": raw_vertices[i1],
+                        "v3": raw_vertices[i2],
+                    })
+    return triangles
+
+
+def load_cad_file(file_path):
+    """Nạp file CAD 3D (.STL hoặc .OBJ) tự động nhận diện định dạng."""
+    if file_path.lower().endswith(".obj"):
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return _parse_obj_ascii(f.read()), "wavefront_obj"
+    return load_stl_file(file_path)
+
+
 def write_stl_binary(file_path, triangles, header_text="Iris Spatial CAD Editor"):
     """Ghi danh sách tam giác ra file Binary STL chuẩn tương thích 100% với các phần mềm Slicer."""
     header = header_text.encode("utf-8")[:80].ljust(80, b"\0")
@@ -353,15 +400,15 @@ def process_cad_model(
     resolved_stl = _resolve_cad_path(stl_path) if stl_path else ""
     format_type = "parametric_box"
 
-    # 1. Nạp tam giác từ file STL hoặc sinh mô hình chuẩn nếu không có file
+    # 1. Nạp tam giác từ file STL/OBJ hoặc sinh mô hình chuẩn nếu không có file
     if resolved_stl and os.path.isfile(resolved_stl):
-        triangles, format_type = load_stl_file(resolved_stl)
+        triangles, format_type = load_cad_file(resolved_stl)
         file_name = os.path.basename(resolved_stl)
     else:
         # Fallback tự động kiểm tra iris_spatial_box.stl trên Desktop
         desktop_default = _resolve_cad_path("desktop/iris_spatial_box.stl")
         if os.path.isfile(desktop_default):
-            triangles, format_type = load_stl_file(desktop_default)
+            triangles, format_type = load_cad_file(desktop_default)
             resolved_stl = desktop_default
             file_name = os.path.basename(desktop_default)
         else:

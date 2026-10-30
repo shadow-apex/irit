@@ -879,15 +879,19 @@ export async function deskLoadCadModelTool(args = {}) {
     if (electron?.dialog && deskWindow) {
       try {
         const pickRes = await electron.dialog.showOpenDialog(deskWindow, {
-          title: "Chọn file 3D CAD (.STL / .OBJ) để chiếu lên mặt bàn",
+          title: "Chọn file 3D CAD hoặc Bản vẽ AutoCAD (.STL / .OBJ / .DWG / .DXF)",
           properties: ["openFile"],
           filters: [
-            { name: "3D CAD Files", extensions: ["stl", "obj"] },
-            { name: "Tất cả tệp", extensions: ["*"] },
+            { name: "3D CAD & Bản vẽ kỹ thuật", extensions: ["stl", "obj", "dwg", "dxf"] },
+            { name: "Mô hình 3D Mesh (*.stl, *.obj)", extensions: ["stl", "obj"] },
+            { name: "Bản vẽ AutoCAD (*.dwg, *.dxf)", extensions: ["dwg", "dxf"] },
+            { name: "Tất cả tệp (*.*)", extensions: ["*"] },
           ],
         });
         if (pickRes && !pickRes.canceled && pickRes.filePaths?.[0]) {
           targetFile = pickRes.filePaths[0];
+        } else if (pickRes?.canceled) {
+          return { status: "cancelled", message: "Đã huỷ chọn file 3D CAD." };
         }
       } catch {
         /* fallback to default */

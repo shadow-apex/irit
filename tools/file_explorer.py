@@ -50,6 +50,24 @@ def resolve_target_path(raw_path):
     if lower in SPECIAL_SHORTCUTS:
         return os.path.normpath(SPECIAL_SHORTCUTS[lower]())
 
+    # Hỗ trợ tiền tố đường dẫn thư mục cá nhân (documents/..., desktop/..., downloads/...)
+    # Tự động nhận diện thư mục đồng bộ OneDrive nếu có
+    home = os.path.expanduser("~")
+    for prefix in ("documents", "docs", "desktop", "downloads"):
+        if lower.startswith(prefix + "/") or lower.startswith(prefix + "\\"):
+            subpath = clean[len(prefix) + 1:]
+            folder_name = "Documents" if prefix in ("documents", "docs") else "Desktop" if prefix == "desktop" else "Downloads"
+            candidates = [
+                os.path.join(home, "OneDrive", folder_name, subpath),
+                os.path.join(home, folder_name, subpath),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    return os.path.normpath(c)
+            if os.path.isdir(os.path.join(home, "OneDrive", folder_name)):
+                return os.path.normpath(candidates[0])
+            return os.path.normpath(candidates[1])
+
     # Xử lý ổ đĩa dạng C: hoặc d: -> C:\
     if len(clean) == 2 and clean[1] == ":" and clean[0].isalpha():
         clean = f"{clean}\\"
@@ -72,10 +90,20 @@ def open_in_explorer(resolved_path, action="auto"):
     is_dir = os.path.isdir(resolved_path)
 
     if action == "open":
+        opened = False
         if hasattr(os, "startfile"):
-            os.startfile(resolved_path)
-        else:
-            subprocess.Popen(["explorer.exe", resolved_path])
+            try:
+                os.startfile(resolved_path)
+                opened = True
+            except Exception:
+                pass
+
+        if not opened:
+            acad_path = r"C:\Program Files\Autodesk\AutoCAD 2021\acad.exe"
+            if resolved_path.lower().endswith((".dwg", ".dxf", ".scr")) and os.path.isfile(acad_path):
+                subprocess.Popen([acad_path, resolved_path])
+            else:
+                subprocess.Popen(["explorer.exe", resolved_path])
         return {
             "action": "open",
             "path": resolved_path,

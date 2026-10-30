@@ -151,6 +151,9 @@
       active: true,
       file_name: "iris_spatial_box.stl",
       dimensions_mm: { length: 58.0, width: 34.0, height: 24.0 },
+      base_dimensions_mm: { length: 58.0, width: 34.0, height: 24.0 },
+      baseComponents: null,
+      is_custom_model: false,
       is_exploded: false,
       explode_distance_mm: 38.0,
       scale: 2.2,
@@ -257,7 +260,375 @@
     state.photogrammetry.edges = edges;
   }
 
+  // =========================================================================
+  // TOAST & THÔNG BÁO TRẠNG THÁI NẠP 3D CAD PHÁT SÁNG NEON
+  // =========================================================================
+  let cadToastTimer = null;
+  function showCadToast(msg, type = "success") {
+    const toast = document.getElementById("desk-cad-toast");
+    const textEl = document.getElementById("desk-cad-toast-text");
+    const iconEl = document.getElementById("desk-cad-toast-icon");
+    if (!toast || !textEl) return;
+    textEl.textContent = msg;
+    if (iconEl) {
+      iconEl.textContent = type === "success" ? "🧊" : type === "error" ? "⚠️" : "📂";
+    }
+    toast.className = `desk-cad-toast toast-${type}`;
+    if (cadToastTimer) clearTimeout(cadToastTimer);
+    cadToastTimer = setTimeout(() => {
+      toast.classList.add("hidden");
+    }, 4500);
+  }
+
+  // =========================================================================
+  // CLIENT-SIDE 3D CAD PARSER (STL BINARY/ASCII & WAVEFRONT OBJ)
+  // =========================================================================
+  function parseStlBuffer(arrayBuffer) {
+    if (!arrayBuffer || arrayBuffer.byteLength < 84) {
+      throw new Error("File STL quá ngắn hoặc không hợp lệ");
+    }
+    const dv = new DataView(arrayBuffer);
+    const byteLen = arrayBuffer.byteLength;
+
+    // Kiểm tra ASCII: Header bắt đầu bằng 'solid' và chứa 'facet'
+    const headerPrefix = new TextDecoder("utf-8").decode(new Uint8Array(arrayBuffer, 0, Math.min(256, byteLen)));
+    if (headerPrefix.trim().startsWith("solid") && headerPrefix.includes("facet")) {
+      const fullText = new TextDecoder("utf-8").decode(arrayBuffer);
+      return parseStlAscii(fullText);
+    }
+
+    // Binary STL: 80 bytes header + 4 bytes uint32 count + 50 bytes per triangle
+    const count = dv.getUint32(80, true);
+    const triangles = [];
+    let offset = 84;
+    const maxTriangles = Math.min(count, Math.floor((byteLen - 84) / 50));
+
+    for (let i = 0; i < maxTriangles; i++) {
+      const nx = dv.getFloat32(offset, true);
+      const ny = dv.getFloat32(offset + 4, true);
+      const nz = dv.getFloat32(offset + 8, true);
+
+      const v1x = dv.getFloat32(offset + 12, true);
+      const v1y = dv.getFloat32(offset + 16, true);
+      const v1z = dv.getFloat32(offset + 20, true);
+
+      const v2x = dv.getFloat32(offset + 24, true);
+      const v2y = dv.getFloat32(offset + 28, true);
+      const v2z = dv.getFloat32(offset + 32, true);
+
+      const v3x = dv.getFloat32(offset + 36, true);
+      const v3y = dv.getFloat32(offset + 40, true);
+      const v3z = dv.getFloat32(offset + 44, true);
+
+      triangles.push({
+        normal: [nx, ny, nz],
+        v1: [v1x, v1y, v1z],
+        v2: [v2x, v2y, v2z],
+        v3: [v3x, v3y, v3z],
+      });
+      offset += 50;
+    }
+    return triangles;
+  }
+
+  function parseStlAscii(text) {
+    const lines = text.split("\n");
+    const triangles = [];
+    let currentNorm = [0, 0, 1];
+    let verts = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/);
+      const tag = parts[0].toLowerCase();
+
+      if (tag === "facet" && parts[1]?.toLowerCase() === "normal" && parts.length >= 5) {
+        currentNorm = [parseFloat(parts[2]) || 0, parseFloat(parts[3]) || 0, parseFloat(parts[4]) || 1];
+        verts = [];
+      } else if (tag === "vertex" && parts.length >= 4) {
+        verts.push([parseFloat(parts[1]) || 0, parseFloat(parts[2]) || 0, parseFloat(parts[3]) || 0]);
+      } else if (tag === "endfacet") {
+        if (verts.length === 3) {
+          triangles.push({
+            normal: currentNorm,
+            v1: verts[0],
+            v2: verts[1],
+            v3: verts[2],
+          });
+        }
+        verts = [];
+      }
+    }
+    return triangles;
+  }
+
+  function parseObjText(text) {
+    const lines = text.split("\n");
+    const rawVerts = [];
+    const triangles = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith("#")) continue;
+      const parts = line.split(/\s+/);
+      const tag = parts[0].toLowerCase();
+
+      if (tag === "v" && parts.length >= 4) {
+        rawVerts.push([parseFloat(parts[1]) || 0, parseFloat(parts[2]) || 0, parseFloat(parts[3]) || 0]);
+      } else if (tag === "f" && parts.length >= 4) {
+        const faceIndices = [];
+        for (let p = 1; p < parts.length; p++) {
+          const vIdx = parseInt(parts[p].split("/")[0], 10);
+          if (vIdx > 0) {
+            faceIndices.push(vIdx - 1);
+          } else if (vIdx < 0) {
+            faceIndices.push(rawVerts.length + vIdx);
+          }
+        }
+        for (let j = 1; j < faceIndices.length - 1; j++) {
+          const i0 = faceIndices[0];
+          const i1 = faceIndices[j];
+          const i2 = faceIndices[j + 1];
+          if (rawVerts[i0] && rawVerts[i1] && rawVerts[i2]) {
+            triangles.push({
+              normal: [0, 0, 1],
+              v1: rawVerts[i0],
+              v2: rawVerts[i1],
+              v3: rawVerts[i2],
+            });
+          }
+        }
+      }
+    }
+    return triangles;
+  }
+
+  function processLoadedTriangles(triangles, fileName, filePath = "") {
+    if (!triangles || triangles.length === 0) {
+      throw new Error("Không có dữ liệu tam giác trong file CAD");
+    }
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+
+    triangles.forEach((t) => {
+      [t.v1, t.v2, t.v3].forEach(([x, y, z]) => {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+      });
+    });
+
+    const len = Math.max(1, maxX - minX);
+    const wid = Math.max(1, maxY - minY);
+    const hei = Math.max(1, maxZ - minZ);
+
+    const cx = (minX + maxX) / 2.0;
+    const cy = (minY + maxY) / 2.0;
+    const cz = (minZ + maxZ) / 2.0;
+
+    // Phân tách chi tiết cụm nắp / thân (Exploded View Split)
+    const splitZ = minZ + hei * 0.72;
+
+    const bodyTris = [];
+    const lidTris = [];
+
+    triangles.forEach((t) => {
+      const avgZ = (t.v1[2] + t.v2[2] + t.v3[2]) / 3.0;
+      if (avgZ >= splitZ && triangles.length >= 8) {
+        lidTris.push(t);
+      } else {
+        bodyTris.push(t);
+      }
+    });
+
+    function extractMesh(triList, maxEdges = 900) {
+      const vertMap = new Map();
+      const uniqueVerts = [];
+      const edgeSet = new Set();
+      const edges = [];
+
+      function getVIdx([vx, vy, vz]) {
+        const nx = Math.round((vx - cx) * 10) / 10;
+        const ny = Math.round((vy - cy) * 10) / 10;
+        const nz = Math.round((vz - cz) * 10) / 10;
+        const key = `${nx},${ny},${nz}`;
+        let idx = vertMap.get(key);
+        if (idx === undefined) {
+          idx = uniqueVerts.length;
+          vertMap.set(key, idx);
+          uniqueVerts.push([nx, ny, nz]);
+        }
+        return idx;
+      }
+
+      const step = Math.max(1, Math.floor(triList.length / 700));
+      for (let i = 0; i < triList.length; i += step) {
+        const t = triList[i];
+        const a = getVIdx(t.v1);
+        const b = getVIdx(t.v2);
+        const c = getVIdx(t.v3);
+
+        const pairs = [[a, b], [b, c], [c, a]];
+        for (const [p1, p2] of pairs) {
+          if (p1 === p2) continue;
+          const eKey = p1 < p2 ? `${p1}_${p2}` : `${p2}_${p1}`;
+          if (!edgeSet.has(eKey)) {
+            edgeSet.add(eKey);
+            edges.push([p1, p2]);
+            if (edges.length >= maxEdges) break;
+          }
+        }
+        if (edges.length >= maxEdges) break;
+      }
+      return { vertices: uniqueVerts, edges };
+    }
+
+    const bodyMesh = extractMesh(bodyTris.length > 0 ? bodyTris : triangles, 1000);
+    const lidMesh = lidTris.length > 0 ? extractMesh(lidTris, 500) : null;
+
+    const components = [
+      {
+        id: "part-body",
+        name: lidMesh ? "Thân Chi Tiết (Body)" : "Khối 3D CAD",
+        color: "#00f3ff",
+        vertices: bodyMesh.vertices,
+        edges: bodyMesh.edges,
+      },
+    ];
+
+    if (lidMesh && lidMesh.vertices.length > 0) {
+      components.push({
+        id: "part-lid",
+        name: "Cụm Nắp / Phần Trên (Lid)",
+        color: "#00ff9d",
+        vertices: lidMesh.vertices,
+        edges: lidMesh.edges,
+      });
+    }
+
+    state.cadAssembly.baseComponents = JSON.parse(JSON.stringify(components));
+    state.cadAssembly.dimensions_mm = {
+      length: Math.round(len * 10) / 10,
+      width: Math.round(wid * 10) / 10,
+      height: Math.round(hei * 10) / 10,
+    };
+    state.cadAssembly.base_dimensions_mm = { ...state.cadAssembly.dimensions_mm };
+    state.cadAssembly.file_name = fileName;
+    state.cadAssembly.file_path = filePath || fileName;
+    state.cadAssembly.is_custom_model = true;
+    state.cadAssembly.is_exploded = false;
+    state.cadAssembly.active = true;
+
+    applyCadAssemblyTransforms();
+    syncCadDimensionsDom();
+
+    const stlPathEl = document.getElementById("stl-output-path");
+    if (stlPathEl) stlPathEl.textContent = filePath || fileName;
+
+    const subEl = document.getElementById("cad-editor-sub");
+    if (subEl) {
+      subEl.textContent = `Đã nạp ${fileName} (${Math.round(len)}×${Math.round(wid)}×${Math.round(hei)}mm)`;
+    }
+
+    state.show3dStl = true;
+    const stlBtn = document.getElementById("btn-stl-generator");
+    if (stlBtn) stlBtn.classList.add("active");
+    const explBtn = document.getElementById("btn-explode-assembly");
+    if (explBtn) explBtn.classList.remove("active");
+
+    showCadToast(
+      `📂 Đã nạp [${fileName}] (${Math.round(len)}×${Math.round(wid)}×${Math.round(hei)} mm) thành công!`,
+      "success"
+    );
+  }
+
+  function applyCadAssemblyTransforms() {
+    if (!state.cadAssembly.baseComponents || state.cadAssembly.baseComponents.length === 0) {
+      buildDefaultCadComponents();
+      return;
+    }
+
+    const curD = state.cadAssembly.dimensions_mm || { length: 58, width: 34, height: 24 };
+    const baseD = state.cadAssembly.base_dimensions_mm || curD;
+
+    const scaleX = baseD.length > 0 ? curD.length / baseD.length : 1;
+    const scaleY = baseD.width > 0 ? curD.width / baseD.width : 1;
+    const scaleZ = baseD.height > 0 ? curD.height / baseD.height : 1;
+
+    const explodeZ = state.cadAssembly.is_exploded ? state.cadAssembly.explode_distance_mm : 0;
+
+    state.cadAssembly.components = state.cadAssembly.baseComponents.map((comp, idx) => {
+      const isLid = comp.id === "part-lid" || idx > 0;
+      const compExplodeZ = isLid ? explodeZ : 0;
+
+      const transformedVerts = comp.vertices.map(([x, y, z]) => [
+        x * scaleX,
+        y * scaleY,
+        z * scaleZ + compExplodeZ,
+      ]);
+
+      return {
+        ...comp,
+        vertices: transformedVerts,
+      };
+    });
+  }
+
+  async function load3dModelFromFile(file) {
+    if (!file) return;
+    const name = file.name || "cad_model.stl";
+    const lower = name.toLowerCase();
+
+    if (!lower.endsWith(".stl") && !lower.endsWith(".obj")) {
+      if (lower.endsWith(".dwg") || lower.endsWith(".dxf")) {
+        showCadToast(`📐 Bản vẽ AutoCAD [${name}]: Hãy mở trong AutoCAD và gõ lệnh STLOUT để xuất .stl chiếu 3D`, "info");
+        const nameEl = document.getElementById("stl-model-name");
+        if (nameEl) nameEl.textContent = `${name} (Bản vẽ AutoCAD)`;
+        const subEl = document.getElementById("cad-editor-sub");
+        if (subEl) {
+          subEl.textContent = `Bản vẽ AutoCAD: ${name} • Gõ STLOUT trong AutoCAD để xuất .stl`;
+        }
+        return;
+      }
+      showCadToast("⚠️ Chỉ hỗ trợ file mô hình 3D (.STL / .OBJ) hoặc bản vẽ (.DWG / .DXF)", "error");
+      return;
+    }
+
+    showCadToast(`Đang phân tích file 3D [${name}]...`, "info");
+
+    try {
+      let triangles = [];
+      if (lower.endsWith(".obj")) {
+        const text = await file.text();
+        triangles = parseObjText(text);
+      } else {
+        const buffer = await file.arrayBuffer();
+        triangles = parseStlBuffer(buffer);
+      }
+
+      if (!triangles || triangles.length === 0) {
+        showCadToast(`⚠️ File [${name}] không chứa tam giác 3D hợp lệ`, "error");
+        return;
+      }
+
+      processLoadedTriangles(triangles, name, file.path || name);
+    } catch (err) {
+      console.error("Lỗi khi nạp file CAD 3D:", err);
+      showCadToast(`⚠️ Lỗi đọc file 3D: ${err.message || "File hỏng"}`, "error");
+    }
+  }
+
   function buildDefaultCadComponents() {
+    if (state.cadAssembly.baseComponents && state.cadAssembly.baseComponents.length > 0) {
+      applyCadAssemblyTransforms();
+      return;
+    }
     const d = state.cadAssembly.dimensions_mm || { length: 58.0, width: 34.0, height: 24.0 };
     const l2 = d.length / 2.0;
     const w2 = d.width / 2.0;
@@ -772,16 +1143,16 @@
     const nx = -uy;
     const ny = ux;
 
+    ctx.beginPath();
     for (let mm = 0; mm <= totalMm; mm += 5) {
       const offset = mm * state.ppm;
       const tx = x1 + ux * offset;
       const ty = y1 + uy * offset;
       const tickLen = mm % 10 === 0 ? 8 : 4;
-      ctx.beginPath();
       ctx.moveTo(tx - nx * tickLen, ty - ny * tickLen);
       ctx.lineTo(tx + nx * tickLen, ty + ny * tickLen);
-      ctx.stroke();
     }
+    ctx.stroke();
 
     const midX = (x1 + x2) / 2;
     const midY = (y1 + y2) / 2;
@@ -1128,20 +1499,20 @@
       const projected = compVerts.map(([vx, vy, vz]) => projectPt(vx, vy, vz));
 
       ctx.strokeStyle = comp.color || "#00f3ff";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.6;
       ctx.shadowColor = comp.color || "#00f3ff";
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 6;
 
+      ctx.beginPath();
       for (let i = 0; i < compEdges.length; i++) {
         const [a, b] = compEdges[i];
         const pa = projected[a];
         const pb = projected[b];
         if (!pa || !pb) continue;
-        ctx.beginPath();
         ctx.moveTo(pa.x, pa.y);
         ctx.lineTo(pb.x, pb.y);
-        ctx.stroke();
       }
+      ctx.stroke();
     });
 
     // Vẽ đường tia Neon đứt quãng nối giữa Nắp và Thân khi ở chế độ Tách Chi Tiết (Exploded View)
@@ -1277,16 +1648,16 @@
     ctx.strokeStyle = "#c44dff";
     ctx.lineWidth = 1.4;
     ctx.shadowColor = "#c44dff";
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
     for (const [a, b] of edges) {
       const pa = proj[a];
       const pb = proj[b];
       if (!pa || !pb) continue;
-      ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
-      ctx.stroke();
     }
+    ctx.stroke();
 
     ctx.fillStyle = "#00ff9d";
     ctx.font = "bold 12px 'Segoe UI', sans-serif";
@@ -1522,6 +1893,7 @@
       renderTouchRipples();
       renderHandTrackingOverlay(now);
       renderAutoCalibrationOverlay(now);
+      ctx.shadowBlur = 0;
     }
     rafId = requestAnimationFrame(renderLoop);
   }
@@ -1603,7 +1975,7 @@
       } else if (tool === "explode-assembly") {
         state.cadAssembly.is_exploded = !state.cadAssembly.is_exploded;
         btn.classList.toggle("active", state.cadAssembly.is_exploded);
-        buildDefaultCadComponents();
+        applyCadAssemblyTransforms();
         const subEl = document.getElementById("cad-editor-sub");
         if (subEl) {
           subEl.textContent = state.cadAssembly.is_exploded
@@ -1626,14 +1998,84 @@
       if (axis && delta && state.cadAssembly.dimensions_mm) {
         state.cadAssembly.dimensions_mm[axis] = Math.max(10, Math.min(300, Math.round(state.cadAssembly.dimensions_mm[axis] + delta)));
         syncCadDimensionsDom();
-        buildDefaultCadComponents();
+        applyCadAssemblyTransforms();
       }
     });
   });
 
+  // Lắng nghe sự kiện chọn file từ input native và kéo thả file 3D (.STL / .OBJ)
+  const cadInput = document.getElementById("cad-native-file-input");
+  if (cadInput) {
+    cadInput.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      await load3dModelFromFile(file);
+    });
+  }
+
+  const rootEl = document.getElementById("spatial-desk-root") || document.body;
+  window.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (rootEl) rootEl.classList.add("drag-target-active");
+  });
+  window.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (rootEl) rootEl.classList.remove("drag-target-active");
+  });
+  window.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (rootEl) rootEl.classList.remove("drag-target-active");
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      await load3dModelFromFile(file);
+    }
+  });
+
+  // Quản lý thu gọn / mở rộng toàn bộ thanh công cụ ở góc phải
+  const toggleDockBtn = document.getElementById("btn-toggle-dock");
+  const dockContainer = document.getElementById("spatial-dock-container") || document.querySelector(".spatial-dock-container");
+  const dockIcon = document.getElementById("dock-toggle-icon");
+  const dockText = document.getElementById("dock-toggle-text");
+  const dockChevron = document.getElementById("dock-toggle-chevron");
+
+  let isDockCollapsed = false;
+
+  function setDockCollapsed(collapsed) {
+    isDockCollapsed = Boolean(collapsed);
+    if (dockContainer) {
+      dockContainer.classList.toggle("dock-collapsed", isDockCollapsed);
+    }
+    if (toggleDockBtn) {
+      toggleDockBtn.classList.toggle("dock-is-collapsed", isDockCollapsed);
+    }
+    if (dockIcon && dockText && dockChevron) {
+      if (isDockCollapsed) {
+        dockIcon.textContent = "⚡";
+        dockText.textContent = "Công Cụ";
+        dockChevron.textContent = "▲";
+      } else {
+        dockIcon.textContent = "✕";
+        dockText.textContent = "Thu Gọn";
+        dockChevron.textContent = "▼";
+      }
+    }
+  }
+
+  if (toggleDockBtn) {
+    toggleDockBtn.addEventListener("click", () => {
+      setDockCollapsed(!isDockCollapsed);
+    });
+  }
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       window.close();
+    } else if (e.key === " " && e.target === document.body) {
+      e.preventDefault();
+      setDockCollapsed(!isDockCollapsed);
     }
   });
 
@@ -1665,25 +2107,42 @@
           width: Number(data.current_dimensions_mm.width) || 34.0,
           height: Number(data.current_dimensions_mm.height) || 24.0,
         };
+        state.cadAssembly.base_dimensions_mm = { ...state.cadAssembly.dimensions_mm };
       }
       if (typeof data.is_exploded === "boolean") state.cadAssembly.is_exploded = data.is_exploded;
       if (typeof data.explode_distance_mm === "number") state.cadAssembly.explode_distance_mm = data.explode_distance_mm;
       if (Array.isArray(data.components) && data.components.length > 0) {
+        state.cadAssembly.baseComponents = JSON.parse(JSON.stringify(data.components));
         state.cadAssembly.components = data.components;
+        state.cadAssembly.is_custom_model = true;
       } else {
+        state.cadAssembly.baseComponents = null;
+        state.cadAssembly.is_custom_model = false;
         buildDefaultCadComponents();
       }
+      applyCadAssemblyTransforms();
       syncCadDimensionsDom();
+      showCadToast(`📂 Đã nạp mô hình CAD: ${state.cadAssembly.file_name}`, "success");
       const stlBtn = document.getElementById("btn-stl-generator");
       if (stlBtn) stlBtn.classList.add("active");
       const explBtn = document.getElementById("btn-explode-assembly");
       if (explBtn) explBtn.classList.toggle("active", state.cadAssembly.is_exploded);
     },
     openCadFilePicker() {
-      // Gọi bridge API mở dialog từ electron nếu có
+      // 1. Kích hoạt native HTML5 file input trực tiếp (độc lập, mở hộp thoại chọn file của OS ngay lập tức)
+      const input = document.getElementById("cad-native-file-input");
+      if (input) {
+        input.value = "";
+        input.click();
+        return;
+      }
+      // 2. Fallback sang electron IPC nếu có
       if (window.electron?.ipcRenderer) {
         window.electron.ipcRenderer.send("iris:desk-open-cad-dialog");
       }
+    },
+    toggleDock(collapsed) {
+      setDockCollapsed(typeof collapsed === "boolean" ? collapsed : !isDockCollapsed);
     },
     triggerAutoCalibration(calibData = {}) {
       if (typeof calibData.ppm === "number" && calibData.ppm > 0) {

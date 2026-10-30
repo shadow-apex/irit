@@ -216,17 +216,9 @@ body {
   margin-top: 2px;
 }
 
-/* Bảng Telemetry nổi bên phải bàn */
+/* Bảng Telemetry nổi bên phải bàn (Ẩn theo yêu cầu để giữ không gian sạch và thông thoáng) */
 .desk-telemetry-panel {
-  position: absolute;
-  top: 114px;
-  right: 28px;
-  z-index: 11;
-  width: 268px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  pointer-events: none;
+  display: none !important;
 }
 
 .telemetry-section {
@@ -476,42 +468,107 @@ body {
   color: var(--neon-green);
 }
 
-/* Thanh Dock công cụ không gian dưới mặt bàn */
+/* Thanh Dock công cụ không gian dưới mặt bàn — Hỗ trợ thu gọn & trượt mở mượt mà */
 .spatial-dock-container {
   position: absolute;
   bottom: 22px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(0);
   z-index: 15;
-  max-width: 96vw;
+  max-width: 90vw;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.28s ease, visibility 0.35s;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.spatial-dock-container.dock-collapsed {
+  transform: translateX(-50%) translateY(140%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .spatial-dock {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 14px;
-  background: rgba(5, 12, 24, 0.88);
-  border: 1.5px solid var(--glass-border);
-  border-radius: 20px;
-  box-shadow: 0 0 32px rgba(0, 243, 255, 0.25), inset 0 0 18px rgba(0, 243, 255, 0.08);
-  backdrop-filter: blur(14px);
+  gap: 6px;
+  padding: 7px 12px;
+  background: rgba(4, 10, 22, 0.92);
+  border: 1.5px solid rgba(0, 243, 255, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 0 32px rgba(0, 243, 255, 0.25), inset 0 0 16px rgba(0, 243, 255, 0.08);
+  backdrop-filter: blur(16px);
+  max-width: 86vw;
+  overflow-x: auto;
 }
 
 .dock-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 243, 255, 0.28);
-  background: rgba(0, 243, 255, 0.08);
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 243, 255, 0.25);
+  background: rgba(0, 243, 255, 0.07);
   color: var(--text-bright);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
   transition: all 0.18s ease;
+}
+
+/* Nút viên thuốc thu gọn & hiện thanh công cụ ở góc phải dưới */
+.dock-toggle-fab {
+  position: absolute;
+  bottom: 22px;
+  right: 28px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(4, 12, 24, 0.92);
+  border: 1.5px solid var(--neon-cyan);
+  border-radius: 20px;
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  box-shadow: 0 0 24px rgba(0, 243, 255, 0.4), inset 0 0 12px rgba(0, 243, 255, 0.15);
+  backdrop-filter: blur(16px);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.dock-toggle-fab:hover {
+  background: rgba(0, 243, 255, 0.22);
+  border-color: var(--neon-green);
+  box-shadow: 0 0 32px var(--neon-cyan), 0 0 16px var(--neon-green);
+  transform: translateY(-2px) scale(1.03);
+}
+
+.dock-toggle-fab:active {
+  transform: scale(0.95);
+}
+
+.dock-toggle-fab .dock-toggle-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 6px var(--neon-cyan));
+}
+
+.dock-toggle-fab .dock-toggle-chevron {
+  font-size: 10px;
+  color: var(--neon-green);
+  transition: transform 0.25s ease;
+}
+
+.dock-toggle-fab.dock-is-collapsed {
+  border-color: rgba(0, 243, 255, 0.65);
+  background: rgba(4, 12, 24, 0.85);
+  box-shadow: 0 0 18px rgba(0, 243, 255, 0.3);
 }
 
 .dock-btn:hover,
@@ -622,4 +679,54 @@ body {
   transform: scale(0.9);
   background: var(--neon-green);
   border-color: var(--neon-green);
+}
+
+/* CAD Toast & Notification */
+.desk-cad-toast {
+  position: fixed;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%) translateY(0);
+  background: rgba(4, 18, 28, 0.92);
+  border: 1px solid var(--neon-cyan);
+  box-shadow: 0 0 24px rgba(0, 243, 255, 0.4), inset 0 0 12px rgba(0, 243, 255, 0.15);
+  border-radius: 24px;
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+  z-index: 10000;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(16px);
+}
+
+.desk-cad-toast.hidden {
+  opacity: 0;
+  transform: translateX(-50%) translateY(16px);
+  pointer-events: none;
+}
+
+.desk-cad-toast.toast-success {
+  border-color: var(--neon-green);
+  box-shadow: 0 0 24px rgba(0, 255, 157, 0.45);
+}
+
+.desk-cad-toast.toast-error {
+  border-color: #ff3366;
+  box-shadow: 0 0 24px rgba(255, 51, 102, 0.45);
+}
+
+.cad-toast-icon {
+  font-size: 16px;
+}
+
+.spatial-desk-root.drag-target-active {
+  outline: 2px dashed var(--neon-cyan);
+  outline-offset: -8px;
+  box-shadow: inset 0 0 60px rgba(0, 243, 255, 0.4) !important;
 }
